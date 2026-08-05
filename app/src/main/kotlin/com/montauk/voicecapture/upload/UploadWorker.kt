@@ -13,6 +13,7 @@ import androidx.work.WorkRequest
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.montauk.voicecapture.VoiceCaptureApp
+import com.montauk.voicecapture.session.SessionStore
 import com.montauk.voicecapture.session.UploadState
 import java.util.concurrent.TimeUnit
 
@@ -84,6 +85,22 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 ExistingWorkPolicy.KEEP,
                 request,
             )
+        }
+
+        /**
+         * Drains the upload backlog (bead vn-edu.29): every session that
+         * finalized while signed out landed at [UploadState.LOCAL] instead of
+         * [UploadState.QUEUED] (see [com.montauk.voicecapture.service.RecordingService]),
+         * since there was no uploader to hand it to. Called once, right after
+         * a sign-in actually stores a token -- [SessionStore.localSessionIds]
+         * is the pure part of this (session-scan + filter), kept there so
+         * it's unit-testable without WorkManager.
+         */
+        fun enqueueBacklog(context: Context, sessionStore: SessionStore) {
+            sessionStore.localSessionIds().forEach { sessionId ->
+                sessionStore.setUploadState(sessionStore.sessionDir(sessionId), UploadState.QUEUED)
+                enqueue(context, sessionId)
+            }
         }
     }
 }

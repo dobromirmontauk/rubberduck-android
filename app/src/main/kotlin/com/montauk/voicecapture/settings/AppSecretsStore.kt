@@ -67,6 +67,17 @@ class AppSecretsStore(context: Context) {
     /** True once the login screen has stored a real, user-entered token (device flow or PAT). */
     fun hasSignedInWithGithub(): Boolean = !userGithubToken.isNullOrBlank()
 
+    /**
+     * True when GitHub is actually connected right now: a real sign-in has
+     * happened AND the user hasn't since logged out. Bead vn-edu.29 -- login
+     * is no longer a gate, so "connected" (not "signed in") is what the
+     * bottom nav's 4th tab and Settings' "Connect GitHub" affordance key off
+     * of. Deliberately excludes the BuildConfig/local.properties dev-token
+     * fallback: that's a build-time convenience for running against a real
+     * vault without going through sign-in, not a user connecting an account.
+     */
+    fun isConnectedToGithub(): Boolean = hasSignedInWithGithub() && !isSignedOut
+
     companion object {
         private const val PREFS_NAME = "voice_capture_secrets"
         private const val KEY_SIGNED_OUT = "signed_out"

@@ -8,7 +8,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
-import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingService
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.session.RecordingMode
@@ -25,12 +24,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val app = application as VoiceCaptureApp
         val startDestination = AppEntryGating.startDestination(
-            isSignedOut = app.secretsStore.isSignedOut,
             isRecording = RecordingStateHolder.state.value.isRecording,
-            setupWizardCompleted = app.secretsStore.setupWizardCompleted,
-            hasSignedInGithub = app.secretsStore.hasSignedInWithGithub(),
         )
         setContent {
             AppNavHost(

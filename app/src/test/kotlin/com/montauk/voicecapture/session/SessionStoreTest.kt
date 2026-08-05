@@ -120,6 +120,26 @@ class SessionStoreTest {
     }
 
     @Test
+    fun `localSessionIds returns only sessions still marked LOCAL`() {
+        val local = store.createSession(Date(1_000))
+        store.oggFile(local.dir).writeText("ogg")
+        store.writeMeta(local, durationMs = 1_000L, deviceModel = "d", appVersion = "v")
+        // writeMeta defaults a fresh session to LOCAL -- no explicit setUploadState needed.
+
+        val queued = store.createSession(Date(2_000))
+        store.oggFile(queued.dir).writeText("ogg")
+        store.writeMeta(queued, durationMs = 1_000L, deviceModel = "d", appVersion = "v")
+        store.setUploadState(queued.dir, UploadState.QUEUED)
+
+        val uploaded = store.createSession(Date(3_000))
+        store.oggFile(uploaded.dir).writeText("ogg")
+        store.writeMeta(uploaded, durationMs = 1_000L, deviceModel = "d", appVersion = "v")
+        store.setUploadState(uploaded.dir, UploadState.UPLOADED)
+
+        assertEquals(listOf(local.sessionId), store.localSessionIds())
+    }
+
+    @Test
     fun `readMeta returns null for an unknown session`() {
         assertNull(store.readMeta("2026-01-01_0000_zzzz"))
     }

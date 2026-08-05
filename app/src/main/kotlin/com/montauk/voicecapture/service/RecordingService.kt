@@ -237,7 +237,11 @@ class RecordingService : LifecycleService() {
             val sttCloseJob = stt?.let { launch { runCatching { it.close() } } }
 
             val finalizeSucceeded = runFinalizeWithWatchdog(app, session, elapsedMs)
-            if (finalizeSucceeded) {
+            // No GitHub token configured (bead vn-edu.29: recording is never gated on
+            // sign-in) means there's no uploader to hand this to -- runFinalizeWithWatchdog
+            // already left the session at its writeMeta default of LOCAL in that case, and
+            // it stays there until UploadWorker.enqueueBacklog drains it on a later sign-in.
+            if (finalizeSucceeded && app.isGithubTokenConfigured()) {
                 UploadWorker.enqueue(applicationContext, session.sessionId)
             }
             // A false/timed-out result deliberately leaves audio.wal in place
@@ -285,7 +289,12 @@ class RecordingService : LifecycleService() {
                     appVersion = app.appVersionName(),
                     modes = modeStateMachine.history.map { SessionModeEntry(it.tMs, it.mode.wireValue) },
                 )
-                app.sessionStore.setUploadState(session.dir, UploadState.QUEUED)
+                // writeMeta already defaulted this to LOCAL; only promote to QUEUED when
+                // there's an actual GitHub token to upload against (see the comment at the
+                // enqueue call site in endRecording for the LOCAL-stays-LOCAL case).
+                if (app.isGithubTokenConfigured()) {
+                    app.sessionStore.setUploadState(session.dir, UploadState.QUEUED)
+                }
             }
             result.onFailure { e -> Log.e(TAG, "finalize failed for ${session.sessionId}", e) }
             outcome.complete(result.isSuccess)

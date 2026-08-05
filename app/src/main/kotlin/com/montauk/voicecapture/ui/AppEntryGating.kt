@@ -2,39 +2,30 @@ package com.montauk.voicecapture.ui
 
 /**
  * Pure decision logic for "which screen does the app open on" and "where
- * does a successful sign-in land" -- pulled out of [MainActivity] and
+ * does a successful GitHub connect land" -- pulled out of [MainActivity] and
  * [AppNavHost] so these rules are unit-testable without an Android Context
  * or a Compose test rule. No Android imports on purpose.
  */
 object AppEntryGating {
 
     /**
-     * [MainActivity]'s cold-start destination. Order matters: an in-progress
-     * recording always wins over the wizard -- the wizard must never be the
-     * thing standing between a relaunch and an already-running session (see
-     * vn-edu.15's "wizard never blocks recording"). The wizard itself only
-     * triggers for a real, user-entered GitHub sign-in ([hasSignedInGithub]) --
-     * a `local.properties`/BuildConfig-only dev build never routes through
-     * login, so it never sees the wizard either (vn-edu.14's "dev flow
-     * unbroken" requirement).
+     * [MainActivity]'s cold-start destination. Bead vn-edu.29: there is no
+     * login/wizard gate on launch -- recording, playback, and the session
+     * list are all fully functional signed out (sessions simply stay LOCAL,
+     * see [com.montauk.voicecapture.service.RecordingService]), so sign-in
+     * state never factors into where the app opens. An in-progress recording
+     * is the only thing that wins over Sessions: a relaunch must never land
+     * anywhere else while a session is still running.
      */
-    fun startDestination(
-        isSignedOut: Boolean,
-        isRecording: Boolean,
-        setupWizardCompleted: Boolean,
-        hasSignedInGithub: Boolean,
-    ): String = when {
-        isSignedOut -> Routes.LOGIN
-        isRecording -> Routes.RECORDING
-        !setupWizardCompleted && hasSignedInGithub -> Routes.WIZARD
-        else -> Routes.SESSIONS
-    }
+    fun startDestination(isRecording: Boolean): String =
+        if (isRecording) Routes.RECORDING else Routes.SESSIONS
 
     /**
-     * Where the login screen navigates after a successful sign-in: the
-     * wizard's first-run flag decides between the wizard (first-ever
-     * sign-in) and Sessions (a returning signed-in user skips straight
-     * through, per vn-edu.14's acceptance criteria).
+     * Where the connect flow (Settings' "Connect GitHub", or the bottom
+     * nav's "Sign In" tab -- both land on [Routes.LOGIN]) goes after a
+     * successful sign-in: the wizard's first-run flag decides between the
+     * wizard (first-ever connect, needs a vault picked before uploads can
+     * start) and Sessions (a repeat connect skips straight through).
      */
     fun postLoginDestination(setupWizardCompleted: Boolean): String =
         if (setupWizardCompleted) Routes.SESSIONS else Routes.WIZARD

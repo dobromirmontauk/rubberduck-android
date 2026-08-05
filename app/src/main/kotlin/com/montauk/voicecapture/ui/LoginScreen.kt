@@ -48,6 +48,7 @@ import com.montauk.voicecapture.auth.GitHubDeviceFlowClient
 import com.montauk.voicecapture.auth.GitHubIdentity
 import com.montauk.voicecapture.auth.deviceFlowUserMessage
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
+import com.montauk.voicecapture.upload.UploadWorker
 import kotlinx.coroutines.launch
 
 /** What the login screen is showing right now -- one flow at a time. */
@@ -63,12 +64,15 @@ private sealed class LoginUiState {
 /**
  * Stock login pattern (design frame 1a): centered mark, app name, a primary
  * GitHub device-flow button and a secondary access-token button, version-only
- * footer. Replaces wave-3's [com.montauk.voicecapture.VoiceCaptureApp]-restoring
- * placeholder entirely -- this is a real sign-in, not a stand-in.
+ * footer. Bead vn-edu.29: this screen is no longer an entry gate -- it's the
+ * optional *connect* flow, reached from Settings' "Connect GitHub" or the
+ * bottom nav's "Sign In" tab, never shown unprompted on launch (see
+ * [AppEntryGating.startDestination]).
  *
- * [onSignedIn] fires once a token is stored; [AppNavHost] decides whether
- * that lands on the setup wizard (first sign-in) or straight to Sessions
- * (returning user).
+ * [onSignedIn] fires once a token is stored (and any LOCAL upload backlog
+ * has been drained, see [completeSignIn]); [AppNavHost] decides whether that
+ * lands on the setup wizard (first-ever connect) or straight back to
+ * Sessions (repeat connect), via [AppEntryGating.postLoginDestination].
  */
 @Composable
 fun LoginScreen(onSignedIn: () -> Unit) {
@@ -82,6 +86,10 @@ fun LoginScreen(onSignedIn: () -> Unit) {
         app.secretsStore.userGithubLogin = identity?.login
         app.secretsStore.isSignedOut = false
         app.refreshBundleUploader()
+        // Bead vn-edu.29: connecting is no longer the only way sessions exist --
+        // there can already be a backlog of LOCAL sessions recorded signed out.
+        // Drain it now that there's a real uploader to hand them to.
+        UploadWorker.enqueueBacklog(context, app.sessionStore)
         onSignedIn()
     }
 

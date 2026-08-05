@@ -42,6 +42,10 @@ fun AppNavHost(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     val showBottomBar = currentRoute == Routes.SESSIONS || currentRoute == Routes.SETTINGS || currentRoute == Routes.SESSION_DETAIL
+    // Read fresh on every recomposition (same pattern as SettingsScreen) rather than
+    // cached in remembered state -- a sign-in/log-out always triggers a navigation,
+    // which recomposes this whole function, so the 4th tab's label picks it up for free.
+    val isConnectedToGithub = app.secretsStore.isConnectedToGithub()
 
     // Wraps the Scaffold (and therefore the bottom nav bar's chrome) in the
     // app's dark theme -- each screen composable also wraps itself in
@@ -54,6 +58,7 @@ fun AppNavHost(
             if (showBottomBar) {
                 BottomNavBar(
                     currentRoute = currentRoute,
+                    isConnectedToGithub = isConnectedToGithub,
                     onNewSession = {
                         // Permission-gated service start lives in MainActivity
                         // (it owns the ActivityResult permission launcher);
@@ -77,7 +82,13 @@ fun AppNavHost(
                             launchSingleTop = true
                         }
                     },
-                    onLogOut = { showLogoutDialog = true },
+                    onAuthTapped = {
+                        if (isConnectedToGithub) {
+                            showLogoutDialog = true
+                        } else {
+                            navController.navigate(Routes.LOGIN)
+                        }
+                    },
                 )
             }
         },
@@ -123,7 +134,10 @@ fun AppNavHost(
                 }
             }
             composable(Routes.SETTINGS) {
-                SettingsScreen(onRunSetupAgain = { navController.navigate(Routes.WIZARD) })
+                SettingsScreen(
+                    onRunSetupAgain = { navController.navigate(Routes.WIZARD) },
+                    onConnectGithub = { navController.navigate(Routes.LOGIN) },
+                )
             }
             composable(Routes.LOGIN) {
                 LoginScreen(
@@ -153,9 +167,11 @@ fun AppNavHost(
                 showLogoutDialog = false
                 app.secretsStore.isSignedOut = true
                 app.refreshBundleUploader()
-                navController.navigate(Routes.LOGIN) {
-                    // Clears the entire back stack (whatever screen Log Out was
-                    // tapped from) rather than the fragile popUpTo(0) idiom.
+                // Lands on Sessions, not Login (bead vn-edu.29 -- logging out never
+                // gates the app; it's fully usable signed out, same as a fresh
+                // install). Clears the entire back stack (whatever screen Log Out
+                // was tapped from) rather than the fragile popUpTo(0) idiom.
+                navController.navigate(Routes.SESSIONS) {
                     popUpTo(navController.graph.id) { inclusive = true }
                 }
             },

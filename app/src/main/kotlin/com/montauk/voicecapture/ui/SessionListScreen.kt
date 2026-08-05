@@ -80,7 +80,19 @@ fun SessionListScreen(onSessionClick: (String) -> Unit) {
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+                // Bead vn-edu.29's quiet unconnected-state affordance: a fact, not a
+                // prompt -- no button, no icon, no color pulled from the error/warning
+                // end of the palette. "Connect GitHub" lives in Settings and the bottom
+                // nav's "Sign In" tab; this just states where things stand.
+                if (!(context.applicationContext as VoiceCaptureApp).secretsStore.isConnectedToGithub()) {
+                    Text(
+                        text = "Not connected to GitHub — sessions stay on this device",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
                 if (sessions.isEmpty()) {
                     Text(
                         text = "No sessions yet",

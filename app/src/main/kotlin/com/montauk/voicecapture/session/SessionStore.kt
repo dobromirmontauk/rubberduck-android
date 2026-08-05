@@ -163,6 +163,16 @@ class SessionStore(private val baseDir: File) {
             .map { (_, summary) -> summary }
     }
 
+    /**
+     * Ids of every session currently marked LOCAL -- finalized while signed
+     * out (bead vn-edu.29: [com.montauk.voicecapture.service.RecordingService]
+     * never queues an upload with no GitHub token configured), so nothing
+     * ever attempted to leave the device. [com.montauk.voicecapture.upload.UploadWorker.enqueueBacklog]
+     * calls this right after a sign-in to drain the backlog.
+     */
+    fun localSessionIds(): List<String> =
+        listSessions().filter { it.uploadState == UploadState.LOCAL }.map { it.sessionId }
+
     /** Reads meta.json for [sessionId], or null if the session or its meta.json doesn't exist. */
     fun readMeta(sessionId: String): SessionMeta? {
         val file = metaFile(sessionDir(sessionId))

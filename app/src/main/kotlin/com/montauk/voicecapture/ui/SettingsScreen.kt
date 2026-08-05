@@ -30,11 +30,12 @@ import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 
 @Composable
-fun SettingsScreen(onRunSetupAgain: () -> Unit) {
+fun SettingsScreen(onRunSetupAgain: () -> Unit, onConnectGithub: () -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as VoiceCaptureApp
     val vaultOwner = app.secretsStore.selectedVaultOwner ?: BuildConfig.VAULT_OWNER
     val vaultRepo = app.secretsStore.selectedVaultRepo ?: BuildConfig.VAULT_REPO
+    val connected = app.secretsStore.isConnectedToGithub()
 
     VoiceCaptureTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -46,7 +47,14 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(20.dp))
                 SettingsSection {
-                    InfoRow(label = "Signed in as", value = app.secretsStore.userGithubLogin ?: "Not signed in")
+                    InfoRow(label = "GitHub", value = if (connected) app.secretsStore.userGithubLogin ?: "Connected" else "Not connected")
+                    // Bead vn-edu.29: GitHub is an optional, later step now, not
+                    // something a fresh install already asked about -- this is the
+                    // one place to start that flow when signed out (the bottom
+                    // nav's "Sign In" tab is the other).
+                    if (!connected) {
+                        TextButton(onClick = onConnectGithub) { Text("Connect GitHub") }
+                    }
                     InfoRow(label = "Vault repo", value = "$vaultOwner/$vaultRepo")
                     InfoRow(label = "Live transcription key", value = if (app.isAssemblyKeyConfigured()) "Configured" else "Not configured")
                     InfoRow(label = "Upload token", value = if (app.isGithubTokenConfigured()) "Configured" else "Not configured")
