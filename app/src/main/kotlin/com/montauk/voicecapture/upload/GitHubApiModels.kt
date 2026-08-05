@@ -9,7 +9,12 @@ import kotlinx.serialization.Serializable
  * API. Only fields this uploader reads are modelled -- `ignoreUnknownKeys` is
  * set on the shared [uploaderJson] instance so GitHub can add fields freely.
  */
-internal val uploaderJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+// encodeDefaults is required: request models rely on defaulted fields that the
+// server treats as mandatory (e.g. LfsBatchRequest.operation — omitting it is a 422).
+internal val uploaderJson = kotlinx.serialization.json.Json {
+    ignoreUnknownKeys = true
+    encodeDefaults = true
+}
 
 @Serializable
 internal data class GitRefResponse(
@@ -88,7 +93,7 @@ internal data class UpdateRefRequest(val sha: String, val force: Boolean = false
 @Serializable
 internal data class LfsBatchRequest(
     val operation: String = "upload",
-    val transfer: List<String> = listOf("basic"),
+    val transfers: List<String> = listOf("basic"),
     val objects: List<LfsObjectRequest>,
 )
 
