@@ -27,6 +27,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import java.util.Date
 
 /**
  * Roborazzi screenshot goldens for the app's key screens (bead vn-edu.34) --
@@ -91,23 +92,33 @@ class KeyScreensScreenshotTest {
 
     @Test
     fun sessionsListWithNav() {
+        // Distinct startedAt per session (an hour apart) rather than all three
+        // sharing SessionFixtures.FIXED_STARTED_AT: SessionStore.listSessions()
+        // sorts descending by startedAt, and with equal keys that sort falls
+        // through to whatever order File.listFiles() happens to return --
+        // filesystem- and therefore platform-dependent (this is exactly how a
+        // macOS-recorded golden ended up with a different row order than the
+        // one Linux CI rendered the first time this suite ran there).
         SessionFixtures.seedSession(
             app.sessionStore,
             sessionId = "2026-08-01_0900_ab12",
             transcriptText = "Kitchen remodel budget check",
             uploadState = UploadState.UPLOADED,
+            startedAt = Date(SessionFixtures.FIXED_STARTED_AT.time),
         )
         SessionFixtures.seedSession(
             app.sessionStore,
             sessionId = "2026-08-01_1000_cd34",
             transcriptText = "Marathon training recap",
             uploadState = UploadState.QUEUED,
+            startedAt = Date(SessionFixtures.FIXED_STARTED_AT.time + 3_600_000L),
         )
         SessionFixtures.seedSession(
             app.sessionStore,
             sessionId = "2026-08-01_1100_ef56",
             transcriptText = "Deck repair notes",
             uploadState = UploadState.LOCAL,
+            startedAt = Date(SessionFixtures.FIXED_STARTED_AT.time + 7_200_000L),
         )
 
         composeTestRule.setContent {
