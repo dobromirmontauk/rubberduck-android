@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exposes files/sessions/** (see SessionStore) to the FileProvider used by
+     the session-detail "Share audio" action: sharing a raw file Uri to
+     another app is blocked on modern Android, so a content Uri via this
+     provider is required instead. -->
+<paths>
+    <files-path name="sessions" path="sessions/" />
+</paths>
