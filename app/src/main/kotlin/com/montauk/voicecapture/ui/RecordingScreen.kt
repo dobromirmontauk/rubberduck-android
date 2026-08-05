@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.audio.LoudnessVisualizer
 import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.service.RecordingStateHolder
@@ -87,14 +88,21 @@ import kotlin.math.roundToInt
  * slab flush with the screen edge, which read as sitting exactly where the
  * app's own bottom nav normally lives). No bottom nav here -- this screen is
  * meant to be readable at arm's length while walking.
+ *
+ * [onOpenSettings] (bead vn-edu.46 superseding decision) is invoked when the
+ * keyless tags-slot message is tapped -- deep-links to Settings' "Word cloud
+ * & titles" key row ([ANTHROPIC_KEY_ROW_TEST_TAG]) rather than opening any
+ * dialog on this glance-mode screen.
  */
 @Composable
-fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> Unit = {}) {
+fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> Unit = {}, onOpenSettings: () -> Unit = {}) {
     val context = LocalContext.current
+    val app = context.applicationContext as VoiceCaptureApp
     val recordingState by RecordingStateHolder.state.collectAsStateWithLifecycle()
     val transcript by TranscriptStateHolder.state.collectAsStateWithLifecycle()
     val hasBluetoothMic = remember { hasBluetoothInputDevice(context) }
     val tags by TagsStateHolder.state.collectAsStateWithLifecycle()
+    val anthropicKeyConfigured = app.isAnthropicKeyConfigured()
 
     VoiceCaptureTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -117,7 +125,7 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
                     Spacer(modifier = Modifier.height(16.dp))
                     LiveTranscriptPane(transcript = transcript, modifier = Modifier.weight(1f))
                     Spacer(modifier = Modifier.height(16.dp))
-                    TagChipsRow(tags = tags)
+                    TagChipsRow(tags = tags, anthropicKeyConfigured = anthropicKeyConfigured, onRegisterKeyTapped = onOpenSettings)
                     // Extra air below the chips row (bead vn-edu.32) so the inset STOP
                     // button reads as floating above content, not touching the chips.
                     Spacer(modifier = Modifier.height(24.dp))
@@ -514,9 +522,32 @@ internal fun partialAnnotatedString(
  * enter/exit. Durations are short (160-220ms) and opacity/scale-only --
  * deliberately subtle rather than a bouncy/springy default, per the
  * reduced-motion guidance.
+ *
+ * Bead vn-edu.46 superseding decision (2026-08-05): when
+ * [anthropicKeyConfigured] is false, no chips render at all -- not even an
+ * empty row -- because [com.montauk.voicecapture.tags.NoOpTagScorer] never
+ * computes any tags in that state (no heuristic guess). Instead this slot
+ * shows the exact string "(register your API key to see the word cloud)",
+ * dimmed and tappable, invoking [onRegisterKeyTapped] (deep-links to
+ * Settings' "Word cloud & titles" key row) -- so a user always understands
+ * *why* there's nothing here, distinct from "no topic has scored high
+ * enough yet" (which, when keyed, still renders this same empty row via the
+ * early return below).
  */
 @Composable
-private fun TagChipsRow(tags: List<DisplayedTag>) {
+private fun TagChipsRow(tags: List<DisplayedTag>, anthropicKeyConfigured: Boolean, onRegisterKeyTapped: () -> Unit = {}) {
+    if (!anthropicKeyConfigured) {
+        Text(
+            text = "(register your API key to see the word cloud)",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onRegisterKeyTapped)
+                .testTag(REGISTER_KEY_MESSAGE_TEST_TAG),
+        )
+        return
+    }
     if (tags.isEmpty()) return
     Row(
         modifier = Modifier.fillMaxWidth().animateContentSize(),
@@ -538,6 +569,9 @@ private fun TagChipsRow(tags: List<DisplayedTag>) {
         }
     }
 }
+
+/** Test-only anchor for the keyless tags-slot message (bead vn-edu.46). */
+const val REGISTER_KEY_MESSAGE_TEST_TAG = "recording_register_key_message"
 
 private const val MAX_DISPLAYED_TAG_SLOTS = 3
 private const val TAG_CHIP_ENTER_MS = 220
@@ -666,7 +700,7 @@ private fun StopBarPreview() {
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
                 verticalArrangement = Arrangement.Bottom,
             ) {
-                TagChipsRow(tags = syntheticTags())
+                TagChipsRow(tags = syntheticTags(), anthropicKeyConfigured = true)
                 Spacer(modifier = Modifier.height(24.dp))
             }
             StopBar(modifier = Modifier.weight(1f), onClick = {})
@@ -717,7 +751,7 @@ private fun LiveTranscriptPaneOverlongPreview() {
             Spacer(modifier = Modifier.height(16.dp))
             LiveTranscriptPane(transcript = transcript, modifier = Modifier.weight(1f))
             Spacer(modifier = Modifier.height(16.dp))
-            TagChipsRow(tags = syntheticTags())
+            TagChipsRow(tags = syntheticTags(), anthropicKeyConfigured = true)
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
@@ -757,7 +791,7 @@ private fun LiveTranscriptPaneGiantPartialPreview() {
             Spacer(modifier = Modifier.height(16.dp))
             LiveTranscriptPane(transcript = transcript, modifier = Modifier.weight(1f))
             Spacer(modifier = Modifier.height(16.dp))
-            TagChipsRow(tags = syntheticTags())
+            TagChipsRow(tags = syntheticTags(), anthropicKeyConfigured = true)
             Spacer(modifier = Modifier.height(24.dp))
         }
     }

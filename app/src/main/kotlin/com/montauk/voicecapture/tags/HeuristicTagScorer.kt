@@ -1,12 +1,19 @@
 package com.montauk.voicecapture.tags
 
 /**
- * Keyless fallback [TagScorer] (no network, no Android dependency): a
- * conservative noun-phrase-ish extractor over the rolling transcript tail.
- * Used whenever `anthropic.apiKey` isn't configured (see
- * [AnthropicTagScorer]) and as the degrade-to target if that scorer fails.
+ * RETIRED from the production path (bead vn-edu.46 superseding decision,
+ * 2026-08-05): the user rejected a heuristic fallback that guesses at
+ * topics without an LLM -- it was scoring modal-verb bigrams and
+ * substring-duplicate candidates ("candidate" + "candidate might") as if
+ * they were real topics. [com.montauk.voicecapture.tags.TagScorerFactory]
+ * and [AnthropicTagScorer]'s own transient-failure fallback both use
+ * [NoOpTagScorer] now, never this class. Kept only as a deterministic test
+ * fixture for tests that want *some* scorer output without a real network
+ * call -- do not wire this into any production code path.
  *
- * Deliberately biased toward showing *fewer, stronger* tags rather than
+ * Original KDoc, preserved for context: a conservative noun-phrase-ish
+ * extractor over the rolling transcript tail (no network, no Android
+ * dependency). Deliberately biased toward showing *fewer, stronger* tags rather than
  * filling all 3 slots with weak guesses -- "one strong tag beats three weak
  * ones" per spec. Two signals combine into a phrase's raw score:
  *  - **Repetition**: a two-word phrase (both content words, i.e. not

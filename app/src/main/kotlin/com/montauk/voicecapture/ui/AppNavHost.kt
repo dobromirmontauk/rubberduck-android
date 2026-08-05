@@ -106,6 +106,7 @@ fun AppNavHost(
             composable(Routes.RECORDING) {
                 RecordingScreen(
                     onSetMode = onSetMode,
+                    onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                     onStopRecording = {
                         onStopRecording()
                         // Pop up to (and including) any existing "sessions"

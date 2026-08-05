@@ -56,6 +56,13 @@ data class DisplayedTag(val tag: String, val confidence: Double, val rank: Int, 
  * owns this drives it from a single coroutine, matching
  * [com.montauk.voicecapture.session.RecordingModeStateMachine]'s single-owner
  * pattern).
+ *
+ * Bead vn-edu.46: every [onScored] call also runs [suppressOverlappingCandidates],
+ * which merges/drops substring- or high-word-overlap candidate pairs (e.g.
+ * "candidate" + "candidate might" -- one topic scored as two slightly
+ * different phrasings) so one real topic never occupies two display slots at
+ * once. Scorer-agnostic -- prefix-word containment only, no vocabulary/
+ * stopword knowledge -- see [isHighOverlap].
  */
 class TagTracker(
     private val maxCandidates: Int = DEFAULT_MAX_CANDIDATES,
@@ -107,6 +114,7 @@ class TagTracker(
             }
         }
         decayUnseen(seenKeys, nowMs)
+        suppressOverlappingCandidates()
         trimToMaxCandidates()
         return recomputeDisplayed(nowMs)
     }
@@ -126,6 +134,48 @@ class TagTracker(
             val decayFactor = 0.5.pow(elapsedMs.toDouble() / decayHalfLifeMs.toDouble())
             candidate.confidence *= decayFactor
             candidate.lastUpdatedMs = nowMs
+        }
+    }
+
+    /**
+     * Bead vn-edu.46: merges/suppresses substring- or high-overlap candidate
+     * pairs so one topic never occupies two slots at once (e.g. "candidate"
+     * + "candidate might" both scoring, one topic, two chips). Deliberately
+     * scorer-agnostic -- prefix-word containment only, no stopword list, no
+     * part-of-speech guessing -- so it applies equally regardless of which
+     * [TagScorer] produced the candidates (per the bead's superseding
+     * decision, that's [AnthropicTagScorer] only now, but the fix itself
+     * doesn't know or care). Of an overlapping pair, keeps the higher-
+     * confidence phrasing and drops the other from [candidates] entirely
+     * (not just from display) so it can't come back next tick without a
+     * fresh, independent score.
+     */
+    private fun suppressOverlappingCandidates() {
+        val keys = candidates.keys.toList()
+        val suppressed = mutableSetOf<String>()
+        for (i in keys.indices) {
+            val keyA = keys[i]
+            if (keyA in suppressed) continue
+            val candidateA = candidates[keyA] ?: continue
+            for (j in i + 1 until keys.size) {
+                val keyB = keys[j]
+                if (keyB in suppressed) continue
+                val candidateB = candidates[keyB] ?: continue
+                if (!isHighOverlap(candidateA.tag, candidateB.tag)) continue
+                if (candidateA.confidence >= candidateB.confidence) {
+                    suppressed += keyB
+                } else {
+                    // keyA just lost to keyB -- stop comparing it against any
+                    // further candidates in this pass rather than letting an
+                    // already-suppressed "survivor" keep suppressing others.
+                    suppressed += keyA
+                    break
+                }
+            }
+        }
+        for (key in suppressed) {
+            candidates.remove(key)
+            displayed.remove(key)
         }
     }
 
@@ -192,6 +242,35 @@ class TagTracker(
 
     private fun normalize(tag: String): String = tag.trim().lowercase()
 
+    /**
+     * True when the shorter phrase's *whole word sequence* is exactly the
+     * longer phrase's leading words -- e.g. "candidate" vs. "candidate
+     * might" (["candidate"] is ["candidate", "might"]'s prefix), or "kitchen
+     * remodel" vs. "kitchen remodel budget". Deliberately a prefix check,
+     * not "do these two phrases share any word" (a looser word-set-subset
+     * rule): a single shared *trailing* word is common between genuinely
+     * unrelated topics by coincidence (e.g. two distinct fixture tags named
+     * "topic" and "second topic" share the word "topic" but describe
+     * nothing alike) and would false-positive under a looser rule --
+     * confirmed against this exact TagCoordinatorTest fixture. Requiring the
+     * match to start at the front captures the bead's actual bug pattern
+     * (a real topic word with a modal/filler word trailing it) without that
+     * false-positive class. Word-boundary-aware, not raw substring, so e.g.
+     * "cab" is never treated as overlapping "candidate" just because one
+     * string contains the other's characters.
+     */
+    private fun isHighOverlap(a: String, b: String): Boolean {
+        val wordsA = wordList(a)
+        val wordsB = wordList(b)
+        if (wordsA.isEmpty() || wordsB.isEmpty()) return false
+        val (shorter, longer) = if (wordsA.size <= wordsB.size) wordsA to wordsB else wordsB to wordsA
+        if (shorter.size == longer.size) return shorter == longer
+        return longer.subList(0, shorter.size) == shorter
+    }
+
+    private fun wordList(text: String): List<String> =
+        text.lowercase().split(WORD_BOUNDARY).filter { it.isNotBlank() }
+
     companion object {
         const val DEFAULT_MAX_CANDIDATES = 10
         const val DEFAULT_MAX_DISPLAYED = 3
@@ -202,5 +281,6 @@ class TagTracker(
         const val DEFAULT_EXIT_THRESHOLD = 0.3
         const val DEFAULT_MIN_DWELL_MS = 8_000L
         const val DEFAULT_DECAY_HALF_LIFE_MS = 45_000L
+        private val WORD_BOUNDARY = Regex("\\s+")
     }
 }

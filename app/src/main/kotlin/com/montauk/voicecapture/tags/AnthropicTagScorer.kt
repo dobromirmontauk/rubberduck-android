@@ -14,20 +14,22 @@ import okhttp3.OkHttpClient
 /**
  * Default MAJOR-topic [TagScorer]: Anthropic's Messages API (Claude Haiku)
  * scores a rolling transcript tail every ~[minIntervalMs] -- pennies/hour at
- * this cadence, see README. `anthropic.apiKey` follows the exact same
- * `local.properties` -> `BuildConfig` secret pattern as
- * `assemblyai.apiKey` in `app/build.gradle.kts`.
+ * this cadence, see README. The effective key (runtime-entered via Settings/
+ * the setup wizard, falling back to the `anthropic.apiKey` `local.properties`
+ * -> `BuildConfig` dev convenience -- see [com.montauk.voicecapture.settings.AppSecretsStore.effectiveAnthropicKey],
+ * bead vn-edu.48) is passed in as [apiKey].
  *
  * Never throws: any failure (network error, non-200, unparseable/malformed
- * JSON) degrades silently to [fallback] (a [HeuristicTagScorer] by default)
- * -- a flaky network or an API hiccup should never be visible on the
- * recording screen. All I/O runs on [Dispatchers.IO], called from a
- * coordinator's own coroutine, never from the audio capture thread -- a
- * slow request only delays this scorer's next update, nothing else.
+ * JSON) degrades silently to [fallback] (a [NoOpTagScorer] by default, bead
+ * vn-edu.46 superseding decision -- no heuristic guess, just no tags) -- a
+ * flaky network or an API hiccup should never be visible on the recording
+ * screen. All I/O runs on [Dispatchers.IO], called from a coordinator's own
+ * coroutine, never from the audio capture thread -- a slow request only
+ * delays this scorer's next update, nothing else.
  */
 class AnthropicTagScorer(
     apiKey: String,
-    private val fallback: TagScorer = HeuristicTagScorer(),
+    private val fallback: TagScorer = NoOpTagScorer(),
     httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
@@ -126,9 +128,15 @@ class AnthropicTagScorer(
     }
 }
 
-/** Picks the real scorer vs. the keyless fallback for the current build -- mirrors [com.montauk.voicecapture.stt.SttClientFactory]. */
+/** Picks the real scorer vs. the keyless no-op for the current build -- mirrors [com.montauk.voicecapture.stt.SttClientFactory]. */
 object TagScorerFactory {
-    /** [apiKey] is `BuildConfig.ANTHROPIC_API_KEY`; blank means "not configured". */
+    /**
+     * [apiKey] is the effective Anthropic key (see [com.montauk.voicecapture.settings.AppSecretsStore.effectiveAnthropicKey]);
+     * blank means "not configured". Bead vn-edu.46 superseding decision: keyless
+     * returns [NoOpTagScorer], never [HeuristicTagScorer] -- no tags are
+     * computed at all, and the UI shows the register-key message instead of
+     * a heuristic's guess.
+     */
     fun create(apiKey: String): TagScorer =
-        if (apiKey.isBlank()) HeuristicTagScorer() else AnthropicTagScorer(apiKey)
+        if (apiKey.isBlank()) NoOpTagScorer() else AnthropicTagScorer(apiKey)
 }
