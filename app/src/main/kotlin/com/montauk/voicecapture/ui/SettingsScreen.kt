@@ -15,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,9 +30,11 @@ import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(onRunSetupAgain: () -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as VoiceCaptureApp
+    val vaultOwner = app.secretsStore.selectedVaultOwner ?: BuildConfig.VAULT_OWNER
+    val vaultRepo = app.secretsStore.selectedVaultRepo ?: BuildConfig.VAULT_REPO
 
     VoiceCaptureTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -43,7 +46,8 @@ fun SettingsScreen() {
                 )
                 Spacer(modifier = Modifier.height(20.dp))
                 SettingsSection {
-                    InfoRow(label = "Vault repo", value = "${BuildConfig.VAULT_OWNER}/${BuildConfig.VAULT_REPO}")
+                    InfoRow(label = "Signed in as", value = app.secretsStore.userGithubLogin ?: "Not signed in")
+                    InfoRow(label = "Vault repo", value = "$vaultOwner/$vaultRepo")
                     InfoRow(label = "Live transcription key", value = if (app.isAssemblyKeyConfigured()) "Configured" else "Not configured")
                     InfoRow(label = "Upload token", value = if (app.isGithubTokenConfigured()) "Configured" else "Not configured")
                     InfoRow(label = "App version", value = app.appVersionName())
@@ -52,6 +56,10 @@ fun SettingsScreen() {
                 SettingsSection {
                     ToggleRow(label = "Upload on Wi-Fi only", initiallyOn = false)
                     ToggleRow(label = "Keep screen on while recording", initiallyOn = true)
+                }
+                Spacer(modifier = Modifier.height(20.dp))
+                SettingsSection {
+                    TextButton(onClick = onRunSetupAgain) { Text("Run setup again") }
                 }
             }
         }

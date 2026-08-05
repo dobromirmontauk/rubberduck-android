@@ -30,6 +30,30 @@ class AppSecretsStore(context: Context) {
         get() = prefs.getString(KEY_USER_GITHUB_LOGIN, null)
         set(value) = prefs.edit().putString(KEY_USER_GITHUB_LOGIN, value).apply()
 
+    /** Set by the setup wizard's transcription step; skippable, so this is commonly null. */
+    var userAssemblyAiKey: String?
+        get() = prefs.getString(KEY_USER_ASSEMBLYAI_KEY, null)
+        set(value) = prefs.edit().putString(KEY_USER_ASSEMBLYAI_KEY, value).apply()
+
+    /** The vault repo picked in the wizard's step 2; null until a first sign-in has run it. */
+    var selectedVaultOwner: String?
+        get() = prefs.getString(KEY_SELECTED_VAULT_OWNER, null)
+        set(value) = prefs.edit().putString(KEY_SELECTED_VAULT_OWNER, value).apply()
+
+    var selectedVaultRepo: String?
+        get() = prefs.getString(KEY_SELECTED_VAULT_REPO, null)
+        set(value) = prefs.edit().putString(KEY_SELECTED_VAULT_REPO, value).apply()
+
+    /**
+     * First-run flag: false until the wizard has been finished (or
+     * dismissed) once. Gates whether [Routes.WIZARD][com.montauk.voicecapture.ui.Routes]
+     * is the post-sign-in destination; re-running it from Settings doesn't
+     * touch this -- it's "has run once ever", not "is currently valid".
+     */
+    var setupWizardCompleted: Boolean
+        get() = prefs.getBoolean(KEY_SETUP_WIZARD_COMPLETED, false)
+        set(value) = prefs.edit().putBoolean(KEY_SETUP_WIZARD_COMPLETED, value).apply()
+
     fun effectiveGithubToken(buildConfigToken: String): String {
         if (isSignedOut) return ""
         return userGithubToken?.takeIf { it.isNotBlank() } ?: buildConfigToken
@@ -37,7 +61,7 @@ class AppSecretsStore(context: Context) {
 
     fun effectiveAssemblyKey(buildConfigKey: String): String {
         if (isSignedOut) return ""
-        return buildConfigKey
+        return userAssemblyAiKey?.takeIf { it.isNotBlank() } ?: buildConfigKey
     }
 
     /** True once the login screen has stored a real, user-entered token (device flow or PAT). */
@@ -48,5 +72,9 @@ class AppSecretsStore(context: Context) {
         private const val KEY_SIGNED_OUT = "signed_out"
         private const val KEY_USER_GITHUB_TOKEN = "user_github_token"
         private const val KEY_USER_GITHUB_LOGIN = "user_github_login"
+        private const val KEY_USER_ASSEMBLYAI_KEY = "user_assemblyai_key"
+        private const val KEY_SELECTED_VAULT_OWNER = "selected_vault_owner"
+        private const val KEY_SELECTED_VAULT_REPO = "selected_vault_repo"
+        private const val KEY_SETUP_WIZARD_COMPLETED = "setup_wizard_completed"
     }
 }

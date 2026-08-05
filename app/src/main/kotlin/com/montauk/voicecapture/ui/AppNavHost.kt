@@ -119,12 +119,24 @@ fun AppNavHost(
                     SessionDetailScreen(sessionId = sessionId, onBack = { navController.popBackStack() })
                 }
             }
-            composable(Routes.SETTINGS) { SettingsScreen() }
+            composable(Routes.SETTINGS) {
+                SettingsScreen(onRunSetupAgain = { navController.navigate(Routes.WIZARD) })
+            }
             composable(Routes.LOGIN) {
                 LoginScreen(
                     onSignedIn = {
-                        navController.navigate(Routes.SESSIONS) {
+                        val next = AppEntryGating.postLoginDestination(app.secretsStore.setupWizardCompleted)
+                        navController.navigate(next) {
                             popUpTo(Routes.LOGIN) { inclusive = true }
+                        }
+                    },
+                )
+            }
+            composable(Routes.WIZARD) {
+                SetupWizardScreen(
+                    onFinished = {
+                        navController.navigate(Routes.SESSIONS) {
+                            popUpTo(Routes.WIZARD) { inclusive = true }
                         }
                     },
                 )

@@ -46,8 +46,11 @@ class VoiceCaptureApp : Application() {
     fun refreshBundleUploader() {
         bundleUploader = BundleUploaderFactory.create(
             token = secretsStore.effectiveGithubToken(BuildConfig.GITHUB_TOKEN),
-            owner = BuildConfig.VAULT_OWNER,
-            repo = BuildConfig.VAULT_REPO,
+            // The wizard's vault-picker step (vn-edu.15) can point this at a
+            // different repo than the dev-build default; falls back to the
+            // BuildConfig default until that step has run.
+            owner = secretsStore.selectedVaultOwner ?: BuildConfig.VAULT_OWNER,
+            repo = secretsStore.selectedVaultRepo ?: BuildConfig.VAULT_REPO,
         )
     }
 

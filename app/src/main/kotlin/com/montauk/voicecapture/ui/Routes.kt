@@ -7,6 +7,7 @@ object Routes {
     const val SESSION_DETAIL = "sessionDetail/{sessionId}"
     const val SETTINGS = "settings"
     const val LOGIN = "login"
+    const val WIZARD = "wizard"
 
     fun sessionDetail(sessionId: String) = "sessionDetail/$sessionId"
 }

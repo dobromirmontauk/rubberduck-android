@@ -25,11 +25,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = application as VoiceCaptureApp
-        val startDestination = when {
-            app.secretsStore.isSignedOut -> Routes.LOGIN
-            RecordingStateHolder.state.value.isRecording -> Routes.RECORDING
-            else -> Routes.SESSIONS
-        }
+        val startDestination = AppEntryGating.startDestination(
+            isSignedOut = app.secretsStore.isSignedOut,
+            isRecording = RecordingStateHolder.state.value.isRecording,
+            setupWizardCompleted = app.secretsStore.setupWizardCompleted,
+            hasSignedInGithub = app.secretsStore.hasSignedInWithGithub(),
+        )
         setContent {
             AppNavHost(
                 startDestination = startDestination,
