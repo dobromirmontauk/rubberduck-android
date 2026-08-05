@@ -2,6 +2,7 @@ package com.montauk.voicecapture.ui
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -25,12 +26,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
@@ -42,6 +49,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.montauk.voicecapture.audio.LoudnessVisualizer
 import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.TranscriptLine
@@ -84,7 +92,7 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
                     Spacer(modifier = Modifier.height(16.dp))
                     ChipsRow(transcript = transcript, hasBluetoothMic = hasBluetoothMic)
                     Spacer(modifier = Modifier.height(10.dp))
-                    MicLevelBar(level = transcript.micLevel)
+                    LoudnessMeterBar(level = transcript.micLevel, sessionId = recordingState.sessionId)
                     Spacer(modifier = Modifier.height(16.dp))
                     ModeSwitcher(currentMode = recordingState.mode, onSelect = onSetMode)
                     Spacer(modifier = Modifier.height(16.dp))
@@ -206,24 +214,61 @@ private fun ChipsRow(transcript: TranscriptUiState, hasBluetoothMic: Boolean) {
     }
 }
 
-/** Thin RMS bar under the chips -- instant visual proof the mic is hearing something. */
+/**
+ * Prominent voice-recorder-style loudness meter: a fixed row of vertical
+ * bars scrolling left as new [LoudnessVisualizer] windows arrive, newest at
+ * the right -- same visual-weight class as the chips row above it. Feeds off
+ * the existing RMS tee ([com.montauk.voicecapture.audio.MicLevelMeter] via
+ * [TranscriptUiState.micLevel]); opens no second AudioRecord. [sessionId]
+ * keys the underlying [LoudnessVisualizer] so a new recording starts from an
+ * empty history rather than carrying over the previous session's tail.
+ */
 @Composable
-private fun MicLevelBar(level: Float) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(6.dp)
-            .clip(RoundedCornerShape(3.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .fillMaxWidth(level.coerceIn(0f, 1f))
-                .background(MaterialTheme.colorScheme.primary),
-        )
+private fun LoudnessMeterBar(level: Float, sessionId: String?) {
+    val visualizer = remember(sessionId) { LoudnessVisualizer() }
+    var history by remember(visualizer) { mutableStateOf(visualizer.history) }
+    LaunchedEffect(level, visualizer) {
+        visualizer.onLevel(level)
+        history = visualizer.history
+    }
+    LoudnessMeterBarContent(history = history)
+}
+
+/**
+ * Pure rendering half of the loudness meter: draws [history] as a single row
+ * of bars in one [Canvas] pass, so a ~100ms level update redraws one Canvas
+ * rather than recomposing per-bar. Split out from [LoudnessMeterBar] so it
+ * can be driven by synthetic history (below) for deterministic screenshots
+ * that don't depend on live microphone input.
+ */
+@Composable
+private fun LoudnessMeterBarContent(history: List<Float>) {
+    val barColor = MaterialTheme.colorScheme.primary
+    val restColor = MaterialTheme.colorScheme.surfaceVariant
+    Canvas(modifier = Modifier.fillMaxWidth().height(LOUDNESS_METER_HEIGHT)) {
+        val barCount = history.size
+        if (barCount == 0) return@Canvas
+        val gapPx = LOUDNESS_METER_BAR_GAP.toPx()
+        val barWidth = ((size.width - gapPx * (barCount - 1)) / barCount).coerceAtLeast(1f)
+        val restHeightPx = LOUDNESS_METER_REST_HEIGHT.toPx().coerceAtMost(size.height)
+        val cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f)
+        history.forEachIndexed { index, level ->
+            val activeHeight = (size.height - restHeightPx) * level.coerceIn(0f, 1f)
+            val totalHeight = restHeightPx + activeHeight
+            val left = index * (barWidth + gapPx)
+            drawRoundRect(
+                color = if (level > 0f) barColor else restColor,
+                topLeft = Offset(left, size.height - totalHeight),
+                size = Size(barWidth, totalHeight),
+                cornerRadius = cornerRadius,
+            )
+        }
     }
 }
+
+private val LOUDNESS_METER_HEIGHT = 56.dp
+private val LOUDNESS_METER_BAR_GAP = 3.dp
+private val LOUDNESS_METER_REST_HEIGHT = 4.dp
 
 /**
  * Last ~2 finalized lines (large, solid) plus the current in-progress
@@ -312,5 +357,47 @@ private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit) {
             style = MaterialTheme.typography.headlineMedium,
             color = MaterialTheme.colorScheme.onError,
         )
+    }
+}
+
+/**
+ * Deterministic stand-in for real speech, used only by the previews below:
+ * feeds a synthetic sequence of RMS windows (silence, then a rising/falling
+ * "loud speech" hump) through the real [LoudnessVisualizer] so the resulting
+ * history exercises the actual attack/decay/quantization pipeline rather
+ * than hand-drawn bar heights.
+ */
+private fun syntheticLoudHistory(): List<Float> {
+    val visualizer = LoudnessVisualizer()
+    val syntheticRms = listOf(0f, 0f, 0.05f, 0.15f, 0.35f, 0.25f, 0.5f, 0.3f, 0.6f, 0.2f, 0.45f, 0.7f, 0.15f, 0.4f)
+    repeat(LoudnessVisualizer.DEFAULT_HISTORY_LENGTH) { i ->
+        visualizer.onLevel(syntheticRms[i % syntheticRms.size])
+    }
+    return visualizer.history
+}
+
+/**
+ * Preview-only: the meter at silence. No real microphone involved -- this
+ * renders [LoudnessMeterBarContent] directly against an all-zero history,
+ * which is exactly what a silent recording converges to.
+ */
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10)
+@Composable
+private fun LoudnessMeterBarPreviewQuiet() {
+    VoiceCaptureTheme {
+        LoudnessMeterBarContent(history = List(LoudnessVisualizer.DEFAULT_HISTORY_LENGTH) { 0f })
+    }
+}
+
+/**
+ * Preview-only: the meter fed a synthetic "loud speech" history (see
+ * [syntheticLoudHistory]) so the bar shapes/motion can be inspected and
+ * screenshotted without needing live audio.
+ */
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10)
+@Composable
+private fun LoudnessMeterBarPreviewLoud() {
+    VoiceCaptureTheme {
+        LoudnessMeterBarContent(history = syntheticLoudHistory())
     }
 }
