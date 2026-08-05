@@ -14,9 +14,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -32,6 +35,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.montauk.voicecapture.BuildConfig
@@ -234,6 +239,7 @@ private fun RetryableError(message: String, onRetry: () -> Unit, onCancel: () ->
 @Composable
 private fun TokenEntryBlock(errorMessage: String?, onSubmit: (String) -> Unit, onCancel: () -> Unit) {
     var token by remember { mutableStateOf("") }
+    var revealed by remember { mutableStateOf(false) }
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
         OutlinedTextField(
             value = token,
@@ -241,7 +247,16 @@ private fun TokenEntryBlock(errorMessage: String?, onSubmit: (String) -> Unit, o
             label = { Text("Personal access token") },
             singleLine = true,
             isError = errorMessage != null,
+            visualTransformation = if (revealed) VisualTransformation.None else PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            trailingIcon = {
+                IconButton(onClick = { revealed = !revealed }) {
+                    Icon(
+                        imageVector = if (revealed) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                        contentDescription = if (revealed) "Hide token" else "Show token",
+                    )
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
         )
         if (errorMessage != null) {

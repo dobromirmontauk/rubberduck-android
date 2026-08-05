@@ -17,6 +17,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -51,6 +53,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.auth.GitHubAccountClient
@@ -286,6 +290,7 @@ private fun CreateNewVaultRow(onClick: () -> Unit) {
 private fun TranscriptionStep(onBack: () -> Unit, onSkip: () -> Unit, onKeyValidated: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     var key by remember { mutableStateOf("") }
+    var revealed by remember { mutableStateOf(false) }
     var validating by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -298,6 +303,15 @@ private fun TranscriptionStep(onBack: () -> Unit, onSkip: () -> Unit, onKeyValid
             label = { Text("AssemblyAI API key") },
             singleLine = true,
             isError = errorMessage != null,
+            visualTransformation = if (revealed) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                IconButton(onClick = { revealed = !revealed }) {
+                    Icon(
+                        imageVector = if (revealed) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                        contentDescription = if (revealed) "Hide key" else "Show key",
+                    )
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
         )
         if (errorMessage != null) {
