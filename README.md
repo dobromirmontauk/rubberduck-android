@@ -308,6 +308,31 @@ Reverting the change (`git checkout -- app/src/main/kotlin/com/montauk/voicecapt
 and rerunning `verifyRoborazziDebug` goes green again -- no golden update
 needed since nothing legitimately changed.
 
+**The committed goldens are Linux-rendered, not local-machine-rendered (bead
+vn-edu.41).** `verifyRoborazziDebug` is wired into CI (`ci.yml`, `ubuntu-latest`)
+as of vn-edu.41. Robolectric's native-graphics renderer isn't bit-for-bit
+portable across host OS/CPU -- goldens first recorded on macOS ARM64 failed
+`verifyRoborazziDebug` on CI for all 5 screens (font hinting/anti-aliasing
+differences only, no actual content difference), so the committed goldens
+were re-recorded *on a Linux CI runner* (a scratch branch + draft PR ran
+`recordRoborazziDebug` and uploaded the result as a build artifact, which was
+then downloaded and committed) and are now the canonical source of truth.
+One consequence: `./gradlew verifyRoborazziDebug` run locally on a non-Linux
+machine may show diffs against these goldens even with no code change --
+that's the platform mismatch, not a regression. To update a golden after a
+real screen change, either open a throwaway PR the same way (record on CI,
+download the artifact, commit it) or verify+record inside a Linux
+environment (e.g. a `ubuntu-latest`-equivalent Docker container) rather than
+trusting a local macOS/Windows `recordRoborazziDebug` run.
+
+Also while investigating the CI failure: `sessionsListWithNav`'s three
+fixture sessions originally shared one `startedAt` (`SessionFixtures.
+FIXED_STARTED_AT`), and `SessionStore.listSessions()`'s descending sort over
+equal keys falls through to `File.listFiles()`'s enumeration order, which is
+filesystem- (and therefore platform-) dependent -- macOS and Linux CI
+rendered the three session rows in a different order. Fixed by giving each
+seeded session its own `startedAt`, an hour apart.
+
 ## Live tags (MAJOR-topic chips)
 
 The recording screen shows up to 3 confidence-ranked chips for the MAJOR
