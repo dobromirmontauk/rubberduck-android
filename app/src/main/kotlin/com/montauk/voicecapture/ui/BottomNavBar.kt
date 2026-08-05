@@ -7,7 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -100,6 +100,23 @@ fun BottomNavBar(
 }
 
 /**
+ * Material3's own `NavigationBarItem` pins its height to this value
+ * regardless of the incoming constraints (`constrainHeight(NavigationBarHeight
+ * .roundToPx())` in `NavigationBarItemLayout`, material3 1.3.1), so that the
+ * bar comes out 80dp tall no matter how much vertical space its container
+ * happens to offer -- `Scaffold`'s bottomBar slot is measured with
+ * `looseConstraints` (min zeroed, `maxHeight` = the full Scaffold height; see
+ * `Scaffold.kt`), so "how much space it happens to offer" is effectively the
+ * whole screen. [DebugNewSessionItem] has to pin the same way explicitly
+ * (`NavigationBarTokens.ContainerHeight` isn't public API) -- it previously
+ * used `fillMaxHeight()` instead, which measured against that same
+ * near-full-screen max, inflating this one item (and therefore the whole
+ * Row, and therefore the bar Scaffold reserved space for) to near-full-screen
+ * height and collapsing the sessions list above it (vn-edu.33).
+ */
+private val NavigationBarItemHeight = 80.dp
+
+/**
  * Debug-only stand-in for the "New Session" [NavigationBarItem], visually
  * approximating it (pill indicator behind the icon when selected, same
  * label) while using a single [Modifier.combinedClickable] for both tap and
@@ -115,7 +132,7 @@ private fun RowScope.DebugNewSessionItem(selected: Boolean, onClick: () -> Unit,
     Column(
         modifier = Modifier
             .weight(1f, fill = true)
-            .fillMaxHeight()
+            .height(NavigationBarItemHeight)
             .combinedClickable(onClick = onClick, onLongClick = onLongPress, role = Role.Tab),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,

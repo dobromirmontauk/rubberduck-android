@@ -111,8 +111,11 @@ fun SessionListScreen(onSessionClick: (String) -> Unit) {
     }
 }
 
+// Visibility widened from `private` (not `private` -> business-logic reasons; this is a
+// pure, stateless row with no Context/app dependency) so the vn-edu.33 Sessions-scaffold
+// preview in BottomNavBarPreview.kt can render real-looking rows from fixture data.
 @Composable
-private fun SessionRow(session: SessionSummary, onClick: () -> Unit) {
+internal fun SessionRow(session: SessionSummary, onClick: () -> Unit) {
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
