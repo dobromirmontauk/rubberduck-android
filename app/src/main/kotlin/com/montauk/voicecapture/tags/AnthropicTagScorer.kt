@@ -1,23 +1,15 @@
 package com.montauk.voicecapture.tags
 
 import android.util.Log
+import com.montauk.voicecapture.llm.AnthropicClient
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonArray
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * Default MAJOR-topic [TagScorer]: Anthropic's Messages API (Claude Haiku)
@@ -34,24 +26,26 @@ import okhttp3.RequestBody.Companion.toRequestBody
  * slow request only delays this scorer's next update, nothing else.
  */
 class AnthropicTagScorer(
-    private val apiKey: String,
+    apiKey: String,
     private val fallback: TagScorer = HeuristicTagScorer(),
-    private val httpClient: OkHttpClient = OkHttpClient.Builder()
+    httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .build(),
-    private val endpoint: String = "https://api.anthropic.com/v1/messages",
+    endpoint: String = "https://api.anthropic.com/v1/messages",
     private val model: String = "claude-haiku-4-5-20251001",
 ) : TagScorer {
+
+    private val client = AnthropicClient(apiKey, httpClient, endpoint)
+    private val hasApiKey = apiKey.isNotBlank()
 
     override val minIntervalMs: Long = DEFAULT_MIN_INTERVAL_MS
 
     override suspend fun score(transcriptTail: String, currentCandidates: List<String>): List<TagCandidate> {
-        if (apiKey.isBlank() || transcriptTail.isBlank()) return fallback.score(transcriptTail, currentCandidates)
+        if (!hasApiKey || transcriptTail.isBlank()) return fallback.score(transcriptTail, currentCandidates)
 
-        val result = runCatching { withContext(Dispatchers.IO) { requestAndParse(transcriptTail, currentCandidates) } }
-            .onFailure { e -> Log.w(TAG, "AnthropicTagScorer request threw: ${e.message}") }
-            .getOrNull()
+        val rawText = client.complete(model, maxTokens = 300, systemPrompt = SYSTEM_PROMPT, userContent = buildUserContent(transcriptTail, currentCandidates))
+        val result = rawText?.let { parseCandidates(it) }
 
         if (result == null) {
             Log.w(TAG, "AnthropicTagScorer call failed or returned unparseable JSON; degrading to fallback")
@@ -60,27 +54,9 @@ class AnthropicTagScorer(
         return result
     }
 
-    private fun requestAndParse(transcriptTail: String, currentCandidates: List<String>): List<TagCandidate>? {
-        val requestBody = buildRequestBody(transcriptTail, currentCandidates)
-        val request = Request.Builder()
-            .url(endpoint)
-            .addHeader("x-api-key", apiKey)
-            .addHeader("anthropic-version", ANTHROPIC_VERSION)
-            .post(requestBody.toRequestBody(JSON_MEDIA_TYPE))
-            .build()
-        httpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                Log.w(TAG, "AnthropicTagScorer HTTP ${response.code}")
-                return null
-            }
-            val bodyText = response.body?.string() ?: return null
-            return parseCandidates(bodyText)
-        }
-    }
-
-    private fun buildRequestBody(transcriptTail: String, currentCandidates: List<String>): String {
+    private fun buildUserContent(transcriptTail: String, currentCandidates: List<String>): String {
         val candidatesNote = if (currentCandidates.isEmpty()) "None yet." else currentCandidates.joinToString(", ")
-        val userContent = """
+        return """
             Rolling transcript excerpt (most recent speech, oldest to newest):
             ---
             $transcriptTail
@@ -92,35 +68,20 @@ class AnthropicTagScorer(
             Prefer reusing an already-tracked tag's exact text over minting a
             near-duplicate synonym when it still applies.
         """.trimIndent()
-
-        val payload = buildJsonObject {
-            put("model", model)
-            put("max_tokens", 300)
-            put("system", SYSTEM_PROMPT)
-            putJsonArray("messages") {
-                addJsonObject {
-                    put("role", "user")
-                    put("content", userContent)
-                }
-            }
-        }
-        return payload.toString()
     }
 
     /**
-     * Navigates the response as [kotlinx.serialization.json.JsonElement]
-     * rather than decoding into a strict data-class envelope, so an
-     * unexpected/extra field in Anthropic's response shape can't fail
-     * parsing on its own -- only a missing `content`/`text`/`tags` path, or
+     * [rawText] is already the model's `content[0..].text` -- [AnthropicClient.complete]
+     * extracts that envelope-navigation step out of this class (bead
+     * vn-edu.42); this only has to parse *that* text as the `{"tags": [...]}`
+     * shape. Navigates it as [kotlinx.serialization.json.JsonElement] rather
+     * than decoding into a strict data-class envelope, so an unexpected/extra
+     * field can't fail parsing on its own -- only a missing `tags` path, or
      * genuinely non-JSON model output, does. Returns null (never throws) on
      * any of those; [score] treats null as "degrade to fallback".
      */
-    private fun parseCandidates(responseBody: String): List<TagCandidate>? {
-        val root = runCatching { Json.parseToJsonElement(responseBody).jsonObject }.getOrNull() ?: return null
-        val text = root["content"]?.jsonArray
-            ?.firstNotNullOfOrNull { block -> runCatching { block.jsonObject["text"]?.jsonPrimitive?.content }.getOrNull() }
-            ?: return null
-        val tagsObject = extractJsonObject(text) ?: return null
+    private fun parseCandidates(rawText: String): List<TagCandidate>? {
+        val tagsObject = extractJsonObject(rawText) ?: return null
         val tagsArray = tagsObject["tags"]?.jsonArray ?: return null
 
         val candidates = tagsArray.mapNotNull { element ->
@@ -146,8 +107,6 @@ class AnthropicTagScorer(
 
     private companion object {
         const val TAG = "AnthropicTagScorer"
-        const val ANTHROPIC_VERSION = "2023-06-01"
-        val JSON_MEDIA_TYPE = "application/json".toMediaType()
 
         // Every ~25s per spec: frequent enough that tag chips feel live,
         // infrequent enough that even a 30-60 minute session costs pennies

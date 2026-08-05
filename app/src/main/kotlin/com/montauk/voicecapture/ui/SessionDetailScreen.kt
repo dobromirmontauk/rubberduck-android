@@ -38,6 +38,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.montauk.voicecapture.VoiceCaptureApp
+import com.montauk.voicecapture.session.DerivedTitle
 import com.montauk.voicecapture.session.LiveTranscriptLine
 import com.montauk.voicecapture.session.SessionMeta
 import com.montauk.voicecapture.session.UploadState
@@ -68,18 +69,40 @@ fun SessionDetailScreen(sessionId: String, onBack: () -> Unit) {
     var selectedTab by remember { mutableStateOf(DetailTab.LIVE_TEXT) }
 
     LaunchedEffect(sessionId) {
-        meta = app.sessionStore.readMeta(sessionId)
-        transcriptLines = app.sessionStore.readTranscriptLines(sessionId)
+        val loadedMeta = app.sessionStore.readMeta(sessionId)
+        val loadedLines = app.sessionStore.readTranscriptLines(sessionId)
+        meta = loadedMeta
+        transcriptLines = loadedLines
         uploadState = app.sessionStore.readUploadState(app.sessionStore.sessionDir(sessionId))
+
+        // Derive-on-demand backfill (bead vn-edu.42): an older, already-
+        // transcribed session can still have meta.title == null -- it
+        // finished before this feature existed, or its post-finalize title
+        // call failed/timed out/ran keyless at the time. Opening the detail
+        // view is as good a trigger as any to try once: a no-op if there's
+        // still no key configured (TitleGeneratorFactory.create returns
+        // null) or the transcript is empty, and it never blocks the rest of
+        // this screen from rendering with the derived title in the meantime.
+        if (loadedMeta != null && loadedMeta.title.isNullOrBlank() && loadedLines.isNotEmpty()) {
+            val generated = app.newTitleGenerator()?.generate(loadedLines.map { it.text })
+            if (!generated.isNullOrBlank()) {
+                app.sessionStore.updateTitle(sessionId, generated)
+                meta = loadedMeta.copy(title = generated)
+            }
+        }
     }
 
     val oggFile = remember(sessionId) { app.sessionStore.oggFile(app.sessionStore.sessionDir(sessionId)) }
+    // Bead vn-edu.42: prefer the LLM-generated meta title over the derived
+    // words the moment either one lands, without waiting for a recomposition
+    // trigger beyond meta/transcriptLines themselves changing.
+    val displayTitle = meta?.title?.takeIf { it.isNotBlank() } ?: DerivedTitle.from(transcriptLines.firstOrNull()?.text)
 
     VoiceCaptureTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
                 Spacer(modifier = Modifier.height(12.dp))
-                DetailHeader(sessionId = sessionId, uploadState = uploadState, onBack = onBack)
+                DetailHeader(title = displayTitle, uploadState = uploadState, onBack = onBack)
                 Spacer(modifier = Modifier.height(16.dp))
                 AudioPlaybackRow(oggFile = oggFile)
                 Spacer(modifier = Modifier.height(20.dp))
@@ -116,14 +139,14 @@ fun SessionDetailScreen(sessionId: String, onBack: () -> Unit) {
 }
 
 @Composable
-private fun DetailHeader(sessionId: String, uploadState: UploadState, onBack: () -> Unit) {
+private fun DetailHeader(title: String, uploadState: UploadState, onBack: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         IconButton(onClick = onBack) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onBackground)
         }
         Spacer(modifier = Modifier.width(4.dp))
         Text(
-            text = sessionId,
+            text = title,
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier.weight(1f),

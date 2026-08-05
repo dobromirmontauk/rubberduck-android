@@ -170,11 +170,19 @@ class KeyScreensScreenshotTest {
 
     @Test
     fun sessionDetail() {
+        // Explicit `title` (bead vn-edu.42: the detail header now prefers
+        // meta.title over the raw session id it used to always show) set to
+        // the session id string itself, matching this golden's pre-existing
+        // header text exactly -- keeps session_detail.png's committed pixels
+        // stable across the header's data-source change instead of forcing a
+        // CI re-record (see README's Roborazzi section) for a cosmetic-only
+        // fixture choice.
         SessionFixtures.seedSession(
             app.sessionStore,
             sessionId = "2026-08-01_0900_ab12",
             transcriptText = "Kitchen remodel budget check",
             uploadState = UploadState.UPLOADED,
+            title = "2026-08-01_0900_ab12",
         )
 
         composeTestRule.setContent {

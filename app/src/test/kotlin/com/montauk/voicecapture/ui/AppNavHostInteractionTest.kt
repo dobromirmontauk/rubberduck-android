@@ -1,9 +1,11 @@
 package com.montauk.voicecapture.ui
 
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -102,7 +104,13 @@ class AppNavHostInteractionTest {
         composeTestRule.onNodeWithText("Kitchen remodel budget check").performClick()
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithText("2026-08-01_0900_ab12").assertIsDisplayed()
+        // Bead vn-edu.42: the detail header now shows the (here, derived --
+        // no meta.title set by this fixture) title instead of the raw
+        // session id it used to always show, so it legitimately duplicates
+        // the list row's text -- assert on the detail screen's Back button
+        // instead, which only exists once we've actually navigated there.
+        composeTestRule.onNodeWithContentDescription("Back").assertIsDisplayed()
+        composeTestRule.onAllNodesWithText("Kitchen remodel budget check").assertCountEquals(2)
     }
 
     @Test

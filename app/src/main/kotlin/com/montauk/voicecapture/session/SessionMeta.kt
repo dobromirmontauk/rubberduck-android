@@ -23,6 +23,13 @@ data class SessionModeEntry(
  * app always populates it (at minimum, the initial mode at t_ms=0), but a
  * reader must tolerate its absence for sessions written before the mode
  * switcher existed.
+ *
+ * `title` is likewise contract-optional (bead vn-edu.42): null until the
+ * post-finalize LLM title generation succeeds (or the detail-view backfill
+ * path does), so the vault organizer -- like every other reader of this
+ * class -- must treat null the same as "no title yet", not as a schema
+ * violation. [SessionStore.listSessions] and the detail screen both prefer
+ * this over [DerivedTitle]'s words when it's present and non-blank.
  */
 @Serializable
 data class SessionMeta(
@@ -33,5 +40,6 @@ data class SessionMeta(
     @SerialName("app_version") val appVersion: String,
     @SerialName("stt") val stt: String? = null,
     @SerialName("modes") val modes: List<SessionModeEntry>? = null,
+    @SerialName("title") val title: String? = null,
     @SerialName("schema_version") val schemaVersion: Int = 1,
 )

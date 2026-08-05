@@ -64,4 +64,50 @@ class SessionMetaTest {
         assertEquals(modes, decoded.modes)
         assertTrue(decoded.modes!!.map { it.tMs } == listOf(0L, 15_000L))
     }
+
+    @Test
+    fun `title defaults to null and encodes explicitly (encodeDefaults) like stt`() {
+        val meta = SessionMeta(
+            sessionId = "2026-08-05_1200_abcd",
+            startedAt = "2026-08-05T12:00:00.000Z",
+            durationMs = 5_000L,
+            device = "Pixel 9",
+            appVersion = "0.1.0",
+        )
+
+        val encoded = json.encodeToString(SessionMeta.serializer(), meta)
+        val root = Json.parseToJsonElement(encoded).jsonObject
+
+        assertNull(meta.title)
+        assertTrue("title key must be present even when null", root.containsKey("title"))
+        assertEquals("null", root["title"].toString())
+    }
+
+    @Test
+    fun `title round-trips a generated title`() {
+        val meta = SessionMeta(
+            sessionId = "2026-08-05_1200_abcd",
+            startedAt = "2026-08-05T12:00:00.000Z",
+            durationMs = 5_000L,
+            device = "Pixel 9",
+            appVersion = "0.1.0",
+            title = "Kitchen remodel bids and layout call",
+        )
+
+        val decoded = Json.decodeFromString(SessionMeta.serializer(), Json.encodeToString(SessionMeta.serializer(), meta))
+
+        assertEquals("Kitchen remodel bids and layout call", decoded.title)
+    }
+
+    @Test
+    fun `title is absent-tolerant -- decoding an older meta json without it yields null`() {
+        val legacyJson = """
+            {"session_id":"2026-08-05_1200_abcd","started_at":"2026-08-05T12:00:00.000Z",
+             "duration_ms":5000,"device":"Pixel 9","app_version":"0.1.0","stt":null,"schema_version":1}
+        """.trimIndent()
+
+        val meta = Json.decodeFromString(SessionMeta.serializer(), legacyJson)
+
+        assertNull(meta.title)
+    }
 }

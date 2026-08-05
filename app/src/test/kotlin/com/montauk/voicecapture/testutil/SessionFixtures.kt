@@ -32,6 +32,11 @@ object SessionFixtures {
      * [com.montauk.voicecapture.session.DerivedTitle]) -- keep it at or under
      * 5 words with no leading filler word so the displayed title is exactly
      * [transcriptText] verbatim, not a truncated/filler-stripped version.
+     *
+     * [title], if given, is written to meta.json's `title` field and takes
+     * precedence over the derived title (bead vn-edu.42) -- leave it null
+     * (the default) to exercise the derived-title path, the common case for
+     * these fixtures.
      */
     fun seedSession(
         sessionStore: SessionStore,
@@ -40,6 +45,7 @@ object SessionFixtures {
         durationMs: Long = 125_000L,
         uploadState: UploadState = UploadState.LOCAL,
         startedAt: Date = FIXED_STARTED_AT,
+        title: String? = null,
     ) {
         val dir = sessionStore.sessionDir(sessionId)
         dir.mkdirs()
@@ -50,6 +56,7 @@ object SessionFixtures {
             deviceModel = "Pixel 7",
             appVersion = "0.1.0-test",
             modes = listOf(SessionModeEntry(0L, RecordingMode.DEFAULT.wireValue)),
+            title = title,
         )
         sessionStore.transcriptFile(dir).writeText(
             LiveTranscriptWriter.encodeLine(LiveTranscriptLine(t0Ms = 0L, t1Ms = 2_000L, text = transcriptText, final = true)) + "\n",

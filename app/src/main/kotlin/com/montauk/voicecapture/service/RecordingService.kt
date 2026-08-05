@@ -364,6 +364,9 @@ class RecordingService : LifecycleService() {
             if (finalizeSucceeded && app.isGithubTokenConfigured()) {
                 UploadWorker.enqueue(applicationContext, session.sessionId)
             }
+            if (finalizeSucceeded) {
+                launchTitleGeneration(app, session.sessionId)
+            }
             // A false/timed-out result deliberately leaves audio.wal in place
             // with no meta.json written -- SessionStore.findUnfinalizedSessions()
             // picks it up as an orphaned recording and VoiceCaptureApp retries
@@ -430,6 +433,36 @@ class RecordingService : LifecycleService() {
             )
         }
         return finished == true
+    }
+
+    /**
+     * Fires the post-finalize title generation (bead vn-edu.42) on
+     * [VoiceCaptureApp.applicationScope], deliberately *not* this service's
+     * own `lifecycleScope`: [endRecording] calls [stopSelf] shortly after
+     * this returns, which would cancel a `lifecycleScope` child well before
+     * a slow (up to [com.montauk.voicecapture.session.AnthropicTitleGenerator]'s
+     * 5s timeout) call ever got to finish. Not joined by anything here --
+     * "async" per the bead means this must never delay `stopSelf()`/the
+     * upload enqueue above, so this call returns immediately regardless of
+     * how long the generation task itself takes.
+     *
+     * Race note: [UploadWorker.enqueue] above can win the race and upload
+     * meta.json before this coroutine finishes writing the title back to
+     * it -- the bundle that leaves the device in that case simply has no
+     * title yet. This is accepted, not fixed: no re-upload is triggered
+     * when a title lands after the fact, so a title generated post-upload
+     * stays local-only until some *other* re-upload happens to fire (e.g.
+     * the detail screen's manual Re-upload action).
+     */
+    private fun launchTitleGeneration(app: VoiceCaptureApp, sessionId: String) {
+        val generator = app.newTitleGenerator() ?: return // keyless: no task at all, matching today's behavior
+        app.applicationScope.launch {
+            val lines = app.sessionStore.readTranscriptLines(sessionId).map { it.text }
+            val title = runCatching { generator.generate(lines) }.getOrNull()
+            if (!title.isNullOrBlank()) {
+                app.sessionStore.updateTitle(sessionId, title)
+            }
+        }
     }
 
     private fun createNotificationChannel() {

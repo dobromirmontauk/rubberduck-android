@@ -6,6 +6,8 @@ import android.util.Log
 import com.montauk.voicecapture.audio.AudioEngine
 import com.montauk.voicecapture.auth.isGithubOAuthConfigured
 import com.montauk.voicecapture.session.SessionStore
+import com.montauk.voicecapture.session.TitleGenerator
+import com.montauk.voicecapture.session.TitleGeneratorFactory
 import com.montauk.voicecapture.settings.AppSecretsStore
 import com.montauk.voicecapture.stt.SttClientFactory
 import com.montauk.voicecapture.stt.StreamingSttClient
@@ -15,8 +17,23 @@ import com.montauk.voicecapture.upload.BundleUploader
 import com.montauk.voicecapture.upload.BundleUploaderFactory
 import java.io.File
 import kotlin.concurrent.thread
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 class VoiceCaptureApp : Application() {
+
+    /**
+     * Outlives any single [android.app.Service]/`Activity` -- scoped to the
+     * process, cancelled only on process death. Bead vn-edu.42's post-
+     * finalize title generation needs exactly this: [RecordingService]'s own
+     * `lifecycleScope` is cancelled once the service stops itself right
+     * after finalize, which would kill an async title call before a 5s
+     * timeout ever got to elapse. [SupervisorJob] so one failing child (a
+     * title-generation coroutine that throws despite [TitleGenerator]'s
+     * "never throws" contract) can't cancel unrelated siblings.
+     */
+    val applicationScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     lateinit var sessionStore: SessionStore
         private set
@@ -54,6 +71,16 @@ class VoiceCaptureApp : Application() {
      * when it's blank.
      */
     fun newTagScorer(): TagScorer = TagScorerFactory.create(BuildConfig.ANTHROPIC_API_KEY)
+
+    /**
+     * Null when `anthropic.apiKey` isn't configured (bead vn-edu.42) -- same
+     * keyless-means-skip-the-feature contract as [TitleGeneratorFactory],
+     * one level up. Callers ([com.montauk.voicecapture.service.RecordingService],
+     * [com.montauk.voicecapture.ui.SessionDetailScreen]) treat null as "don't
+     * even attempt title generation," matching today's keyless behavior
+     * exactly.
+     */
+    fun newTitleGenerator(): TitleGenerator? = TitleGeneratorFactory.create(BuildConfig.ANTHROPIC_API_KEY)
 
     fun refreshBundleUploader() {
         bundleUploader = BundleUploaderFactory.create(

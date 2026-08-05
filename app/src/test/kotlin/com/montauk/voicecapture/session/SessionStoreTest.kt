@@ -120,6 +120,79 @@ class SessionStoreTest {
     }
 
     @Test
+    fun `listSessions prefers meta title over the derived transcript title`() {
+        val handle = store.createSession(Date())
+        store.oggFile(handle.dir).writeText("ogg")
+        store.writeMeta(handle, durationMs = 1_000L, deviceModel = "d", appVersion = "v", title = "Kitchen remodel bids and layout call")
+        store.transcriptFile(handle.dir).writeText(
+            LiveTranscriptWriter.encodeLine(LiveTranscriptLine(0L, 2_000L, "we need to talk about the roadmap", final = true)) + "\n",
+        )
+
+        val summary = store.listSessions().first()
+
+        assertEquals("Kitchen remodel bids and layout call", summary.title)
+    }
+
+    @Test
+    fun `listSessions falls back to derived title when meta title is blank`() {
+        val handle = store.createSession(Date())
+        store.oggFile(handle.dir).writeText("ogg")
+        store.writeMeta(handle, durationMs = 1_000L, deviceModel = "d", appVersion = "v", title = "   ")
+        store.transcriptFile(handle.dir).writeText(
+            LiveTranscriptWriter.encodeLine(LiveTranscriptLine(0L, 2_000L, "we need to talk about the roadmap", final = true)) + "\n",
+        )
+
+        val summary = store.listSessions().first()
+
+        assertEquals("we need to talk about", summary.title)
+    }
+
+    @Test
+    fun `listSessions derives a title from the first final line even when a mode event line comes first on disk`() {
+        // Regression coverage: RecordingService writes the initial mode-change
+        // event line to live-transcript.jsonl before any transcript line can
+        // possibly arrive, so the *physical* first line in the file is
+        // usually a mode event, not a transcript line -- listSessions must
+        // still find the first real transcript line for the derived title.
+        val handle = store.createSession(Date())
+        store.oggFile(handle.dir).writeText("ogg")
+        store.writeMeta(handle, durationMs = 1_000L, deviceModel = "d", appVersion = "v")
+        store.transcriptFile(handle.dir).writeText(
+            ModeEventWriter.encodeLine(ModeChange(0L, RecordingMode.LISTEN)) + "\n" +
+                LiveTranscriptWriter.encodeLine(LiveTranscriptLine(0L, 2_000L, "we need to talk about the roadmap", final = true)) + "\n",
+        )
+
+        val summary = store.listSessions().first()
+
+        assertEquals("we need to talk about", summary.title)
+    }
+
+    @Test
+    fun `updateTitle patches only the title field, leaving everything else untouched`() {
+        val handle = store.createSession(Date())
+        store.oggFile(handle.dir).writeText("ogg")
+        val modes = listOf(SessionModeEntry(0L, "listen"))
+        store.writeMeta(handle, durationMs = 12_345L, deviceModel = "Pixel 9", appVersion = "0.1.0", modes = modes)
+
+        store.updateTitle(handle.sessionId, "Kitchen remodel bids and layout call")
+
+        val meta = store.readMeta(handle.sessionId)
+        assertEquals("Kitchen remodel bids and layout call", meta?.title)
+        assertEquals(handle.sessionId, meta?.sessionId)
+        assertEquals(12_345L, meta?.durationMs)
+        assertEquals("Pixel 9", meta?.device)
+        assertEquals(modes, meta?.modes)
+    }
+
+    @Test
+    fun `updateTitle is a no-op when meta json doesn't exist`() {
+        // Should not throw for a session that was never finalized.
+        store.updateTitle("2026-01-01_0000_zzzz", "some title")
+
+        assertNull(store.readMeta("2026-01-01_0000_zzzz"))
+    }
+
+    @Test
     fun `localSessionIds returns only sessions still marked LOCAL`() {
         val local = store.createSession(Date(1_000))
         store.oggFile(local.dir).writeText("ogg")

@@ -85,6 +85,7 @@ class SessionStore(private val baseDir: File) {
         deviceModel: String,
         appVersion: String,
         modes: List<SessionModeEntry> = listOf(SessionModeEntry(0L, RecordingMode.DEFAULT.wireValue)),
+        title: String? = null,
     ) {
         val meta = SessionMeta(
             sessionId = handle.sessionId,
@@ -94,6 +95,7 @@ class SessionStore(private val baseDir: File) {
             appVersion = appVersion,
             stt = null,
             modes = modes,
+            title = title,
             schemaVersion = 1,
         )
         metaFile(handle.dir).writeText(json.encodeToString(meta))
@@ -104,6 +106,22 @@ class SessionStore(private val baseDir: File) {
         if (!uploadStateFile(handle.dir).exists()) {
             setUploadState(handle.dir, UploadState.LOCAL)
         }
+    }
+
+    /**
+     * Patches meta.json's `title` field for [sessionId] without touching any
+     * other field -- lands the LLM-generated title (bead vn-edu.42) well
+     * after [writeMeta]'s own initial write, from either
+     * [com.montauk.voicecapture.service.RecordingService]'s post-finalize
+     * async task or the detail-view backfill path. No-op if meta.json
+     * doesn't exist or fails to parse (session vanished, or predates a
+     * schema this build can read -- never worth crashing over).
+     */
+    fun updateTitle(sessionId: String, title: String) {
+        val file = metaFile(sessionDir(sessionId))
+        if (!file.exists()) return
+        val meta = runCatching { json.decodeFromString(SessionMeta.serializer(), file.readText()) }.getOrNull() ?: return
+        file.writeText(json.encodeToString(meta.copy(title = title)))
     }
 
     fun setUploadState(dir: File, state: UploadState) {
@@ -151,7 +169,7 @@ class SessionStore(private val baseDir: File) {
                 runCatching {
                     val meta = json.decodeFromString(SessionMeta.serializer(), metaFile(dir).readText())
                     val startedAtDate = parseIsoTimestamp(meta.startedAt) ?: Date(dir.lastModified())
-                    val title = DerivedTitle.from(firstFinalLineText(dir))
+                    val title = resolveTitle(meta)
                     // meta.startedAt (the raw ISO string, not sessionId) drives
                     // ordering: the session-id's minute-resolution timestamp +
                     // random suffix don't sort correctly when two sessions
@@ -162,6 +180,16 @@ class SessionStore(private val baseDir: File) {
             .sortedByDescending { (startedAt, _) -> startedAt }
             .map { (_, summary) -> summary }
     }
+
+    /**
+     * Title-preference chain shared by the session list and (via
+     * [readMeta] + [readTranscriptLines]) the detail screen's header (bead
+     * vn-edu.42): the LLM-generated `meta.title` when present and non-blank,
+     * else [DerivedTitle]'s words from the first final transcript line,
+     * else [DerivedTitle.UNTITLED].
+     */
+    private fun resolveTitle(meta: SessionMeta): String =
+        meta.title?.takeIf { it.isNotBlank() } ?: DerivedTitle.from(readTranscriptLines(meta.sessionId).firstOrNull()?.text)
 
     /**
      * Ids of every session currently marked LOCAL -- finalized while signed
@@ -187,12 +215,5 @@ class SessionStore(private val baseDir: File) {
         return file.readLines()
             .filter { it.isNotBlank() }
             .mapNotNull { line -> runCatching { json.decodeFromString(LiveTranscriptLine.serializer(), line) }.getOrNull() }
-    }
-
-    private fun firstFinalLineText(dir: File): String? {
-        val file = transcriptFile(dir)
-        if (!file.exists()) return null
-        val firstLine = file.bufferedReader().useLines { lines -> lines.firstOrNull { it.isNotBlank() } } ?: return null
-        return runCatching { json.decodeFromString(LiveTranscriptLine.serializer(), firstLine).text }.getOrNull()
     }
 }
