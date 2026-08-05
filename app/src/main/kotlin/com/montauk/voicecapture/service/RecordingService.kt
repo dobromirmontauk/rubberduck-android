@@ -14,6 +14,7 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.audio.AudioEngine
+import com.montauk.voicecapture.audio.MicLevelMeter
 import com.montauk.voicecapture.session.LiveTranscriptLine
 import com.montauk.voicecapture.session.LiveTranscriptWriter
 import com.montauk.voicecapture.session.SessionHandle
@@ -66,6 +67,9 @@ class RecordingService : LifecycleService() {
     private var sttClient: StreamingSttClient? = null
     private var sttJobs: List<Job> = emptyList()
 
+    /** Decides the "(silence)" hint independent of STT connection state -- see class KDoc there. */
+    private val silenceDetector = SilenceDetector()
+
     override fun onCreate() {
         super.onCreate()
         audioEngine = AudioEngine()
@@ -89,18 +93,31 @@ class RecordingService : LifecycleService() {
         currentSession = session
 
         TranscriptStateHolder.reset()
+        silenceDetector.reset()
+        // Set before audioEngine.start() so the very first mic-level window
+        // has a correct (near-zero) baseline instead of measuring against the
+        // stale value from whatever this field last held.
+        startElapsedRealtimeMs = SystemClock.elapsedRealtime()
+
         val stt = app.newSttClient()
         sttClient = stt
-        // Tee raw PCM to STT alongside (never instead of) the WAL write below --
-        // sendPcm is non-blocking and drops frames under backpressure, so a slow
-        // or dead STT connection can never stall or lose audio capture.
-        audioEngine.onPcmFrame = { pcm, length -> stt.sendPcm(pcm, 0, length) }
+        val micLevelMeter = MicLevelMeter(sampleRateHz = AudioEngine.DEFAULT_SAMPLE_RATE_HZ) { level ->
+            val now = SystemClock.elapsedRealtime()
+            val silent = silenceDetector.isSilent(nowMs = now, recordingStartMs = startElapsedRealtimeMs, currentRms = level)
+            TranscriptStateHolder.update { it.copy(micLevel = level, silenceHintVisible = silent) }
+        }
+        // Tee raw PCM to STT and the mic-level meter alongside (never instead
+        // of) the WAL write below -- both are cheap/non-blocking, so a slow or
+        // dead STT connection can never stall or lose audio capture.
+        audioEngine.onPcmFrame = { pcm, length ->
+            stt.sendPcm(pcm, 0, length)
+            micLevelMeter.onPcmFrame(pcm, length)
+        }
 
         val walFile = app.sessionStore.walFile(session.dir)
         audioEngine.start(walFile)
         startSttPipeline(stt, session)
 
-        startElapsedRealtimeMs = SystemClock.elapsedRealtime()
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = session.sessionId, elapsedMs = 0L) }
 
         startForeground(NOTIFICATION_ID, buildNotification(elapsedMs = 0L))
@@ -117,14 +134,21 @@ class RecordingService : LifecycleService() {
         }
         val partialsJob = lifecycleScope.launch {
             stt.partials().collect { partial ->
+                // Any non-blank partial or final counts as activity -- clears the
+                // "(silence)" hint instantly rather than waiting for the next
+                // mic-level window (~100ms later) to re-evaluate it.
+                if (partial.text.isNotBlank()) {
+                    silenceDetector.onTranscriptActivity(SystemClock.elapsedRealtime())
+                }
                 TranscriptStateHolder.update { ui ->
+                    val cleared = if (partial.text.isNotBlank()) ui.copy(silenceHintVisible = false) else ui
                     if (partial.isFinal) {
-                        ui.copy(
-                            finalLines = ui.finalLines + TranscriptLine(partial.text, partial.startMs, partial.endMs),
+                        cleared.copy(
+                            finalLines = cleared.finalLines + TranscriptLine(partial.text, partial.startMs, partial.endMs),
                             currentPartial = "",
                         )
                     } else {
-                        ui.copy(currentPartial = partial.text)
+                        cleared.copy(currentPartial = partial.text)
                     }
                 }
                 // Ingest contract: live-transcript.jsonl carries only immutable

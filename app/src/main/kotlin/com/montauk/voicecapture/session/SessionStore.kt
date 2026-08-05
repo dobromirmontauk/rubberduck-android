@@ -14,6 +14,8 @@ data class SessionHandle(val sessionId: String, val dir: File, val startedAt: Da
 
 data class SessionSummary(
     val sessionId: String,
+    val title: String,
+    val startedAt: Date,
     val durationMs: Long,
     val uploadState: UploadState,
 )
@@ -48,6 +50,7 @@ class SessionStore(private val baseDir: File) {
         private val json = Json { prettyPrint = true; encodeDefaults = true }
 
         fun isoTimestamp(date: Date): String = ISO_FORMAT.format(date)
+        fun parseIsoTimestamp(iso: String): Date? = runCatching { ISO_FORMAT.parse(iso) }.getOrNull()
     }
 
     init {
@@ -145,13 +148,39 @@ class SessionStore(private val baseDir: File) {
             .mapNotNull { dir ->
                 runCatching {
                     val meta = json.decodeFromString(SessionMeta.serializer(), metaFile(dir).readText())
-                    // startedAt (not sessionId) drives ordering: the session-id's
-                    // minute-resolution timestamp + random suffix don't sort
-                    // correctly when two sessions start in the same minute.
-                    meta.startedAt to SessionSummary(meta.sessionId, meta.durationMs, readUploadState(dir))
+                    val startedAtDate = parseIsoTimestamp(meta.startedAt) ?: Date(dir.lastModified())
+                    val title = DerivedTitle.from(firstFinalLineText(dir))
+                    // meta.startedAt (the raw ISO string, not sessionId) drives
+                    // ordering: the session-id's minute-resolution timestamp +
+                    // random suffix don't sort correctly when two sessions
+                    // start in the same minute, but ISO-8601 UTC strings do.
+                    meta.startedAt to SessionSummary(meta.sessionId, title, startedAtDate, meta.durationMs, readUploadState(dir))
                 }.getOrNull()
             }
             .sortedByDescending { (startedAt, _) -> startedAt }
             .map { (_, summary) -> summary }
+    }
+
+    /** Reads meta.json for [sessionId], or null if the session or its meta.json doesn't exist. */
+    fun readMeta(sessionId: String): SessionMeta? {
+        val file = metaFile(sessionDir(sessionId))
+        if (!file.exists()) return null
+        return runCatching { json.decodeFromString(SessionMeta.serializer(), file.readText()) }.getOrNull()
+    }
+
+    /** Reads and parses every line of live-transcript.jsonl for [sessionId], skipping any that fail to parse. */
+    fun readTranscriptLines(sessionId: String): List<LiveTranscriptLine> {
+        val file = transcriptFile(sessionDir(sessionId))
+        if (!file.exists()) return emptyList()
+        return file.readLines()
+            .filter { it.isNotBlank() }
+            .mapNotNull { line -> runCatching { json.decodeFromString(LiveTranscriptLine.serializer(), line) }.getOrNull() }
+    }
+
+    private fun firstFinalLineText(dir: File): String? {
+        val file = transcriptFile(dir)
+        if (!file.exists()) return null
+        val firstLine = file.bufferedReader().useLines { lines -> lines.firstOrNull { it.isNotBlank() } } ?: return null
+        return runCatching { json.decodeFromString(LiveTranscriptLine.serializer(), firstLine).text }.getOrNull()
     }
 }

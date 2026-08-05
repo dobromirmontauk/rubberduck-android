@@ -93,4 +93,67 @@ class SessionStoreTest {
 
         assertEquals(listOf(newer.sessionId, older.sessionId), sessions.map { it.sessionId })
     }
+
+    @Test
+    fun `listSessions derives a title from the first final transcript line`() {
+        val handle = store.createSession(Date())
+        store.oggFile(handle.dir).writeText("ogg")
+        store.writeMeta(handle, durationMs = 1_000L, deviceModel = "d", appVersion = "v")
+        store.transcriptFile(handle.dir).writeText(
+            LiveTranscriptWriter.encodeLine(LiveTranscriptLine(0L, 2_000L, "we need to talk about the roadmap", final = true)) + "\n",
+        )
+
+        val summary = store.listSessions().first()
+
+        assertEquals("we need to talk about", summary.title)
+    }
+
+    @Test
+    fun `listSessions falls back to untitled with no transcript`() {
+        val handle = store.createSession(Date())
+        store.oggFile(handle.dir).writeText("ogg")
+        store.writeMeta(handle, durationMs = 1_000L, deviceModel = "d", appVersion = "v")
+
+        val summary = store.listSessions().first()
+
+        assertEquals(DerivedTitle.UNTITLED, summary.title)
+    }
+
+    @Test
+    fun `readMeta returns null for an unknown session`() {
+        assertNull(store.readMeta("2026-01-01_0000_zzzz"))
+    }
+
+    @Test
+    fun `readMeta round-trips a written session`() {
+        val handle = store.createSession(Date())
+        store.oggFile(handle.dir).writeText("ogg")
+        store.writeMeta(handle, durationMs = 5_000L, deviceModel = "d", appVersion = "v")
+
+        val meta = store.readMeta(handle.sessionId)
+
+        assertEquals(handle.sessionId, meta?.sessionId)
+        assertEquals(5_000L, meta?.durationMs)
+    }
+
+    @Test
+    fun `readTranscriptLines parses every final line and skips blanks`() {
+        val handle = store.createSession(Date())
+        val line1 = LiveTranscriptLine(0L, 1_000L, "first line", final = true)
+        val line2 = LiveTranscriptLine(1_000L, 2_500L, "second line", final = true)
+        store.transcriptFile(handle.dir).writeText(
+            LiveTranscriptWriter.encodeLine(line1) + "\n\n" + LiveTranscriptWriter.encodeLine(line2) + "\n",
+        )
+
+        val lines = store.readTranscriptLines(handle.sessionId)
+
+        assertEquals(listOf(line1, line2), lines)
+    }
+
+    @Test
+    fun `readTranscriptLines returns empty list when no transcript file exists`() {
+        val handle = store.createSession(Date())
+
+        assertEquals(emptyList<LiveTranscriptLine>(), store.readTranscriptLines(handle.sessionId))
+    }
 }

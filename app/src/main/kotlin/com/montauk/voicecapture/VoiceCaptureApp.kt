@@ -5,6 +5,7 @@ import android.os.Build
 import android.util.Log
 import com.montauk.voicecapture.audio.AudioEngine
 import com.montauk.voicecapture.session.SessionStore
+import com.montauk.voicecapture.settings.AppSecretsStore
 import com.montauk.voicecapture.stt.SttClientFactory
 import com.montauk.voicecapture.stt.StreamingSttClient
 import com.montauk.voicecapture.upload.BundleUploader
@@ -17,23 +18,42 @@ class VoiceCaptureApp : Application() {
     lateinit var sessionStore: SessionStore
         private set
 
-    /** Shared across sessions; safe to reuse since it's stateless beyond its OkHttp connection pool. */
-    lateinit var bundleUploader: BundleUploader
+    lateinit var secretsStore: AppSecretsStore
+        private set
+
+    /**
+     * Shared across sessions; safe to reuse since it's stateless beyond its
+     * OkHttp connection pool. [refreshBundleUploader] rebuilds it whenever
+     * [secretsStore]'s sign-in state changes (log out / restore from build
+     * config) so an in-flight [com.montauk.voicecapture.upload.UploadWorker]
+     * run picks up the new effective token on its next enqueue.
+     */
+    var bundleUploader: BundleUploader = BundleUploaderFactory.create(token = "", owner = "", repo = "")
         private set
 
     override fun onCreate() {
         super.onCreate()
         sessionStore = SessionStore(File(filesDir, "sessions"))
-        bundleUploader = BundleUploaderFactory.create(
-            token = BuildConfig.GITHUB_TOKEN,
-            owner = BuildConfig.VAULT_OWNER,
-            repo = BuildConfig.VAULT_REPO,
-        )
+        secretsStore = AppSecretsStore(this)
+        refreshBundleUploader()
         recoverUnfinalizedSessions()
     }
 
     /** A fresh [StreamingSttClient] per recording session -- it owns one WebSocket connection's lifecycle. */
-    fun newSttClient(): StreamingSttClient = SttClientFactory.create(BuildConfig.ASSEMBLYAI_API_KEY)
+    fun newSttClient(): StreamingSttClient =
+        SttClientFactory.create(secretsStore.effectiveAssemblyKey(BuildConfig.ASSEMBLYAI_API_KEY))
+
+    fun refreshBundleUploader() {
+        bundleUploader = BundleUploaderFactory.create(
+            token = secretsStore.effectiveGithubToken(BuildConfig.GITHUB_TOKEN),
+            owner = BuildConfig.VAULT_OWNER,
+            repo = BuildConfig.VAULT_REPO,
+        )
+    }
+
+    /** Booleans only for the settings screen -- never surface the actual key/token values. */
+    fun isAssemblyKeyConfigured(): Boolean = secretsStore.effectiveAssemblyKey(BuildConfig.ASSEMBLYAI_API_KEY).isNotBlank()
+    fun isGithubTokenConfigured(): Boolean = secretsStore.effectiveGithubToken(BuildConfig.GITHUB_TOKEN).isNotBlank()
 
     fun appVersionName(): String =
         runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "unknown"

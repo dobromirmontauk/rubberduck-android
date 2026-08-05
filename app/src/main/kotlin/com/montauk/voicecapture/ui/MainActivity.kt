@@ -8,7 +8,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingService
+import com.montauk.voicecapture.service.RecordingStateHolder
 
 class MainActivity : ComponentActivity() {
 
@@ -22,9 +24,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val app = application as VoiceCaptureApp
+        val startDestination = when {
+            app.secretsStore.isSignedOut -> Routes.SIGNIN
+            RecordingStateHolder.state.value.isRecording -> Routes.RECORDING
+            else -> Routes.SESSIONS
+        }
         setContent {
-            VoiceCaptureScreen(
-                onStartRecording = ::onRecordTapped,
+            AppNavHost(
+                startDestination = startDestination,
+                onNewSessionTapped = ::onRecordTapped,
                 onStopRecording = ::stopRecordingService,
             )
         }
@@ -49,9 +58,10 @@ class MainActivity : ComponentActivity() {
         }
 
     private fun startRecordingService() {
-        // Called only from this direct user tap, satisfying the Android 14+
-        // rule that a microphone foreground service can't be started from
-        // the background.
+        // Called only from this direct user tap (or the bottom nav's "New
+        // Session" action-tab tap that triggers it), satisfying the Android
+        // 14+ rule that a microphone foreground service can't be started
+        // from the background.
         ContextCompat.startForegroundService(this, RecordingService.startIntent(this))
     }
 
