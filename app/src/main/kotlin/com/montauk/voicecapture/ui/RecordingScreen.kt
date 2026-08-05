@@ -52,6 +52,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
@@ -314,10 +315,19 @@ private fun transcriptRows(transcript: TranscriptUiState): List<TranscriptRow> {
     return rows
 }
 
-/** True when the last row in the list is fully scrolled into view -- i.e. nothing newer is hidden below the fold. */
+/**
+ * True when the newest row is scrolled fully into view -- i.e. nothing newer
+ * is hidden below the fold. [rows] is laid out newest-first with
+ * `reverseLayout = true` (bead vn-edu.43), so "newest" is index 0 and
+ * "scrolled to newest" means the list hasn't scrolled away from that
+ * reversed layout's start edge at all, matching [reverseLayout]'s definition
+ * of `offset == 0` at index 0 -- see [LiveTranscriptPane]'s KDoc for why a
+ * single overlong row makes the old non-reversed "is the last item's bottom
+ * within the viewport" check insufficient on its own.
+ */
 private fun LazyListLayoutInfo.isScrolledToNewest(): Boolean {
-    val last = visibleItemsInfo.lastOrNull() ?: return true
-    return last.index == totalItemsCount - 1 && last.offset + last.size <= viewportEndOffset
+    val first = visibleItemsInfo.firstOrNull() ?: return true
+    return first.index == 0 && first.offset <= 0
 }
 
 /**
@@ -326,6 +336,26 @@ private fun LazyListLayoutInfo.isScrolledToNewest(): Boolean {
  * instead of the plain [Column] this used to be, so fast FILE-injected
  * playback can no longer grow the pane past its slot and starve the chips
  * row below it out of the layout.
+ *
+ * **Pinning the newest row's BOTTOM, not its TOP (bead vn-edu.43).** A turn
+ * that stays open for 45-60s of continuous speech (no `end_of_turn`) renders
+ * as a single PARTIAL row that can itself be taller than the pane -- the old
+ * `reverseLayout = false` list scrolled that row's TOP edge to the viewport's
+ * top (`animateScrollToItem(lastIndex)`'s default `scrollOffset = 0`), which
+ * for a row shorter than the viewport pins it at the bottom (fine) but for a
+ * row taller than the viewport instead clips its BOTTOM -- exactly the newest,
+ * just-spoken words -- below the fold, permanently, until the turn finally
+ * closes. Screen reads as frozen mid-sentence.
+ *
+ * `reverseLayout = true` with [rows] passed newest-first flips which edge is
+ * the anchor: index 0 (now the newest row) is pinned to the list's start
+ * edge, which `reverseLayout` places at the visual BOTTOM of the pane. A row
+ * taller than the viewport still only shows a viewport's worth of itself, but
+ * now that's measured from its own BOTTOM edge (the newest words, since
+ * [Text] lays a paragraph out top-to-bottom) rather than its top -- the
+ * oldest words of that one over-tall row scroll off above the fold instead.
+ * `animateScrollToItem(0)` is therefore "scroll to newest" under this layout,
+ * replacing the old `rows.lastIndex`.
  *
  * Auto-follow/snap-back is delegated to the pure [TranscriptFollowState]:
  * the pane scrolls to the newest row whenever that class says to, and only
@@ -341,6 +371,7 @@ private fun LiveTranscriptPane(transcript: TranscriptUiState, modifier: Modifier
     val rows = remember(transcript.finalLines, transcript.currentPartial, transcript.silenceHintVisible) {
         transcriptRows(transcript)
     }
+    val newestFirstRows = remember(rows) { rows.asReversed() }
     val listState = rememberLazyListState()
     val followState = remember { TranscriptFollowState() }
     val isDragged by listState.interactionSource.collectIsDraggedAsState()
@@ -359,18 +390,22 @@ private fun LiveTranscriptPane(transcript: TranscriptUiState, modifier: Modifier
 
     LaunchedEffect(rows) {
         if (rows.isNotEmpty() && followState.onNewContent(System.currentTimeMillis())) {
-            listState.animateScrollToItem(rows.lastIndex)
+            listState.animateScrollToItem(0)
         }
     }
 
     LazyColumn(
         state = listState,
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.Bottom),
+        modifier = modifier.fillMaxWidth().testTag(LIVE_TRANSCRIPT_PANE_TEST_TAG),
+        reverseLayout = true,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        items(rows) { row -> TranscriptRowText(row) }
+        items(newestFirstRows) { row -> TranscriptRowText(row) }
     }
 }
+
+/** Exposed for [com.montauk.voicecapture.ui.LiveTranscriptPaneOverlongPartialTest]'s geometric pinning assertions. */
+internal const val LIVE_TRANSCRIPT_PANE_TEST_TAG = "live-transcript-pane"
 
 @Composable
 private fun TranscriptRowText(row: TranscriptRow) {
@@ -612,6 +647,46 @@ private fun syntheticOverlongTranscript(): TranscriptUiState {
 private fun LiveTranscriptPaneOverlongPreview() {
     VoiceCaptureTheme {
         val transcript = remember { syntheticOverlongTranscript() }
+        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+            Spacer(modifier = Modifier.height(16.dp))
+            ModeSwitcher(currentMode = RecordingMode.LISTEN, onSelect = {})
+            Spacer(modifier = Modifier.height(16.dp))
+            LiveTranscriptPane(transcript = transcript, modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(16.dp))
+            TagChipsRow(tags = syntheticTags())
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
+/**
+ * Synthetic single-partial transcript for [LiveTranscriptPaneGiantPartialPreview]:
+ * no finalized lines at all, just one very long continuously-growing PARTIAL
+ * (bead vn-edu.43's exact repro -- a turn that stays open for 45-60s of
+ * continuous speech never gets to hand any of it off to [TranscriptRow.Final],
+ * so the *entire* transcript so far is this one row).
+ */
+private fun syntheticGiantPartialTranscript(): TranscriptUiState = TranscriptUiState(
+    connectionState = SttConnectionState.CONNECTED,
+    currentPartial = (1..80).joinToString(" ") { i ->
+        "spoken-word-$i"
+    } + " ...and this is the newest word just spoken, which must stay visible",
+    sourceLabel = "FILE",
+)
+
+/**
+ * Preview-only: the exact shape of bead vn-edu.43's bug report -- a single
+ * PARTIAL row, on its own, taller than the pane's bounded viewport (no
+ * finalized lines to share the space with, unlike [LiveTranscriptPaneOverlongPreview]'s
+ * many-final-lines scenario). Confirms the newest words (end of the
+ * `currentPartial` string) render at the bottom of the pane, not clipped
+ * off below it.
+ */
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 640)
+@Composable
+private fun LiveTranscriptPaneGiantPartialPreview() {
+    VoiceCaptureTheme {
+        val transcript = remember { syntheticGiantPartialTranscript() }
         Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
             Spacer(modifier = Modifier.height(16.dp))
             ModeSwitcher(currentMode = RecordingMode.LISTEN, onSelect = {})

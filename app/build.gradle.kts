@@ -152,16 +152,19 @@ tasks.withType<Test>().configureEach {
     if (name != "integrationTest") {
         exclude("**/stt/integration/**")
     }
-    // Compose interaction tests (vn-edu.35, AppNavHostInteractionTest) and
-    // Roborazzi screenshot tests (vn-edu.34, `**/screenshot/**`) both need
+    // Compose interaction tests (vn-edu.35, AppNavHostInteractionTest; vn-edu.43,
+    // LiveTranscriptPaneOverlongPartialTest) and Roborazzi screenshot tests
+    // (vn-edu.34, `**/screenshot/**`) both need
     // androidx.compose.ui:ui-test-manifest's merged-in host Activity to launch
     // createComposeRule()'s content -- that library is debugImplementation-only
     // on purpose (shipping a test-only Activity declaration in the *release*
     // manifest would be worse than just not re-running these suites under the
     // release unit-test variant). The same AppNavHost/screens they exercise are
-    // already fully covered under the debug variant.
+    // already fully covered under the debug variant. Any new test class that
+    // calls createComposeRule() needs adding here too.
     if (name == "testReleaseUnitTest") {
         exclude("**/AppNavHostInteractionTest.class")
+        exclude("**/LiveTranscriptPaneOverlongPartialTest.class")
         exclude("**/screenshot/**")
     }
     if (!roborazziTaskRequested) {
