@@ -46,10 +46,11 @@ android {
         // in local.properties (register a free OAuth App at
         // https://github.com/settings/developers, device flow enabled, no
         // callback URL needed) to make "Sign in with GitHub" actually complete.
-        // Until then the button still runs the real device-flow HTTP calls
-        // against this placeholder id, which GitHub predictably rejects --
-        // the login screen surfaces that as a normal error state, and "Use an
-        // access token" keeps working regardless.
+        // Until then, VoiceCaptureApp.isGithubOAuthConfigured() (bead vn-edu.28)
+        // detects this placeholder and keeps the login screen from ever running
+        // the device flow against it -- "Sign in with GitHub" is demoted to a
+        // disabled "soon" button and "Use an access token" (which keeps working
+        // regardless) is promoted to primary.
         buildConfigField(
             "String",
             "GITHUB_OAUTH_CLIENT_ID",

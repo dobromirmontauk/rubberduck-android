@@ -46,6 +46,7 @@ import com.montauk.voicecapture.auth.GitHubAccountClient
 import com.montauk.voicecapture.auth.GitHubAccountError
 import com.montauk.voicecapture.auth.GitHubDeviceFlowClient
 import com.montauk.voicecapture.auth.GitHubIdentity
+import com.montauk.voicecapture.auth.deviceFlowUserMessage
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 import kotlinx.coroutines.launch
 
@@ -96,10 +97,9 @@ fun LoginScreen(onSignedIn: () -> Unit) {
                         val identity = GitHubAccountClient().validateToken(phase.accessToken).getOrNull()
                         completeSignIn(phase.accessToken, identity)
                     }
-                    DeviceFlowPhase.Expired -> uiState = LoginUiState.DeviceError("Code expired")
-                    DeviceFlowPhase.Denied -> uiState = LoginUiState.DeviceError("Sign-in declined")
-                    is DeviceFlowPhase.Error -> uiState = LoginUiState.DeviceError(phase.message)
                     DeviceFlowPhase.Idle -> Unit
+                    DeviceFlowPhase.Expired, DeviceFlowPhase.Denied, is DeviceFlowPhase.Error ->
+                        uiState = LoginUiState.DeviceError(deviceFlowUserMessage(phase))
                 }
             }
         }
@@ -132,6 +132,7 @@ fun LoginScreen(onSignedIn: () -> Unit) {
                 Spacer(modifier = Modifier.height(40.dp))
                 when (val state = uiState) {
                     LoginUiState.Initial -> InitialButtons(
+                        githubOAuthConfigured = app.isGithubOAuthConfigured(),
                         onGithubTapped = ::startDeviceFlow,
                         onTokenTapped = { uiState = LoginUiState.TokenEntry },
                     )
@@ -185,15 +186,36 @@ private fun AppMark() {
     }
 }
 
+/**
+ * When no GitHub OAuth App is registered ([VoiceCaptureApp.isGithubOAuthConfigured]
+ * false), the device-flow request always 404s before a user code ever shows
+ * up -- there's no working button to offer. Promote "Use an access token"
+ * (the path that does work) to primary and demote GitHub sign-in to a
+ * disabled, self-explanatory "soon" button instead of leading with a dead end.
+ */
 @Composable
-private fun InitialButtons(onGithubTapped: () -> Unit, onTokenTapped: () -> Unit) {
+private fun InitialButtons(
+    githubOAuthConfigured: Boolean,
+    onGithubTapped: () -> Unit,
+    onTokenTapped: () -> Unit,
+) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Button(onClick = onGithubTapped, modifier = Modifier.fillMaxWidth()) {
-            Text("Sign in with GitHub")
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-        OutlinedButton(onClick = onTokenTapped, modifier = Modifier.fillMaxWidth()) {
-            Text("Use an access token")
+        if (githubOAuthConfigured) {
+            Button(onClick = onGithubTapped, modifier = Modifier.fillMaxWidth()) {
+                Text("Sign in with GitHub")
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedButton(onClick = onTokenTapped, modifier = Modifier.fillMaxWidth()) {
+                Text("Use an access token")
+            }
+        } else {
+            Button(onClick = onTokenTapped, modifier = Modifier.fillMaxWidth()) {
+                Text("Use an access token")
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
+                Text("Sign in with GitHub (soon)")
+            }
         }
     }
 }

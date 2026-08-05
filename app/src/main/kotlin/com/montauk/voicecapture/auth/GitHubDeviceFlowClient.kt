@@ -29,6 +29,23 @@ sealed class DeviceFlowPhase {
 }
 
 /**
+ * Human phrasing for a terminal (non-retryable-without-action) [DeviceFlowPhase]
+ * -- [Idle], [AwaitingUser], and [DeviceFlowPhase.Success] aren't handled here
+ * since the login screen never turns those into an error state. Bead
+ * vn-edu.28: [DeviceFlowPhase.Error.message] can be a raw `"HTTP 404"` (the
+ * placeholder client id) or an OkHttp exception's message -- neither is
+ * something to show a user verbatim, so [DeviceFlowPhase.Error] always maps
+ * to the same actionable sentence regardless of its payload.
+ */
+fun deviceFlowUserMessage(phase: DeviceFlowPhase): String = when (phase) {
+    DeviceFlowPhase.Expired -> "Code expired"
+    DeviceFlowPhase.Denied -> "Sign-in declined"
+    is DeviceFlowPhase.Error -> "Couldn't reach GitHub — check your connection and try again"
+    DeviceFlowPhase.Idle, is DeviceFlowPhase.AwaitingUser, is DeviceFlowPhase.Success ->
+        error("$phase is not a terminal error phase")
+}
+
+/**
  * Pure state machine driving the device-flow poll loop: given the previous
  * poll's outcome, decides the next [DeviceFlowPhase] and (for `slow_down`)
  * grows the poll interval per the OAuth device-flow spec, which requires
@@ -67,10 +84,12 @@ class DeviceFlowPollStateMachine(initialIntervalSeconds: Int) {
  * [clientId] is compiled in from `BuildConfig.GITHUB_OAUTH_CLIENT_ID`, which
  * defaults to a placeholder when `github.oauthClientId` isn't set in
  * `local.properties` -- see the comment at that buildConfigField in
- * `app/build.gradle.kts`. Every call here is a real HTTP request regardless
- * of whether a real client id is configured; GitHub simply rejects the
- * placeholder with a normal device-flow error, which [runDeviceFlow] surfaces
- * like any other failure.
+ * `app/build.gradle.kts`. This class always issues real HTTP requests and
+ * makes no attempt to detect the placeholder itself; that check
+ * ([com.montauk.voicecapture.VoiceCaptureApp.isGithubOAuthConfigured]) lives
+ * one layer up, in [com.montauk.voicecapture.ui.LoginScreen], which keeps the
+ * "Sign in with GitHub" button from ever driving this flow against a client
+ * id GitHub is guaranteed to 404 on (bead vn-edu.28).
  */
 class GitHubDeviceFlowClient(
     private val clientId: String,

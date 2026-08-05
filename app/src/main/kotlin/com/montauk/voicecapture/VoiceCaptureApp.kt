@@ -4,6 +4,7 @@ import android.app.Application
 import android.os.Build
 import android.util.Log
 import com.montauk.voicecapture.audio.AudioEngine
+import com.montauk.voicecapture.auth.isGithubOAuthConfigured
 import com.montauk.voicecapture.session.SessionStore
 import com.montauk.voicecapture.settings.AppSecretsStore
 import com.montauk.voicecapture.stt.SttClientFactory
@@ -57,6 +58,18 @@ class VoiceCaptureApp : Application() {
     /** Booleans only for the settings screen -- never surface the actual key/token values. */
     fun isAssemblyKeyConfigured(): Boolean = secretsStore.effectiveAssemblyKey(BuildConfig.ASSEMBLYAI_API_KEY).isNotBlank()
     fun isGithubTokenConfigured(): Boolean = secretsStore.effectiveGithubToken(BuildConfig.GITHUB_TOKEN).isNotBlank()
+
+    /**
+     * False whenever no real GitHub OAuth App has been registered (bead
+     * vn-edu.28): [BuildConfig.GITHUB_OAUTH_CLIENT_ID] is still the
+     * placeholder from `app/build.gradle.kts`, which GitHub's device-flow
+     * endpoint always 404s on. [ui.LoginScreen][com.montauk.voicecapture.ui.LoginScreen]
+     * uses this to keep the primary sign-in button off of a path that can
+     * never succeed, rather than let the user hit that 404. See
+     * [com.montauk.voicecapture.auth.isGithubOAuthConfigured] for the pure
+     * (JVM-testable) check this delegates to.
+     */
+    fun isGithubOAuthConfigured(): Boolean = isGithubOAuthConfigured(BuildConfig.GITHUB_OAUTH_CLIENT_ID)
 
     fun appVersionName(): String =
         runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "unknown"
