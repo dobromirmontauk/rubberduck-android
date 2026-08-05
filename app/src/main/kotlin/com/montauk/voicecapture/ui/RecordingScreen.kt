@@ -5,6 +5,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,10 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -32,6 +37,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +60,7 @@ import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.TranscriptLine
 import com.montauk.voicecapture.service.TranscriptStateHolder
 import com.montauk.voicecapture.service.TranscriptUiState
+import com.montauk.voicecapture.stt.SttConnectionState
 import com.montauk.voicecapture.topics.TopicCloud
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 import kotlinx.coroutines.launch
@@ -276,41 +283,112 @@ private val LOUDNESS_METER_HEIGHT = 56.dp
 private val LOUDNESS_METER_BAR_GAP = 3.dp
 private val LOUDNESS_METER_REST_HEIGHT = 4.dp
 
+/** One rendered row of [LiveTranscriptPane], oldest-to-newest order matching [LazyColumn] item order. */
+private sealed interface TranscriptRow {
+    data class Final(val line: TranscriptLine) : TranscriptRow
+    data class Partial(val text: String) : TranscriptRow
+    object Silence : TranscriptRow
+    object Placeholder : TranscriptRow
+}
+
 /**
- * Last ~2 finalized lines (large, solid) plus the current in-progress
- * partial (large, dimmed) underneath -- or, if neither has arrived in the
- * last ~4s and the mic is quiet, a dimmed italic "(silence)" line instead.
+ * All finalized lines (large, solid) plus the current in-progress partial
+ * (large, dimmed) as the newest row -- or, if neither has arrived in the
+ * last ~4s and the mic is quiet, a dimmed italic "(silence)" row instead. A
+ * bare "Listening…" placeholder row covers the empty-session case.
+ */
+private fun transcriptRows(transcript: TranscriptUiState): List<TranscriptRow> {
+    val rows = mutableListOf<TranscriptRow>()
+    transcript.finalLines.forEach { rows += TranscriptRow.Final(it) }
+    when {
+        transcript.currentPartial.isNotBlank() -> rows += TranscriptRow.Partial(transcript.currentPartial)
+        transcript.silenceHintVisible -> rows += TranscriptRow.Silence
+    }
+    if (rows.isEmpty()) rows += TranscriptRow.Placeholder
+    return rows
+}
+
+/** True when the last row in the list is fully scrolled into view -- i.e. nothing newer is hidden below the fold. */
+private fun LazyListLayoutInfo.isScrolledToNewest(): Boolean {
+    val last = visibleItemsInfo.lastOrNull() ?: return true
+    return last.index == totalItemsCount - 1 && last.offset + last.size <= viewportEndOffset
+}
+
+/**
+ * Bounded transcript pane between the mode switcher and the topic chips
+ * row (bead vn-edu.37): a [LazyColumn] clips to its `weight(1f)` allotment
+ * instead of the plain [Column] this used to be, so fast FILE-injected
+ * playback can no longer grow the pane past its slot and starve the chips
+ * row below it out of the layout.
+ *
+ * Auto-follow/snap-back is delegated to the pure [TranscriptFollowState]:
+ * the pane scrolls to the newest row whenever that class says to, and only
+ * a real user drag (tracked via [rememberLazyListState]'s
+ * [androidx.compose.foundation.interaction.MutableInteractionSource], not
+ * this composable's own programmatic scroll) is reported to it as a manual
+ * scroll-away. That keeps the pane pinned to newest by default, lets a
+ * reader scroll up to reread something, and snaps back to live once they've
+ * been idle for [TranscriptFollowState.DEFAULT_IDLE_MS].
  */
 @Composable
 private fun LiveTranscriptPane(transcript: TranscriptUiState, modifier: Modifier = Modifier) {
-    val lastFinal = transcript.finalLines.takeLast(2)
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.Bottom) {
-        if (lastFinal.isEmpty() && transcript.currentPartial.isBlank() && !transcript.silenceHintVisible) {
-            Text(
-                text = "Listening…",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+    val rows = remember(transcript.finalLines, transcript.currentPartial, transcript.silenceHintVisible) {
+        transcriptRows(transcript)
+    }
+    val listState = rememberLazyListState()
+    val followState = remember { TranscriptFollowState() }
+    val isDragged by listState.interactionSource.collectIsDraggedAsState()
+
+    // Only a real touch-drag counts as a manual scroll-away -- this excludes
+    // the animateScrollToItem calls below, which move the same listState
+    // without ever setting isDragged, so they can't be mistaken for the user
+    // scrolling away from what they just asked to follow.
+    LaunchedEffect(listState, isDragged) {
+        if (isDragged) {
+            snapshotFlow { listState.layoutInfo }.collect { layoutInfo ->
+                followState.onManualScroll(System.currentTimeMillis(), layoutInfo.isScrolledToNewest())
+            }
         }
-        lastFinal.forEach { line: TranscriptLine ->
-            Text(
-                text = line.text,
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
+    }
+
+    LaunchedEffect(rows) {
+        if (rows.isNotEmpty() && followState.onNewContent(System.currentTimeMillis())) {
+            listState.animateScrollToItem(rows.lastIndex)
         }
-        when {
-            transcript.currentPartial.isNotBlank() -> Text(
-                text = transcript.currentPartial,
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-            )
-            transcript.silenceHintVisible -> Text(
-                text = "(silence)",
-                style = MaterialTheme.typography.headlineMedium.copy(fontStyle = FontStyle.Italic),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-            )
-        }
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.Bottom),
+    ) {
+        items(rows) { row -> TranscriptRowText(row) }
+    }
+}
+
+@Composable
+private fun TranscriptRowText(row: TranscriptRow) {
+    when (row) {
+        is TranscriptRow.Final -> Text(
+            text = row.line.text,
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        is TranscriptRow.Partial -> Text(
+            text = row.text,
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+        )
+        TranscriptRow.Silence -> Text(
+            text = "(silence)",
+            style = MaterialTheme.typography.headlineMedium.copy(fontStyle = FontStyle.Italic),
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+        )
+        TranscriptRow.Placeholder -> Text(
+            text = "Listening…",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -455,6 +533,55 @@ private fun StopBarPreview() {
                 Spacer(modifier = Modifier.height(24.dp))
             }
             StopBar(modifier = Modifier.weight(1f), onClick = {})
+        }
+    }
+}
+
+/**
+ * Synthetic overlong transcript for [LiveTranscriptPaneOverlongPreview]: far
+ * more finalized lines than could ever fit the pane's bounded height, plus a
+ * current partial, standing in for fast FILE-injected playback (bead
+ * vn-edu.37's repro) without needing a device or a live STT session.
+ */
+private fun syntheticOverlongTranscript(): TranscriptUiState {
+    val finalLines = (1..30).map { i ->
+        TranscriptLine(
+            text = "Finalized line $i -- a long finalized utterance that wraps across " +
+                "several visual lines, exercising the bounded pinned-to-newest pane " +
+                "instead of an unbounded block that swallows the chips row below it.",
+            startMs = i * 1_000L,
+            endMs = i * 1_000L + 900L,
+        )
+    }
+    return TranscriptUiState(
+        connectionState = SttConnectionState.CONNECTED,
+        finalLines = finalLines,
+        currentPartial = "and this current partial line is still being spoken, dimmed, " +
+            "sitting at the very bottom where the reader's eye rests",
+        sourceLabel = "FILE",
+    )
+}
+
+/**
+ * Preview-only: mode switcher, the bounded [LiveTranscriptPane], and the
+ * topic chips row rendered together with 30 finalized lines' worth of
+ * overlong fixture text (bead vn-edu.37) -- demonstrates that the pane stays
+ * pinned to the newest line, clips rather than overflows, and the chips row
+ * underneath stays fully visible instead of being starved out of the layout.
+ */
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 640)
+@Composable
+private fun LiveTranscriptPaneOverlongPreview() {
+    VoiceCaptureTheme {
+        val transcript = remember { syntheticOverlongTranscript() }
+        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+            Spacer(modifier = Modifier.height(16.dp))
+            ModeSwitcher(currentMode = RecordingMode.LISTEN, onSelect = {})
+            Spacer(modifier = Modifier.height(16.dp))
+            LiveTranscriptPane(transcript = transcript, modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(16.dp))
+            TopicChipsRow(topics = syntheticTopics())
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }
