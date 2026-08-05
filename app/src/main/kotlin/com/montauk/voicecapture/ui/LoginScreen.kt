@@ -125,7 +125,7 @@ fun LoginScreen(onSignedIn: () -> Unit) {
                 AppMark()
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    text = "voice-notes",
+                    text = "rubberduck",
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
