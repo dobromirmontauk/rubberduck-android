@@ -42,6 +42,18 @@ import org.robolectric.annotation.GraphicsMode
  * app's theme is always dark regardless of system setting (see
  * `VoiceCaptureTheme`) -- so a rerun with no code changes reproduces the
  * exact same PNG bytes.
+ *
+ * Bead vn-edu.40: that fixed-fixture guarantee also has to cover
+ * `AppSecretsStore`'s `effective*()`/`selectedVault*` getters, which fall
+ * back to `BuildConfig.ASSEMBLYAI_API_KEY` / `GITHUB_TOKEN` / `VAULT_OWNER` /
+ * `VAULT_REPO` -- values baked in at build time from *this machine's*
+ * `local.properties`, not from any fixture here. [setUp] pins all of that
+ * explicitly (`isSignedOut = true` forces both `effective*()` getters to ""
+ * unconditionally; `selectedVaultOwner`/`selectedVaultRepo` bypass their
+ * BuildConfig fallback) so [settings] renders identically whether the
+ * machine running this test has real keys configured in `local.properties`
+ * or not. Verified against both a keyless clone and a clone carrying real
+ * `assemblyai.apiKey` / `github.token` values.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -70,6 +82,11 @@ class KeyScreensScreenshotTest {
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
         TagsStateHolder.reset()
+        // See the class doc -- neutralizes AppSecretsStore's BuildConfig fallbacks
+        // so goldens don't encode whichever machine happens to run this test.
+        app.secretsStore.isSignedOut = true
+        app.secretsStore.selectedVaultOwner = "dobromirmontauk"
+        app.secretsStore.selectedVaultRepo = "voice-vault"
     }
 
     @Test
@@ -167,6 +184,19 @@ class KeyScreensScreenshotTest {
         composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "settings.png")
     }
 
+    /**
+     * Residual, *documented* config-dependence this test can't close off the
+     * same way [setUp] does for [settings]: [com.montauk.voicecapture.ui.LoginScreen]
+     * reads `VoiceCaptureApp.isGithubOAuthConfigured()`, which checks
+     * `BuildConfig.GITHUB_OAUTH_CLIENT_ID` directly with no `AppSecretsStore`
+     * seam to override at test runtime -- it's a per-build-type constant, not
+     * a SharedPreferences value. Safe today because setting it up requires
+     * manually registering a GitHub OAuth App (see `app/build.gradle.kts`'s
+     * `github.oauthClientId` comment); confirmed unset in both the keyless
+     * and keyed `local.properties` this suite was verified against. If that
+     * ever changes on some machine/CI, this golden -- and only this one --
+     * would need re-verifying across environments.
+     */
     @Test
     fun login() {
         composeTestRule.setContent {

@@ -242,6 +242,26 @@ None of these screens have a persistent animation running at first render,
 so no explicit clock-advance/animation-disable is needed beyond
 `composeTestRule.waitForIdle()`.
 
+**Hermeticity (bead vn-edu.40).** Fixed fixture state has to cover
+`AppSecretsStore` too, not just session/transcript data: `SettingsScreen`
+reads `effectiveGithubToken()` / `effectiveAssemblyKey()` / `selectedVault*`,
+which fall back to `BuildConfig.ASSEMBLYAI_API_KEY` / `GITHUB_TOKEN` /
+`VAULT_OWNER` / `VAULT_REPO` -- values baked in at build time from
+*whichever machine's* `local.properties` ran the build. The `settings`
+golden originally encoded "Configured" vs. "Not configured" for whichever
+developer's real keys happened to be present, so `verifyRoborazziDebug`
+passed on a keyless clone but failed on a clone with real
+`assemblyai.apiKey` / `github.token` set. Fixed by pinning
+`secretsStore.isSignedOut = true` (forces both `effective*()` getters to `""`
+unconditionally, regardless of `BuildConfig`) and
+`selectedVaultOwner`/`selectedVaultRepo` to fixed values in
+`KeyScreensScreenshotTest.setUp()`. Verified green on both a keyless clone
+and a clone carrying real keys. `LoginScreen`'s
+`BuildConfig.GITHUB_OAUTH_CLIENT_ID` dependency has no equivalent
+`AppSecretsStore` seam to override (see the KDoc on the `login` test) --
+documented as a residual, currently-dormant risk rather than silently
+ignored.
+
 **Where the goldens live.** `build.gradle.kts` sets
 `roborazzi { outputDir.set(file("src/test/screenshot/goldens")) }`, but that
 extension only auto-prefixes `captureRoboImage()` calls that *omit* a
