@@ -1,0 +1,23 @@
+Okay so I've been going back and forth all day on this hiring decision and I want to just talk it through out loud while I drive, see if it sounds as reasonable as it does in my head. We've got two finalists for the senior engineer role. Candidate A is stronger technically, hands down, better system design answers, more relevant experience with the exact stack we use. But in the debrief two of the three interviewers flagged some concern about how she handled disagreement in the pairing session, like she got a little dismissive when the interviewer pushed back on her approach. That's a small sample size though, one hour, could just be nerves.
+
+Candidate B is weaker technically, honestly noticeably weaker on the system design round, but every single interviewer came out of their loop saying this is someone they'd want on their team. Great communicator, asked really good clarifying questions, took feedback well. And our team right now is pretty senior already. We don't actually need someone to be the strongest technical voice in the room, we need someone who's going to mesh well and can ramp into strength over the next year.
+
+[[slnc 4000]]
+
+Sorry, hang on, what is that noise, is that the belt again. Okay, it stopped, never mind, probably just the road. Anyway.
+
+So the way I keep framing this to myself is, are we hiring for today's gap or next year's team. If it's today's gap, Candidate A closes it faster. If it's next year's team, Candidate B is probably the better long-term bet, especially since we already have two very strong senior ICs who can mentor on the technical side. I think that's actually the deciding factor for me. We have the technical depth covered already. What we're missing is someone senior who makes the team better just by being in the room. That's Candidate B.
+
+The other thing nagging at me is the disagreement flag on Candidate A. I don't want to overweight one data point, but if I'm being honest with myself, we already have one person on the team who struggles with taking feedback well, and adding a second person with that same pattern, even if it's mild, feels like it compounds a problem we already have instead of fixing something.
+
+[[slnc 4000]]
+
+Oh, I should text Jamie about dinner, we still haven't figured out if we're doing the Thai place or just cooking at home tonight. I'll deal with that later, not important right now.
+
+Okay, back to this. I think I'm talking myself into Candidate B pretty clearly now. The technical gap is real, but it's a gap that closes with six months of ramp time on our specific systems, and the collaboration strength is not something you can coach as easily, at least not on that timeline. If I'm wrong about that, I think I'm more wrong in a recoverable way. Worst case, B takes a little longer to become fully productive. Whereas if I'm wrong about A, and the disagreement thing is actually a pattern and not nerves, that's a lot harder to walk back once someone's already on the team and it's affecting how other people feel about speaking up in meetings.
+
+[[slnc 3000]]
+
+Let me also think about what the team would think if I made either call. I think most of the team would be genuinely relieved with B, honestly, because a couple of them mentioned after the A interview that the pairing session felt tense to watch, even secondhand. That's not nothing. Team fit isn't a soft metric when it's this specific and this consistent across three different interviewers who don't normally agree on much.
+
+Alright. I'm going to sleep on it one more night, but I'm ninety percent on Candidate B right now, and I want to write up the reasoning tonight while it's fresh, so tomorrow's decision doesn't just feel like a gut call. It's actually grounded in something I can explain to the rest of the panel, and to Candidate A too, if she asks for feedback afterward, which I really hope she does.

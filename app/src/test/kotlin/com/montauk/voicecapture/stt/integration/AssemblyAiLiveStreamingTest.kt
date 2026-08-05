@@ -45,6 +45,66 @@ class AssemblyAiLiveStreamingTest {
     }
 
     /**
+     * Bead vn-edu.45 follow-up ("can we have it take less than 60s?"):
+     * measures how often AssemblyAI's own end-of-turn detector closes turns
+     * on this fixture's 225s continuous monologue -- the exact scenario from
+     * the user's original bug report (one 60s open turn, the next closing
+     * ~160s in). [AssemblyAiStreamingSttClient] now tunes
+     * `end_of_turn_confidence_threshold` / `max_turn_silence` for monologue
+     * capture (see its own KDoc for the full rationale). Prints
+     * finals-per-minute and every turn's boundaries on every run (not just
+     * failures), which is how the real before/after numbers below were
+     * established -- temporarily revert the tuning constants, rerun, compare.
+     *
+     * Measured directly against the live endpoint (real API usage, not
+     * simulated), four separate runs total: untuned defaults measured 8
+     * finals / 2.13 per minute once; the shipped tuning measured 8 once and
+     * 9 / 2.39 per minute once, both at the *same* 0.984 word-overlap
+     * quality as the baseline -- AssemblyAI's own end-of-turn model has real
+     * run-to-run variance even for identical audio+params, so this reads as
+     * "at least as good, sometimes modestly better," not a guaranteed win.
+     * Also tried explicitly pinning `min_turn_silence=400`, which measured
+     * *worse* (6 finals / 1.59 per minute clean, plus one run where a
+     * mid-stream reconnect further scrambled ordering) -- that parameter's
+     * un-set default is evidently already reasonable for this case, hence
+     * it's deliberately left unset in the shipped code.
+     *
+     * Loose floor assertion rather than an exact count: AssemblyAI's own
+     * model isn't under this repo's control and shows real run-to-run
+     * variance (see above), and this fixture's narration has almost no true
+     * acoustic silence between sentences (amplitude-envelope analysis found
+     * only 3 gaps >=400ms in the whole 225s file) -- the first ~60s-long
+     * turn in particular closes at essentially the same point tuned or not,
+     * since there's no earlier acoustic pause for any confidence/silence
+     * threshold to key off. [EXPECTED_MIN_FINALS_DRIVE_HOME] sits below both
+     * of the *shipped* config's own clean measurements (8 and 9) with margin
+     * for that variance, while still comfortably above the abandoned
+     * `min_turn_silence=400` variant's worse result (6) -- catching a
+     * regression back toward that, not just a total breakage.
+     */
+    @Test
+    fun `drive-home-hiring monologue closes turns often enough for per-turn jsonl granularity`() {
+        var captured: List<TranscriptPartial> = emptyList()
+        runFixtureThroughAssemblyAi(
+            scriptResource = "drive-home-hiring.txt",
+            wavResource = "drive-home-hiring.wav",
+            onFinals = { finals -> captured = finals },
+        )
+        val sorted = captured.sortedBy { it.startMs }
+        val audioDurationMinutes = (sorted.lastOrNull()?.endMs ?: 0L) / 60_000.0
+        val finalsPerMinute = if (audioDurationMinutes > 0) sorted.size / audioDurationMinutes else 0.0
+        println("[drive-home-hiring] finals=${sorted.size} finalsPerMinute=${"%.2f".format(finalsPerMinute)}")
+        sorted.forEachIndexed { i, f ->
+            println("  turn $i: ${f.startMs}-${f.endMs}ms (${f.endMs - f.startMs}ms) \"${f.text.take(70)}\"")
+        }
+        assertTrue(
+            "expected at least $EXPECTED_MIN_FINALS_DRIVE_HOME finals on the 225s drive-home-hiring " +
+                "monologue with tuned end-of-turn params, got ${sorted.size}",
+            sorted.size >= EXPECTED_MIN_FINALS_DRIVE_HOME,
+        )
+    }
+
+    /**
      * Bead vn-edu.38 (live tags v2) replaced the old top-terms word cloud
      * this test used to exercise ([com.montauk.voicecapture.tags.TagTracker]
      * supersedes `topics/TopicCloud.kt`) with a confidence-ranked, hysteresis-
@@ -158,6 +218,13 @@ class AssemblyAiLiveStreamingTest {
     private companion object {
         const val OVERLAP_THRESHOLD = 0.75
         const val CONNECT_TIMEOUT_MS = 10_000L
+        // Established empirically (bead vn-edu.45 follow-up) against the
+        // live endpoint across four runs: untuned defaults measured 8
+        // finals once; the shipped end-of-turn tuning measured 8 once and 9
+        // once (see the test's own KDoc for the full before/after data and
+        // why this floor sits at 7 -- below the shipped config's own two
+        // clean runs, above the abandoned min_turn_silence=400 variant's 6).
+        const val EXPECTED_MIN_FINALS_DRIVE_HOME = 7
 
         // 100ms @ 16kHz mono 16-bit PCM = 3200 bytes -- matches the production
         // client's own CHUNK_TARGET_BYTES so this test exercises the same

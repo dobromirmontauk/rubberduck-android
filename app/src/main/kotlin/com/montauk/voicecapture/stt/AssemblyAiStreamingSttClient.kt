@@ -65,6 +65,63 @@ class AssemblyAiStreamingSttClient(
         const val RECONNECT_BASE_DELAY_MS = 500L
         const val RECONNECT_MAX_DELAY_MS = 8_000L
         const val MAX_RECONNECT_ATTEMPTS = 5
+
+        // Bead vn-edu.45 follow-up ("can we have it take less than 60s?"):
+        // end-of-turn tuning for monologue capture, third lever alongside
+        // vn-edu.43 (scroll pinning) and vn-edu.45's own word-level-stable
+        // rendering -- the UI/tags never *depend* on turn closure anymore,
+        // but a turn that closes sooner still means more (and smaller)
+        // `live-transcript.jsonl` lines instead of one multi-minute blob.
+        // Exact param names/defaults verified against AssemblyAI's current
+        // v3 streaming websocket AsyncAPI reference
+        // (https://www.assemblyai.com/docs/streaming/api-spec/streaming-websocket)
+        // -- NOT the same names as an earlier draft of this comment guessed
+        // (`min_end_of_turn_silence_when_confident` doesn't exist; the real
+        // parameter is `min_turn_silence`).
+        //
+        // These two values are the ones that survived real before/after
+        // measurement against the live endpoint (drive-home-hiring.wav, 225s,
+        // via AssemblyAiLiveStreamingTest, four separate live runs -- see
+        // that test's own KDoc and the commit message for the exact numbers).
+        // Untuned defaults measured 8 finals (2.13/min) once; this
+        // configuration (END_OF_TURN_CONFIDENCE_THRESHOLD + MAX_TURN_SILENCE_MS,
+        // `min_turn_silence` deliberately left unset) measured 8 finals once
+        // and 9 finals (2.39/min) once across two runs, both at the same
+        // 0.984 word-overlap transcription quality as the baseline -- i.e.
+        // AssemblyAI's own end-of-turn model has real run-to-run variance
+        // even for identical audio+params, so this reads as "at least as
+        // good, sometimes modestly better," not a dramatic, guaranteed win.
+        // Explicitly pinning `min_turn_silence=400` alongside the other two
+        // was ALSO tried and measured worse both times (6 finals / 1.59/min
+        // clean, plus one run with a mid-stream reconnect that further
+        // scrambled ordering) -- its true un-set default is evidently
+        // already reasonable for this use case, and overriding it was
+        // actively counter-productive, so it's deliberately left unset here.
+        //
+        // Default 0.4 assumes natural speech's pitch/pacing cues to gauge
+        // "is this really the end of a thought." Synthesized (TTS) fixtures
+        // like drive-home-hiring.wav have flat prosody, so that confidence
+        // signal is weak. Lowering the bar trades a little precision (a turn
+        // might close on a shorter-than-ideal pause) for closing more
+        // reliably on the comma-level micro-pauses this kind of narration
+        // actually has.
+        const val END_OF_TURN_CONFIDENCE_THRESHOLD = 0.25
+        // Hard ceiling: silence past this always force-closes the turn
+        // regardless of confidence -- default is ~1280-1536ms depending on
+        // configuration; 1000ms means *any* ~1s natural pause closes the
+        // turn even in the worst case where the confidence-based check never
+        // fires at all (the exact failure mode flat-prosody TTS risks).
+        //
+        // What this can't do: a genuinely continuous, unbroken stretch of
+        // speech with NO acoustic pause at all (verified on this same
+        // fixture -- amplitude-envelope analysis found only 3 real gaps
+        // >=400ms in the whole 225s file) still runs to whatever length that
+        // stretch takes to speak, tuned or not -- these two runs both closed
+        // their first ~60s-long turn at essentially the same point (the
+        // fixture's own first scripted silence, not a tunable cap). That's
+        // exactly why the UI/tag fixes (vn-edu.43/44/45's actual rendering
+        // and scoring changes) don't depend on this tuning at all.
+        const val MAX_TURN_SILENCE_MS = 1_000
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -91,27 +148,24 @@ class AssemblyAiStreamingSttClient(
     }
 
     /**
-     * Bead vn-edu.45 evaluated (but deliberately did not add) AssemblyAI's
-     * end-of-turn query params here -- `end_of_turn_confidence_threshold`,
-     * `min_end_of_turn_silence_when_confident`, and `max_turn_silence`
-     * (https://www.assemblyai.com/docs/speech-to-text/universal-streaming#configuring-the-end-of-turn-detection).
-     * Tuning those down would make `end_of_turn` fire sooner on a
-     * continuous monologue, but they're a tradeoff, not a fix: too
-     * aggressive and a mid-sentence pause (a breath, "um", swallowing) splits
-     * one utterance into several finals, which is worse for the vault
-     * ingest contract's per-turn `live-transcript.jsonl` lines than an
-     * occasional long turn is for the UI. The actual fix for "why does it
-     * stay partial that long" is this bead's real change: painting
-     * word-level-stable text solid via [TranscriptPartial.stableText] while
-     * the turn is still open, so the UX never depends on how soon
-     * `end_of_turn` fires in the first place. Revisit these params only if a
-     * *separate* problem shows up with turns staying open too long for
-     * `live-transcript.jsonl`'s own per-turn granularity, not for rendering.
+     * Bead vn-edu.45 follow-up: tunes end-of-turn detection for monologue
+     * capture (see [END_OF_TURN_CONFIDENCE_THRESHOLD]/[MAX_TURN_SILENCE_MS]'s
+     * own KDoc for the exact rationale and measured before/after numbers).
+     * This is a third, complementary lever, not the fix -- the UI
+     * ([TranscriptPartial.stableText] painting solid mid-turn, bead
+     * vn-edu.45's main change) and the tag scorer (bead vn-edu.44's
+     * [com.montauk.voicecapture.tags.TagCoordinator.onTick]) never depend on
+     * how soon `end_of_turn` actually fires. Tuning this down still matters
+     * for `live-transcript.jsonl`'s own per-turn granularity: shorter turns
+     * mean smaller, more frequent final lines instead of one multi-minute
+     * blob per WAL segment.
      */
     private suspend fun openSocket() {
         connectionStateFlow.value = SttConnectionState.CONNECTING
         val ready = CompletableDeferred<Unit>()
-        val url = "$endpointBase?sample_rate=$sampleRateHz&encoding=pcm_s16le&format_turns=true"
+        val url = "$endpointBase?sample_rate=$sampleRateHz&encoding=pcm_s16le&format_turns=true" +
+            "&end_of_turn_confidence_threshold=$END_OF_TURN_CONFIDENCE_THRESHOLD" +
+            "&max_turn_silence=$MAX_TURN_SILENCE_MS"
         val request = Request.Builder()
             .url(url)
             // AssemblyAI's v3 endpoint expects the raw key here, no "Bearer" prefix.
