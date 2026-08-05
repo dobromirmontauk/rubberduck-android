@@ -120,11 +120,11 @@ fun AppNavHost(
                 }
             }
             composable(Routes.SETTINGS) { SettingsScreen() }
-            composable(Routes.SIGNIN) {
-                SignInScreen(
-                    onRestoreFromBuildConfig = {
+            composable(Routes.LOGIN) {
+                LoginScreen(
+                    onSignedIn = {
                         navController.navigate(Routes.SESSIONS) {
-                            popUpTo(Routes.SIGNIN) { inclusive = true }
+                            popUpTo(Routes.LOGIN) { inclusive = true }
                         }
                     },
                 )
@@ -138,7 +138,7 @@ fun AppNavHost(
                 showLogoutDialog = false
                 app.secretsStore.isSignedOut = true
                 app.refreshBundleUploader()
-                navController.navigate(Routes.SIGNIN) {
+                navController.navigate(Routes.LOGIN) {
                     // Clears the entire back stack (whatever screen Log Out was
                     // tapped from) rather than the fragile popUpTo(0) idiom.
                     popUpTo(navController.graph.id) { inclusive = true }

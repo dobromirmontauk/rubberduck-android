@@ -41,6 +41,20 @@ android {
         buildConfigField("String", "GITHUB_TOKEN", "\"${localProperty("github.token", "GITHUB_TOKEN")}\"")
         buildConfigField("String", "VAULT_OWNER", "\"${localProperty("vault.owner").ifBlank { "dobromirmontauk" }}\"")
         buildConfigField("String", "VAULT_REPO", "\"${localProperty("vault.repo").ifBlank { "voice-vault" }}\"")
+        // GitHub OAuth App client id for the login screen's device flow (bead
+        // vn-edu.14). Not configured out of the box -- set `github.oauthClientId`
+        // in local.properties (register a free OAuth App at
+        // https://github.com/settings/developers, device flow enabled, no
+        // callback URL needed) to make "Sign in with GitHub" actually complete.
+        // Until then the button still runs the real device-flow HTTP calls
+        // against this placeholder id, which GitHub predictably rejects --
+        // the login screen surfaces that as a normal error state, and "Use an
+        // access token" keeps working regardless.
+        buildConfigField(
+            "String",
+            "GITHUB_OAUTH_CLIENT_ID",
+            "\"${localProperty("github.oauthClientId").ifBlank { "REPLACE_WITH_GITHUB_OAUTH_CLIENT_ID" }}\"",
+        )
     }
 
     buildTypes {

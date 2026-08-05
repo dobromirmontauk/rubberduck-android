@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val app = application as VoiceCaptureApp
         val startDestination = when {
-            app.secretsStore.isSignedOut -> Routes.SIGNIN
+            app.secretsStore.isSignedOut -> Routes.LOGIN
             RecordingStateHolder.state.value.isRecording -> Routes.RECORDING
             else -> Routes.SESSIONS
         }
