@@ -96,8 +96,8 @@ fun SessionDetailScreen(sessionId: String, onBack: () -> Unit) {
                 Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     when (selectedTab) {
                         DetailTab.LIVE_TEXT -> LiveTextTab(transcriptLines)
-                        DetailTab.CANONICAL -> StubTab("Appears after an organize run — coming soon")
-                        DetailTab.FILED_TO -> StubTab("Appears after an organize run — coming soon")
+                        DetailTab.CANONICAL -> StubTab("Not available yet")
+                        DetailTab.FILED_TO -> StubTab("Not available yet")
                     }
                 }
                 Spacer(modifier = Modifier.height(12.dp))
@@ -179,7 +179,7 @@ private fun AudioPlaybackRow(oggFile: File) {
 private fun LiveTextTab(lines: List<LiveTranscriptLine>) {
     if (lines.isEmpty()) {
         Text(
-            text = "No live transcript — recorded offline or transcription was off.",
+            text = "No live transcript",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

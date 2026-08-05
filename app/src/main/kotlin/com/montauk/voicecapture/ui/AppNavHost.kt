@@ -167,12 +167,7 @@ private fun LogoutConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Log out?") },
-        text = {
-            Text(
-                "Recording and local sessions stay on this device; upload and transcription " +
-                    "stop until you sign in again.",
-            )
-        },
+        text = { Text("Recording keeps working locally. Upload and transcription pause until you sign in again.") },
         confirmButton = { TextButton(onClick = onConfirm) { Text("Log out") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
