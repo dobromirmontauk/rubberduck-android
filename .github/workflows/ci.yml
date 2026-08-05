@@ -23,10 +23,13 @@ jobs:
 
       # Android SDK ships preinstalled on ubuntu-latest GitHub runners
       # (ANDROID_HOME is already set), so no manual SDK setup step here.
-      - name: Unit tests
-        run: ./gradlew test --stacktrace
-        # Once vn-edu.34 (Roborazzi) lands, fold its verification task in here:
-        # run: ./gradlew test verifyRoborazzi --stacktrace
+      #
+      # verifyRoborazziDebug (bead vn-edu.34, made hermetic in vn-edu.40)
+      # re-renders the 5 key-screen goldens under app/src/test/screenshot/goldens/
+      # and fails the build on any pixel diff -- folded into the same step as
+      # `test` since both are JVM-only, no emulator/device needed.
+      - name: Unit tests + screenshot verification
+        run: ./gradlew test verifyRoborazziDebug --stacktrace
 
       # integrationTest (AssemblyAiLiveStreamingTest) hits the real AssemblyAI
       # streaming endpoint (~$0.01/run) and needs ASSEMBLYAI_API_KEY, so it is
