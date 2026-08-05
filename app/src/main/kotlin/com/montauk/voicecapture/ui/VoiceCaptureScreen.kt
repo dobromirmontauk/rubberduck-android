@@ -9,10 +9,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -38,8 +40,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingStateHolder
+import com.montauk.voicecapture.service.TranscriptLine
+import com.montauk.voicecapture.service.TranscriptStateHolder
+import com.montauk.voicecapture.service.TranscriptUiState
 import com.montauk.voicecapture.session.SessionSummary
 import com.montauk.voicecapture.session.UploadState
+import com.montauk.voicecapture.stt.SttConnectionState
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 
 @Composable
@@ -116,23 +122,89 @@ private fun RecordButton(isRecording: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Placeholder pane where the live streaming transcript will render once StreamingSttClient is wired up. */
+/**
+ * Live streaming transcript: finalized lines solid and newest-at-bottom,
+ * the current in-progress line (if any) dimmed underneath them. Backed by
+ * [TranscriptStateHolder], which [com.montauk.voicecapture.service.RecordingService]
+ * fills from the AssemblyAI [com.montauk.voicecapture.stt.StreamingSttClient].
+ */
 @Composable
 private fun LiveTranscriptPane(isRecording: Boolean) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(96.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Box(modifier = Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.CenterStart) {
-            Text(
-                text = if (isRecording) "Listening... (live transcript coming soon)" else "Transcript will appear here while recording",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+    val transcript by TranscriptStateHolder.state.collectAsStateWithLifecycle()
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (isRecording) {
+            SttStatusChip(transcript.connectionState)
+            Spacer(modifier = Modifier.height(8.dp))
         }
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 96.dp, max = 220.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            shape = RoundedCornerShape(16.dp),
+        ) {
+            when {
+                !isRecording && transcript.finalLines.isEmpty() -> EmptyTranscriptHint(
+                    text = "Transcript will appear here while recording",
+                )
+                isRecording && transcript.connectionState == SttConnectionState.DISABLED -> EmptyTranscriptHint(
+                    text = "Live transcription off -- recording continues normally",
+                )
+                else -> TranscriptLines(transcript)
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyTranscriptHint(text: String) {
+    Box(modifier = Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.CenterStart) {
+        Text(text = text, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun TranscriptLines(transcript: TranscriptUiState) {
+    val listState = rememberLazyListState()
+    val itemCount = transcript.finalLines.size + if (transcript.currentPartial.isNotBlank()) 1 else 0
+    LaunchedEffect(itemCount) {
+        if (itemCount > 0) listState.animateScrollToItem(itemCount - 1)
+    }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxWidth().padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        items(transcript.finalLines) { line: TranscriptLine ->
+            Text(text = line.text, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (transcript.currentPartial.isNotBlank()) {
+            item {
+                Text(
+                    text = transcript.currentPartial,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SttStatusChip(state: SttConnectionState) {
+    val (label, color) = when (state) {
+        SttConnectionState.DISABLED -> "Live transcription off" to MaterialTheme.colorScheme.onSurfaceVariant
+        SttConnectionState.CONNECTING -> "Connecting..." to Color(0xFFE8A33D)
+        SttConnectionState.CONNECTED -> "Live" to Color(0xFF5FBF6E)
+        SttConnectionState.DROPPED -> "Reconnecting..." to Color(0xFFE8A33D)
+    }
+    Box(
+        modifier = Modifier
+            .background(color = color.copy(alpha = 0.18f), shape = RoundedCornerShape(999.dp))
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    ) {
+        Text(text = label, style = MaterialTheme.typography.labelLarge, color = color, fontWeight = FontWeight.Bold)
     }
 }
 

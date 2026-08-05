@@ -38,6 +38,18 @@ class AudioEngine(
     /** Hook for later Bluetooth-mic work; null means "use the system default input". */
     var preferredInputDeviceId: Int? = null
 
+    /**
+     * Tee for raw PCM frames, fired on the capture thread right after each
+     * successful [AudioRecord.read] -- alongside, not instead of, the
+     * Opus-encode-then-WAL path below. Set by [com.montauk.voicecapture.service.RecordingService]
+     * to feed [com.montauk.voicecapture.stt.StreamingSttClient.sendPcm]. Must
+     * return quickly and never throw: this call sits directly in the capture
+     * loop, ahead of the WAL write, so a slow or failing STT tee must never
+     * delay or drop audio frames -- backpressure handling belongs entirely to
+     * the STT client's own `sendPcm` implementation, not to this hook.
+     */
+    var onPcmFrame: ((pcm: ByteArray, length: Int) -> Unit)? = null
+
     private var audioRecord: AudioRecord? = null
     private var encoder: MediaCodec? = null
     private var walWriter: OpusFrameWal.Writer? = null
@@ -101,6 +113,8 @@ class AudioEngine(
             while (recording) {
                 val bytesRead = record.read(pcmBuffer, 0, pcmBuffer.size)
                 if (bytesRead > 0) {
+                    runCatching { onPcmFrame?.invoke(pcmBuffer, bytesRead) }
+                        .onFailure { e -> Log.w(TAG, "onPcmFrame tee failed (STT unaffected audio path)", e) }
                     feedInput(codec, pcmBuffer, bytesRead)
                 }
                 drainOutput(codec, endOfStream = false)

@@ -1,8 +1,27 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+}
+
+// Secrets live only in local.properties (gitignored), never in the source tree.
+// Missing values become empty strings; callers treat "" as "not configured" and
+// degrade gracefully (STT off, upload disabled) rather than crashing.
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+// local.properties wins; falling back to an env var lets a build pass a
+// secret through the process environment for one invocation (e.g. a CI job
+// or `GITHUB_TOKEN=$(gh auth token) ./gradlew ...`) without ever writing it
+// to disk. Same env var names the vv-transcribe script already uses.
+fun localProperty(key: String, envFallback: String? = null): String {
+    val fromFile = localProperties.getProperty(key, "")
+    if (fromFile.isNotBlank()) return fromFile
+    return envFallback?.let { System.getenv(it) } ?: ""
 }
 
 android {
@@ -17,6 +36,11 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField("String", "ASSEMBLYAI_API_KEY", "\"${localProperty("assemblyai.apiKey", "ASSEMBLYAI_API_KEY")}\"")
+        buildConfigField("String", "GITHUB_TOKEN", "\"${localProperty("github.token", "GITHUB_TOKEN")}\"")
+        buildConfigField("String", "VAULT_OWNER", "\"${localProperty("vault.owner").ifBlank { "dobromirmontauk" }}\"")
+        buildConfigField("String", "VAULT_REPO", "\"${localProperty("vault.repo").ifBlank { "voice-vault" }}\"")
     }
 
     buildTypes {
@@ -37,6 +61,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {
@@ -70,9 +95,12 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.okhttp)
+    implementation(libs.androidx.work.runtime.ktx)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
 }

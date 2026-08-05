@@ -13,8 +13,14 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.audio.AudioEngine
+import com.montauk.voicecapture.session.LiveTranscriptLine
+import com.montauk.voicecapture.session.LiveTranscriptWriter
 import com.montauk.voicecapture.session.SessionHandle
+import com.montauk.voicecapture.session.UploadState
+import com.montauk.voicecapture.stt.StreamingSttClient
+import com.montauk.voicecapture.upload.UploadWorker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -47,6 +53,8 @@ class RecordingService : LifecycleService() {
     private lateinit var audioEngine: AudioEngine
     private var currentSession: SessionHandle? = null
     private var startElapsedRealtimeMs: Long = 0L
+    private var sttClient: StreamingSttClient? = null
+    private var sttJobs: List<Job> = emptyList()
 
     override fun onCreate() {
         super.onCreate()
@@ -70,14 +78,59 @@ class RecordingService : LifecycleService() {
         val session = app.sessionStore.createSession(Date())
         currentSession = session
 
+        TranscriptStateHolder.reset()
+        val stt = app.newSttClient()
+        sttClient = stt
+        // Tee raw PCM to STT alongside (never instead of) the WAL write below --
+        // sendPcm is non-blocking and drops frames under backpressure, so a slow
+        // or dead STT connection can never stall or lose audio capture.
+        audioEngine.onPcmFrame = { pcm, length -> stt.sendPcm(pcm, 0, length) }
+
         val walFile = app.sessionStore.walFile(session.dir)
         audioEngine.start(walFile)
+        startSttPipeline(stt, session)
 
         startElapsedRealtimeMs = SystemClock.elapsedRealtime()
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = session.sessionId, elapsedMs = 0L) }
 
         startForeground(NOTIFICATION_ID, buildNotification(elapsedMs = 0L))
         startTicker()
+    }
+
+    /** Connects the STT client and fans its output into the UI state + `live-transcript.jsonl`. */
+    private fun startSttPipeline(stt: StreamingSttClient, session: SessionHandle) {
+        val app = application as VoiceCaptureApp
+        val statusJob = lifecycleScope.launch {
+            stt.connectionState().collect { state ->
+                TranscriptStateHolder.update { it.copy(connectionState = state) }
+            }
+        }
+        val partialsJob = lifecycleScope.launch {
+            stt.partials().collect { partial ->
+                TranscriptStateHolder.update { ui ->
+                    if (partial.isFinal) {
+                        ui.copy(
+                            finalLines = ui.finalLines + TranscriptLine(partial.text, partial.startMs, partial.endMs),
+                            currentPartial = "",
+                        )
+                    } else {
+                        ui.copy(currentPartial = partial.text)
+                    }
+                }
+                // Ingest contract: live-transcript.jsonl carries only immutable
+                // (isFinal) segments -- partials are UI-only, never written to disk.
+                if (partial.isFinal && partial.text.isNotBlank()) {
+                    withContext(Dispatchers.IO) {
+                        val line = LiveTranscriptLine(partial.startMs, partial.endMs, partial.text, final = true)
+                        app.sessionStore.transcriptFile(session.dir).appendText(LiveTranscriptWriter.encodeLine(line) + "\n")
+                    }
+                }
+            }
+        }
+        val connectJob = lifecycleScope.launch {
+            runCatching { stt.connect(AudioEngine.DEFAULT_SAMPLE_RATE_HZ, channelCount = 1) }
+        }
+        sttJobs = listOf(statusJob, partialsJob, connectJob)
     }
 
     private fun startTicker() {
@@ -98,9 +151,19 @@ class RecordingService : LifecycleService() {
         currentSession = null
 
         audioEngine.stop()
+        audioEngine.onPcmFrame = null
 
         val app = application as VoiceCaptureApp
+        val stt = sttClient
+        sttClient = null
+        val jobsToCancel = sttJobs
+        sttJobs = emptyList()
+
         lifecycleScope.launch {
+            // Close the STT socket in parallel with the (independent) audio
+            // finalize -- neither should wait on the other.
+            val sttCloseJob = stt?.let { launch { runCatching { it.close() } } }
+
             withContext(Dispatchers.IO) {
                 val walFile = app.sessionStore.walFile(session.dir)
                 val oggFile = app.sessionStore.oggFile(session.dir)
@@ -112,7 +175,13 @@ class RecordingService : LifecycleService() {
                     deviceModel = Build.MODEL,
                     appVersion = app.appVersionName(),
                 )
+                app.sessionStore.setUploadState(session.dir, UploadState.QUEUED)
             }
+            UploadWorker.enqueue(applicationContext, session.sessionId)
+
+            sttCloseJob?.join()
+            jobsToCancel.forEach { it.cancel() }
+
             RecordingStateHolder.update { it.copy(isRecording = false, elapsedMs = elapsedMs) }
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()

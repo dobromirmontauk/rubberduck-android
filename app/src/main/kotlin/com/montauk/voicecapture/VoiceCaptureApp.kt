@@ -5,6 +5,10 @@ import android.os.Build
 import android.util.Log
 import com.montauk.voicecapture.audio.AudioEngine
 import com.montauk.voicecapture.session.SessionStore
+import com.montauk.voicecapture.stt.SttClientFactory
+import com.montauk.voicecapture.stt.StreamingSttClient
+import com.montauk.voicecapture.upload.BundleUploader
+import com.montauk.voicecapture.upload.BundleUploaderFactory
 import java.io.File
 import kotlin.concurrent.thread
 
@@ -13,11 +17,23 @@ class VoiceCaptureApp : Application() {
     lateinit var sessionStore: SessionStore
         private set
 
+    /** Shared across sessions; safe to reuse since it's stateless beyond its OkHttp connection pool. */
+    lateinit var bundleUploader: BundleUploader
+        private set
+
     override fun onCreate() {
         super.onCreate()
         sessionStore = SessionStore(File(filesDir, "sessions"))
+        bundleUploader = BundleUploaderFactory.create(
+            token = BuildConfig.GITHUB_TOKEN,
+            owner = BuildConfig.VAULT_OWNER,
+            repo = BuildConfig.VAULT_REPO,
+        )
         recoverUnfinalizedSessions()
     }
+
+    /** A fresh [StreamingSttClient] per recording session -- it owns one WebSocket connection's lifecycle. */
+    fun newSttClient(): StreamingSttClient = SttClientFactory.create(BuildConfig.ASSEMBLYAI_API_KEY)
 
     fun appVersionName(): String =
         runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "unknown"

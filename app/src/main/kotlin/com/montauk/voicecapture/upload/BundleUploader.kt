@@ -10,27 +10,33 @@ sealed class UploadError(message: String, cause: Throwable? = null) : Exception(
 }
 
 /**
- * Stub for shipping a finalized session bundle (`audio.ogg` + `meta.json` +
+ * Ships a finalized session bundle (`audio.ogg` + `meta.json` +
  * `live-transcript.jsonl`) to the git-backed voice-vault.
  *
- * Not implemented yet. The planned approach: commit the bundle via the
- * GitHub REST contents API for the small text files (meta.json,
- * live-transcript.jsonl) and the Git LFS batch API for `audio.ogg` (session
- * audio routinely runs tens of MB, well past what the contents API's base64
- * inline-blob path handles comfortably). See voice-vault repo docs for the
- * ingest contract this uploads against.
+ * See [GitHubBundleUploader] for the real implementation (Git Data API +
+ * Git LFS batch API, pure HTTPS, one commit per session) against the
+ * voice-vault repo's ingest contract (`docs/ingest-contract.md` in that repo).
  *
  * [SessionStore] marks a session's upload-state marker file LOCAL ->
  * QUEUED -> UPLOADED around calls to [uploadBundle]; this interface only
  * needs to report success/failure, not manage that state machine itself.
+ * [com.montauk.voicecapture.upload.UploadWorker] is what actually drives
+ * that state machine from a WorkManager retry queue.
  */
 interface BundleUploader {
     /** Uploads the session directory at [sessionDir] (already finalized) to the vault. */
     suspend fun uploadBundle(sessionDir: File): Result<Unit>
 }
 
-/** No-op placeholder so the UI's upload-state chip has something to call before the real uploader exists. */
+/** No-op placeholder used whenever no GitHub token is configured (see [BundleUploaderFactory]). */
 class NoOpBundleUploader : BundleUploader {
     override suspend fun uploadBundle(sessionDir: File): Result<Unit> =
-        Result.failure(UploadError.Other("BundleUploader not implemented yet"))
+        Result.failure(UploadError.AuthFailed())
+}
+
+/** Builds the right [BundleUploader] for the current configuration. */
+object BundleUploaderFactory {
+    /** [token] is `BuildConfig.GITHUB_TOKEN`; blank means "not configured". */
+    fun create(token: String, owner: String, repo: String): BundleUploader =
+        if (token.isBlank()) NoOpBundleUploader() else GitHubBundleUploader(token = token, owner = owner, repo = repo)
 }
