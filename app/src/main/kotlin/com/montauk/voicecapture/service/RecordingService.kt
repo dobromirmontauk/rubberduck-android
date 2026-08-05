@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
@@ -19,13 +20,16 @@ import com.montauk.voicecapture.session.SessionHandle
 import com.montauk.voicecapture.session.UploadState
 import com.montauk.voicecapture.stt.StreamingSttClient
 import com.montauk.voicecapture.upload.UploadWorker
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Date
+import kotlin.concurrent.thread
 
 /**
  * Foreground service that owns the [AudioEngine] for the lifetime of a
@@ -42,9 +46,15 @@ class RecordingService : LifecycleService() {
         const val ACTION_START = "com.montauk.voicecapture.action.START"
         const val ACTION_STOP = "com.montauk.voicecapture.action.STOP"
 
+        private const val TAG = "RecordingService"
         private const val NOTIFICATION_CHANNEL_ID = "recording"
         private const val NOTIFICATION_ID = 1001
         private const val TICK_INTERVAL_MS = 1_000L
+        // MediaMuxer's native remux path can, on a bad stream, block forever
+        // rather than throw (see the watchdog note in endRecording()) --
+        // generous enough for a real WAL, short enough that the UI/foreground
+        // service never looks stuck to the user.
+        private const val FINALIZE_TIMEOUT_MS = 20_000L
 
         fun startIntent(context: Context): Intent = Intent(context, RecordingService::class.java).setAction(ACTION_START)
         fun stopIntent(context: Context): Intent = Intent(context, RecordingService::class.java).setAction(ACTION_STOP)
@@ -164,7 +174,44 @@ class RecordingService : LifecycleService() {
             // finalize -- neither should wait on the other.
             val sttCloseJob = stt?.let { launch { runCatching { it.close() } } }
 
-            withContext(Dispatchers.IO) {
+            val finalizeSucceeded = runFinalizeWithWatchdog(app, session, elapsedMs)
+            if (finalizeSucceeded) {
+                UploadWorker.enqueue(applicationContext, session.sessionId)
+            }
+            // A false/timed-out result deliberately leaves audio.wal in place
+            // with no meta.json written -- SessionStore.findUnfinalizedSessions()
+            // picks it up as an orphaned recording and VoiceCaptureApp retries
+            // the remux on next app launch. The session simply won't appear
+            // in the list until then, per docs/audio-wal.md's recovery model.
+
+            sttCloseJob?.join()
+            jobsToCancel.forEach { it.cancel() }
+
+            RecordingStateHolder.update { it.copy(isRecording = false, elapsedMs = elapsedMs) }
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
+    /**
+     * Runs WAL-to-ogg finalization + meta.json write on its own thread and
+     * waits on it with a timeout, rather than just dispatching onto
+     * [Dispatchers.IO] and hoping for the best. This distinction matters:
+     * [AudioEngine.finalizeToOgg] ends in a native `MediaMuxer.stop()` call,
+     * and a native call blocked inside a coroutine doesn't respond to
+     * coroutine cancellation -- cancellation only takes effect at a
+     * suspension point, which a synchronous native call never reaches. Only
+     * waiting on a *separate* thread via a genuinely suspending
+     * [CompletableDeferred.await] lets [withTimeoutOrNull] actually give up
+     * and let the service move on, even if that background thread stays
+     * stuck. The leaked thread is an acceptable tradeoff against the UI
+     * hanging forever -- see the incident this guards against in the
+     * `AudioEngine.probeOpusCodecConfig` fix.
+     */
+    private suspend fun runFinalizeWithWatchdog(app: VoiceCaptureApp, session: SessionHandle, elapsedMs: Long): Boolean {
+        val outcome = CompletableDeferred<Boolean>()
+        thread(name = "finalize-${session.sessionId}") {
+            val result = runCatching {
                 val walFile = app.sessionStore.walFile(session.dir)
                 val oggFile = app.sessionStore.oggFile(session.dir)
                 audioEngine.finalizeToOgg(walFile, oggFile)
@@ -177,15 +224,19 @@ class RecordingService : LifecycleService() {
                 )
                 app.sessionStore.setUploadState(session.dir, UploadState.QUEUED)
             }
-            UploadWorker.enqueue(applicationContext, session.sessionId)
-
-            sttCloseJob?.join()
-            jobsToCancel.forEach { it.cancel() }
-
-            RecordingStateHolder.update { it.copy(isRecording = false, elapsedMs = elapsedMs) }
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            result.onFailure { e -> Log.e(TAG, "finalize failed for ${session.sessionId}", e) }
+            outcome.complete(result.isSuccess)
         }
+
+        val finished = withTimeoutOrNull(FINALIZE_TIMEOUT_MS) { outcome.await() }
+        if (finished == null) {
+            Log.e(
+                TAG,
+                "finalize timed out after ${FINALIZE_TIMEOUT_MS}ms for ${session.sessionId}; " +
+                    "giving up waiting so the UI doesn't hang -- audio.wal is left for recovery on next launch",
+            )
+        }
+        return finished == true
     }
 
     private fun createNotificationChannel() {

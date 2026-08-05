@@ -57,6 +57,13 @@ class AudioEngine(
     private var captureThread: Thread? = null
     @Volatile private var recording = false
 
+    // Encoder presentation timestamps are relative to this, not to the
+    // device's boot clock -- otherwise a device with a long uptime bakes a
+    // large, meaningless start offset into the muxed audio.ogg's container
+    // metadata (harmless for decoding, but confusing duration/seek behavior
+    // in some players and downstream tooling that trusts container timing).
+    @Volatile private var recordingStartNanos: Long = 0L
+
     private val channelConfig =
         if (channelCount == 1) AudioFormat.CHANNEL_IN_MONO else AudioFormat.CHANNEL_IN_STEREO
 
@@ -98,6 +105,7 @@ class AudioEngine(
         walWriter = OpusFrameWal.Writer(walFile, OpusFrameWal.Header(sampleRateHz, channelCount))
         audioRecord = record
         encoder = codec
+        recordingStartNanos = System.nanoTime()
 
         record.startRecording()
         codec.start()
@@ -134,16 +142,17 @@ class AudioEngine(
         val inputBuffer = codec.getInputBuffer(inputIndex) ?: return
         inputBuffer.clear()
         inputBuffer.put(pcm, 0, length)
-        val presentationTimeUs = System.nanoTime() / 1000
-        codec.queueInputBuffer(inputIndex, 0, length, presentationTimeUs, 0)
+        codec.queueInputBuffer(inputIndex, 0, length, elapsedPresentationTimeUs(), 0)
     }
 
     private fun feedEndOfStream(codec: MediaCodec) {
         val inputIndex = codec.dequeueInputBuffer(TIMEOUT_US)
         if (inputIndex >= 0) {
-            codec.queueInputBuffer(inputIndex, 0, 0, System.nanoTime() / 1000, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+            codec.queueInputBuffer(inputIndex, 0, 0, elapsedPresentationTimeUs(), MediaCodec.BUFFER_FLAG_END_OF_STREAM)
         }
     }
+
+    private fun elapsedPresentationTimeUs(): Long = (System.nanoTime() - recordingStartNanos) / 1_000
 
     private fun drainOutput(codec: MediaCodec, endOfStream: Boolean) {
         val bufferInfo = MediaCodec.BufferInfo()

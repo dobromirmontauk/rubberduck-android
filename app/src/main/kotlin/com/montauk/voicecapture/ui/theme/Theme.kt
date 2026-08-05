@@ -1,6 +1,5 @@
 package com.montauk.voicecapture.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -40,7 +39,10 @@ private val AppTypography = Typography(
 
 @Composable
 fun VoiceCaptureTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    // Always dark, not tied to the system setting -- see the rationale above.
+    // A one-handed, glanced-at-while-walking app doesn't benefit from
+    // following a system light mode the way a reading app would.
+    darkTheme: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val colors = if (darkTheme) DarkColors else LightColors
