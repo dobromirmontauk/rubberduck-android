@@ -19,6 +19,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.montauk.voicecapture.VoiceCaptureApp
+import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 
 /**
@@ -31,6 +32,7 @@ fun AppNavHost(
     startDestination: String,
     onNewSessionTapped: () -> Unit,
     onStopRecording: () -> Unit,
+    onSetMode: (RecordingMode) -> Unit = {},
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
@@ -87,6 +89,7 @@ fun AppNavHost(
         ) {
             composable(Routes.RECORDING) {
                 RecordingScreen(
+                    onSetMode = onSetMode,
                     onStopRecording = {
                         onStopRecording()
                         // Pop up to (and including) any existing "sessions"

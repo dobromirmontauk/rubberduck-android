@@ -17,7 +17,12 @@ import com.montauk.voicecapture.audio.AudioEngine
 import com.montauk.voicecapture.audio.MicLevelMeter
 import com.montauk.voicecapture.session.LiveTranscriptLine
 import com.montauk.voicecapture.session.LiveTranscriptWriter
+import com.montauk.voicecapture.session.ModeChange
+import com.montauk.voicecapture.session.ModeEventWriter
+import com.montauk.voicecapture.session.RecordingMode
+import com.montauk.voicecapture.session.RecordingModeStateMachine
 import com.montauk.voicecapture.session.SessionHandle
+import com.montauk.voicecapture.session.SessionModeEntry
 import com.montauk.voicecapture.session.UploadState
 import com.montauk.voicecapture.stt.StreamingSttClient
 import com.montauk.voicecapture.upload.UploadWorker
@@ -46,6 +51,8 @@ class RecordingService : LifecycleService() {
     companion object {
         const val ACTION_START = "com.montauk.voicecapture.action.START"
         const val ACTION_STOP = "com.montauk.voicecapture.action.STOP"
+        const val ACTION_SET_MODE = "com.montauk.voicecapture.action.SET_MODE"
+        const val EXTRA_MODE = "mode"
 
         private const val TAG = "RecordingService"
         private const val NOTIFICATION_CHANNEL_ID = "recording"
@@ -59,6 +66,8 @@ class RecordingService : LifecycleService() {
 
         fun startIntent(context: Context): Intent = Intent(context, RecordingService::class.java).setAction(ACTION_START)
         fun stopIntent(context: Context): Intent = Intent(context, RecordingService::class.java).setAction(ACTION_STOP)
+        fun setModeIntent(context: Context, mode: RecordingMode): Intent =
+            Intent(context, RecordingService::class.java).setAction(ACTION_SET_MODE).putExtra(EXTRA_MODE, mode.wireValue)
     }
 
     private lateinit var audioEngine: AudioEngine
@@ -66,6 +75,9 @@ class RecordingService : LifecycleService() {
     private var startElapsedRealtimeMs: Long = 0L
     private var sttClient: StreamingSttClient? = null
     private var sttJobs: List<Job> = emptyList()
+
+    /** Mode history for the session currently recording (or just finished) -- reset in [beginRecording]. */
+    private var modeStateMachine = RecordingModeStateMachine()
 
     /** Decides the "(silence)" hint independent of STT connection state -- see class KDoc there. */
     private val silenceDetector = SilenceDetector()
@@ -81,6 +93,7 @@ class RecordingService : LifecycleService() {
         when (intent?.action) {
             ACTION_START -> beginRecording()
             ACTION_STOP -> endRecording()
+            ACTION_SET_MODE -> setMode(intent)
         }
         return START_NOT_STICKY
     }
@@ -94,6 +107,8 @@ class RecordingService : LifecycleService() {
 
         TranscriptStateHolder.reset()
         silenceDetector.reset()
+        modeStateMachine = RecordingModeStateMachine()
+
         // Set before audioEngine.start() so the very first mic-level window
         // has a correct (near-zero) baseline instead of measuring against the
         // stale value from whatever this field last held.
@@ -118,10 +133,33 @@ class RecordingService : LifecycleService() {
         audioEngine.start(walFile)
         startSttPipeline(stt, session)
 
-        RecordingStateHolder.update { it.copy(isRecording = true, sessionId = session.sessionId, elapsedMs = 0L) }
+        RecordingStateHolder.update {
+            it.copy(isRecording = true, sessionId = session.sessionId, elapsedMs = 0L, mode = modeStateMachine.currentMode)
+        }
+        // Every mode change, including the initial one at session start, is an
+        // event line in live-transcript.jsonl -- see RecordingModeStateMachine.
+        writeModeEvent(session, modeStateMachine.history.single())
 
         startForeground(NOTIFICATION_ID, buildNotification(elapsedMs = 0L))
         startTicker()
+    }
+
+    /** Handles [ACTION_SET_MODE]: switchable mid-session, a no-op unless the mode actually changes. */
+    private fun setMode(intent: Intent) {
+        val session = currentSession ?: return
+        val wireValue = intent.getStringExtra(EXTRA_MODE) ?: return
+        val mode = RecordingMode.fromWireValue(wireValue) ?: return
+        val elapsedMs = SystemClock.elapsedRealtime() - startElapsedRealtimeMs
+        val change = modeStateMachine.select(mode, atMs = elapsedMs) ?: return
+        RecordingStateHolder.update { it.copy(mode = change.mode) }
+        writeModeEvent(session, change)
+    }
+
+    private fun writeModeEvent(session: SessionHandle, change: ModeChange) {
+        val app = application as VoiceCaptureApp
+        lifecycleScope.launch(Dispatchers.IO) {
+            app.sessionStore.transcriptFile(session.dir).appendText(ModeEventWriter.encodeLine(change) + "\n")
+        }
     }
 
     /** Connects the STT client and fans its output into the UI state + `live-transcript.jsonl`. */
@@ -245,6 +283,7 @@ class RecordingService : LifecycleService() {
                     durationMs = elapsedMs,
                     deviceModel = Build.MODEL,
                     appVersion = app.appVersionName(),
+                    modes = modeStateMachine.history.map { SessionModeEntry(it.tMs, it.mode.wireValue) },
                 )
                 app.sessionStore.setUploadState(session.dir, UploadState.QUEUED)
             }

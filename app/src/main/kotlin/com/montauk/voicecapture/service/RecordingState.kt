@@ -1,5 +1,6 @@
 package com.montauk.voicecapture.service
 
+import com.montauk.voicecapture.session.RecordingMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -8,6 +9,7 @@ data class RecordingUiState(
     val isRecording: Boolean = false,
     val sessionId: String? = null,
     val elapsedMs: Long = 0L,
+    val mode: RecordingMode = RecordingMode.DEFAULT,
 )
 
 /**

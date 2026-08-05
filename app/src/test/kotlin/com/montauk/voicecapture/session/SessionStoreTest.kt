@@ -156,4 +156,44 @@ class SessionStoreTest {
 
         assertEquals(emptyList<LiveTranscriptLine>(), store.readTranscriptLines(handle.sessionId))
     }
+
+    @Test
+    fun `readTranscriptLines skips mode event lines interleaved with transcript lines`() {
+        val handle = store.createSession(Date())
+        val line1 = LiveTranscriptLine(0L, 1_000L, "first line", final = true)
+        val line2 = LiveTranscriptLine(1_000L, 2_500L, "second line", final = true)
+        store.transcriptFile(handle.dir).writeText(
+            ModeEventWriter.encodeLine(ModeChange(0L, RecordingMode.LISTEN)) + "\n" +
+                LiveTranscriptWriter.encodeLine(line1) + "\n" +
+                ModeEventWriter.encodeLine(ModeChange(5_000L, RecordingMode.LISTEN)) + "\n" +
+                LiveTranscriptWriter.encodeLine(line2) + "\n",
+        )
+
+        val lines = store.readTranscriptLines(handle.sessionId)
+
+        assertEquals(listOf(line1, line2), lines)
+    }
+
+    @Test
+    fun `writeMeta defaults modes to the initial Listen entry when not provided`() {
+        val handle = store.createSession(Date())
+        store.oggFile(handle.dir).writeText("ogg")
+
+        store.writeMeta(handle, durationMs = 1_000L, deviceModel = "d", appVersion = "v")
+
+        val meta = store.readMeta(handle.sessionId)
+        assertEquals(listOf(SessionModeEntry(0L, "listen")), meta?.modes)
+    }
+
+    @Test
+    fun `writeMeta round-trips an explicit mode history`() {
+        val handle = store.createSession(Date())
+        store.oggFile(handle.dir).writeText("ogg")
+        val modes = listOf(SessionModeEntry(0L, "listen"), SessionModeEntry(12_000L, "listen"))
+
+        store.writeMeta(handle, durationMs = 20_000L, deviceModel = "d", appVersion = "v", modes = modes)
+
+        val meta = store.readMeta(handle.sessionId)
+        assertEquals(modes, meta?.modes)
+    }
 }

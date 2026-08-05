@@ -11,6 +11,7 @@ import androidx.core.content.ContextCompat
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingService
 import com.montauk.voicecapture.service.RecordingStateHolder
+import com.montauk.voicecapture.session.RecordingMode
 
 class MainActivity : ComponentActivity() {
 
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
                 startDestination = startDestination,
                 onNewSessionTapped = ::onRecordTapped,
                 onStopRecording = ::stopRecordingService,
+                onSetMode = ::setRecordingMode,
             )
         }
     }
@@ -68,5 +70,9 @@ class MainActivity : ComponentActivity() {
 
     private fun stopRecordingService() {
         ContextCompat.startForegroundService(this, RecordingService.stopIntent(this))
+    }
+
+    private fun setRecordingMode(mode: RecordingMode) {
+        ContextCompat.startForegroundService(this, RecordingService.setModeIntent(this, mode))
     }
 }

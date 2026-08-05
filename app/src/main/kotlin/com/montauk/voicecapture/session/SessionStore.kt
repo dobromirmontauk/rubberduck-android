@@ -84,6 +84,7 @@ class SessionStore(private val baseDir: File) {
         durationMs: Long,
         deviceModel: String,
         appVersion: String,
+        modes: List<SessionModeEntry> = listOf(SessionModeEntry(0L, RecordingMode.DEFAULT.wireValue)),
     ) {
         val meta = SessionMeta(
             sessionId = handle.sessionId,
@@ -92,6 +93,7 @@ class SessionStore(private val baseDir: File) {
             device = deviceModel,
             appVersion = appVersion,
             stt = null,
+            modes = modes,
             schemaVersion = 1,
         )
         metaFile(handle.dir).writeText(json.encodeToString(meta))
