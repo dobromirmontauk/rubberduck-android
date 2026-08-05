@@ -85,6 +85,11 @@ android {
     // the STT integration harness needs to tolerate, not choke on).
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Robolectric (vn-edu.35) needs the merged manifest + app
+        // resources on the unit-test classpath to inflate the real theme,
+        // strings, and the ".VoiceCaptureApp" Application declared in
+        // AndroidManifest.xml.
+        unitTests.isIncludeAndroidResources = true
     }
 
     packaging {
@@ -116,6 +121,16 @@ android {
 tasks.withType<Test>().configureEach {
     if (name != "integrationTest") {
         exclude("**/stt/integration/**")
+    }
+    // Compose interaction tests (vn-edu.35, AppNavHostInteractionTest) need
+    // androidx.compose.ui:ui-test-manifest's merged-in host Activity to launch
+    // createComposeRule()'s content -- that library is debugImplementation-only
+    // on purpose (shipping a test-only Activity declaration in the *release*
+    // manifest would be worse than just not re-running this suite under the
+    // release unit-test variant). The same AppNavHost/screens this exercises are
+    // already fully covered by testDebugUnitTest.
+    if (name == "testReleaseUnitTest") {
+        exclude("**/AppNavHostInteractionTest.class")
     }
 }
 
@@ -159,4 +174,9 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
+    // Compose interaction tests on Robolectric (vn-edu.35) -- JVM-only, no emulator/device.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

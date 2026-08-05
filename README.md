@@ -162,6 +162,42 @@ Both fall back to a no-op implementation (via `SttClientFactory` /
 `BundleUploaderFactory`) whenever their secret isn't configured -- see
 "Configuring secrets for the live demo" above.
 
+## UI tests (Robolectric)
+
+`app/src/test/kotlin/com/montauk/voicecapture/ui/AppNavHostInteractionTest.kt`
+(bead vn-edu.35) drives the real `AppNavHost` nav graph + real screens on the
+JVM via Robolectric + Compose's `createComposeRule()` -- no emulator, no
+device. It runs in the default `./gradlew test` (part of `testDebugUnitTest`).
+
+- Seeds on-disk session fixtures directly through `SessionStore` (see
+  `testutil/SessionFixtures.kt`) and drives `RecordingStateHolder` /
+  `TranscriptStateHolder` (the same global singletons `RecordingService`
+  publishes to) instead of starting a real foreground service.
+- Pinned to `@Config(sdk = [34])` for a deterministic Robolectric Android
+  version, independent of `compileSdk`/`targetSdk`.
+- Excluded from `testReleaseUnitTest` specifically (see the `build.gradle.kts`
+  comment next to `exclude("**/AppNavHostInteractionTest.class")`) --
+  `androidx.compose.ui:ui-test-manifest` is `debugImplementation`-only on
+  purpose, since shipping its test-only host `Activity` declaration in the
+  *release* manifest would be worse than skipping this one suite under the
+  release unit-test variant. The same code is already fully exercised by
+  `testDebugUnitTest`.
+- `sessionsListRendersAboveBottomAnchoredNav`, `tappingASessionOpensDetail`,
+  and `stopReturnsToSessionsWithNewSessionVisible` are the tests that catch
+  the vn-edu.33 nav regression. Reproduced while writing this suite (before
+  vn-edu.33's fix had landed): the debug-only "New Session" bottom-nav tab
+  measured/placed itself across the *entire* screen height instead of the
+  nav bar's own ~80dp band. That both misplaced the nav bar (caught by the
+  first test's bounds assertion, e.g. `nav bottom=275.0, root bottom=470.0`)
+  and silently intercepted taps meant for content behind it (the second and
+  third tests failed with `The component is not displayed!` on the row/tab
+  they clicked past). To replay that failure locally: `git stash`, `git
+  revert -n <vn-edu.33 commit>` (or hand-revert `BottomNavBar.kt`'s
+  `DebugNewSessionItem` to drop its `Modifier.fillMaxHeight()`), rerun
+  `./gradlew testDebugUnitTest --tests "*AppNavHostInteractionTest"`, then
+  `git checkout -- app/src/main/kotlin/com/montauk/voicecapture/ui/BottomNavBar.kt`
+  (or `git stash pop`) to restore the fix.
+
 ## Toolchain notes for the next agent
 
 - Built and tested on this machine with **Temurin JDK 21** (the system
