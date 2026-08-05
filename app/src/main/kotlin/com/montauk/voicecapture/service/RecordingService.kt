@@ -29,10 +29,14 @@ import com.montauk.voicecapture.session.SessionHandle
 import com.montauk.voicecapture.session.SessionModeEntry
 import com.montauk.voicecapture.session.UploadState
 import com.montauk.voicecapture.stt.StreamingSttClient
+import com.montauk.voicecapture.tags.TagCoordinator
+import com.montauk.voicecapture.tags.TagsEventWriter
 import com.montauk.voicecapture.upload.UploadWorker
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -83,6 +87,14 @@ class RecordingService : LifecycleService() {
         // generous enough for a real WAL, short enough that the UI/foreground
         // service never looks stuck to the user.
         private const val FINALIZE_TIMEOUT_MS = 20_000L
+        // Generous relative to how rarely final lines actually arrive (at
+        // most a few per minute of speech) -- this is slack for the pump to
+        // catch up after one slow scorer call, not a real backpressure limit.
+        private const val TAG_LINE_CHANNEL_CAPACITY = 32
+        // Comfortably longer than AnthropicTagScorer's own 15s read timeout,
+        // so a well-behaved scorer call always gets to finish and write its
+        // event line before this gives up waiting on it.
+        private const val TAG_PUMP_SHUTDOWN_TIMEOUT_MS = 20_000L
 
         fun startIntent(context: Context, injectAudio: String? = null): Intent =
             Intent(context, RecordingService::class.java).setAction(ACTION_START).apply {
@@ -98,6 +110,21 @@ class RecordingService : LifecycleService() {
     private var startElapsedRealtimeMs: Long = 0L
     private var sttClient: StreamingSttClient? = null
     private var sttJobs: List<Job> = emptyList()
+
+    /** One entry per newly-finalized transcript line, drained by [tagPumpJob] -- see [beginRecording]. */
+    private data class FinalTagLine(val text: String, val endMs: Long)
+
+    /**
+     * Decouples tag scoring (bead vn-edu.38) from the STT partials collector:
+     * [startSttPipeline] only ever does a non-blocking [Channel.trySend] here,
+     * same pattern as [com.montauk.voicecapture.stt.AssemblyAiStreamingSttClient.sendPcm]'s
+     * `pcmChannel` -- a slow or hung [com.montauk.voicecapture.tags.TagScorer]
+     * call (e.g. Anthropic over the network) can only delay this queue's own
+     * drain, never the transcript pane or `live-transcript.jsonl` writes.
+     */
+    private var tagLineChannel: Channel<FinalTagLine>? = null
+    private var tagPumpJob: Job? = null
+    private var tagCoordinator: TagCoordinator? = null
 
     /** Mode history for the session currently recording (or just finished) -- reset in [beginRecording]. */
     private var modeStateMachine = RecordingModeStateMachine()
@@ -129,8 +156,11 @@ class RecordingService : LifecycleService() {
         currentSession = session
 
         TranscriptStateHolder.reset()
+        TagsStateHolder.reset()
         silenceDetector.reset()
         modeStateMachine = RecordingModeStateMachine()
+
+        startTagPipeline(app, session)
 
         // Set before audioEngine.start() so the very first mic-level window
         // has a correct (near-zero) baseline instead of measuring against the
@@ -243,6 +273,11 @@ class RecordingService : LifecycleService() {
                         val line = LiveTranscriptLine(partial.startMs, partial.endMs, partial.text, final = true)
                         app.sessionStore.transcriptFile(session.dir).appendText(LiveTranscriptWriter.encodeLine(line) + "\n")
                     }
+                    // Non-blocking hand-off (bead vn-edu.38) -- see tagLineChannel's
+                    // KDoc. DROP_OLDEST means a saturated tag pump (e.g. a slow
+                    // AnthropicTagScorer call) sheds old lines rather than ever
+                    // making this collector wait.
+                    tagLineChannel?.trySend(FinalTagLine(partial.text, partial.endMs))
                 }
             }
         }
@@ -250,6 +285,30 @@ class RecordingService : LifecycleService() {
             runCatching { stt.connect(AudioEngine.DEFAULT_SAMPLE_RATE_HZ, channelCount = 1) }
         }
         sttJobs = listOf(statusJob, partialsJob, connectJob)
+    }
+
+    /**
+     * Starts the tag-scoring pipeline (bead vn-edu.38): a dedicated pump
+     * coroutine drains [tagLineChannel] serially (so [TagCoordinator]/
+     * [com.montauk.voicecapture.tags.TagTracker], neither of which is
+     * thread-safe, only ever see one line at a time) and, whenever the
+     * displayed-tags set actually changes, publishes it to [TagsStateHolder]
+     * and appends a `tags` event line to `live-transcript.jsonl` -- the
+     * exact same "publish to UI state, then persist" order [writeModeEvent]
+     * uses for mode changes.
+     */
+    private fun startTagPipeline(app: VoiceCaptureApp, session: SessionHandle) {
+        val coordinator = TagCoordinator(app.newTagScorer())
+        tagCoordinator = coordinator
+        val channel = Channel<FinalTagLine>(capacity = TAG_LINE_CHANNEL_CAPACITY, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        tagLineChannel = channel
+        tagPumpJob = lifecycleScope.launch(Dispatchers.IO) {
+            for (line in channel) {
+                val changed = runCatching { coordinator.onFinalLine(line.text, line.endMs) }.getOrNull() ?: continue
+                TagsStateHolder.update(changed)
+                app.sessionStore.transcriptFile(session.dir).appendText(TagsEventWriter.encodeLine(line.endMs, changed) + "\n")
+            }
+        }
     }
 
     private fun startTicker() {
@@ -278,10 +337,24 @@ class RecordingService : LifecycleService() {
         val jobsToCancel = sttJobs
         sttJobs = emptyList()
 
+        // Closing (not just cancelling) the channel lets the pump finish
+        // writing out whatever it's already mid-scoring before the for-loop
+        // over the channel ends on its own -- cancelling the job outright
+        // could otherwise cut off a tags event line that was about to land.
+        tagLineChannel?.close()
+        tagLineChannel = null
+        val tagJobToJoin = tagPumpJob
+        tagPumpJob = null
+        tagCoordinator = null
+
         lifecycleScope.launch {
             // Close the STT socket in parallel with the (independent) audio
             // finalize -- neither should wait on the other.
             val sttCloseJob = stt?.let { launch { runCatching { it.close() } } }
+            // Bounded wait: a hung scorer call must never delay the service
+            // from stopping -- see TagCoordinator/AnthropicTagScorer's own
+            // "never blocks" contract; this is just defense in depth.
+            val tagPumpCloseJob = tagJobToJoin?.let { launch { withTimeoutOrNull(TAG_PUMP_SHUTDOWN_TIMEOUT_MS) { it.join() } } }
 
             val finalizeSucceeded = runFinalizeWithWatchdog(app, session, elapsedMs)
             // No GitHub token configured (bead vn-edu.29: recording is never gated on
@@ -298,6 +371,7 @@ class RecordingService : LifecycleService() {
             // in the list until then, per docs/audio-wal.md's recovery model.
 
             sttCloseJob?.join()
+            tagPumpCloseJob?.join()
             jobsToCancel.forEach { it.cancel() }
 
             RecordingStateHolder.update { it.copy(isRecording = false, elapsedMs = elapsedMs) }

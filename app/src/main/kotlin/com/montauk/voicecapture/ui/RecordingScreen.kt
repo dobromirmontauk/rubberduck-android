@@ -1,7 +1,14 @@
 package com.montauk.voicecapture.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -9,7 +16,6 @@ import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,7 +25,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.items
@@ -33,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -57,11 +63,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.montauk.voicecapture.audio.LoudnessVisualizer
 import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.service.RecordingStateHolder
+import com.montauk.voicecapture.service.TagsStateHolder
 import com.montauk.voicecapture.service.TranscriptLine
 import com.montauk.voicecapture.service.TranscriptStateHolder
 import com.montauk.voicecapture.service.TranscriptUiState
 import com.montauk.voicecapture.stt.SttConnectionState
-import com.montauk.voicecapture.topics.TopicCloud
+import com.montauk.voicecapture.tags.DisplayedTag
+import com.montauk.voicecapture.tags.TagTier
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -69,7 +77,7 @@ import kotlin.math.roundToInt
 /**
  * The full-glance recording screen: huge timer, LIVE/OFFLINE + Bluetooth
  * chips, a mic-level bar, the mode switcher, the last couple of transcript
- * lines, topic chips, and a large inset STOP button anchored to the bottom
+ * lines, MAJOR-topic tag chips, and a large inset STOP button anchored to the bottom
  * (bead vn-edu.32 -- a floating button with clear margins, not a full-bleed
  * slab flush with the screen edge, which read as sitting exactly where the
  * app's own bottom nav normally lives). No bottom nav here -- this screen is
@@ -81,9 +89,7 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
     val recordingState by RecordingStateHolder.state.collectAsStateWithLifecycle()
     val transcript by TranscriptStateHolder.state.collectAsStateWithLifecycle()
     val hasBluetoothMic = remember { hasBluetoothInputDevice(context) }
-    val topics = remember(transcript.finalLines, recordingState.elapsedMs) {
-        TopicCloud.compute(transcript.finalLines.map { TopicCloud.Line(it.text, it.endMs) }, nowMs = recordingState.elapsedMs)
-    }
+    val tags by TagsStateHolder.state.collectAsStateWithLifecycle()
 
     VoiceCaptureTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -106,7 +112,7 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
                     Spacer(modifier = Modifier.height(16.dp))
                     LiveTranscriptPane(transcript = transcript, modifier = Modifier.weight(1f))
                     Spacer(modifier = Modifier.height(16.dp))
-                    TopicChipsRow(topics = topics)
+                    TagChipsRow(tags = tags)
                     // Extra air below the chips row (bead vn-edu.32) so the inset STOP
                     // button reads as floating above content, not touching the chips.
                     Spacer(modifier = Modifier.height(24.dp))
@@ -392,26 +398,59 @@ private fun TranscriptRowText(row: TranscriptRow) {
     }
 }
 
-/** Topic chips sized by weight, largest first -- see [TopicCloud]. */
-@OptIn(ExperimentalLayoutApi::class)
+/**
+ * Up to 3 confidence-ranked MAJOR-topic chips (bead vn-edu.38, supersedes
+ * the v1 frequency-chip cloud) -- [tags] is [TagsStateHolder]'s current
+ * displayed set, already ranked and size-classed by
+ * [com.montauk.voicecapture.tags.TagTracker].
+ *
+ * Each of the 3 rank slots is its own [AnimatedContent] keyed on *what
+ * currently occupies that slot* rather than on tag identity: a rank change
+ * (a stronger candidate displacing a weaker one, or a tag simply climbing
+ * from rank 2 to rank 1) reads as that slot's chip shrinking/fading out and
+ * the new one growing/fading in, which is the "shrink away, replaced by a
+ * stronger candidate" motion the spec asks for -- without needing a full
+ * move-animation API for what is only ever a 3-item list. [Modifier.animateContentSize]
+ * on the row absorbs the width change as chips of different size classes
+ * enter/exit. Durations are short (160-220ms) and opacity/scale-only --
+ * deliberately subtle rather than a bouncy/springy default, per the
+ * reduced-motion guidance.
+ */
 @Composable
-private fun TopicChipsRow(topics: List<TopicCloud.Topic>) {
-    if (topics.isEmpty()) return
-    FlowRow(
-        modifier = Modifier.fillMaxWidth(),
+private fun TagChipsRow(tags: List<DisplayedTag>) {
+    if (tags.isEmpty()) return
+    Row(
+        modifier = Modifier.fillMaxWidth().animateContentSize(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        topics.forEach { topic -> TopicChip(topic) }
+        for (slot in 0 until MAX_DISPLAYED_TAG_SLOTS) {
+            key(slot) {
+                AnimatedContent(
+                    targetState = tags.getOrNull(slot),
+                    transitionSpec = {
+                        (fadeIn(tween(TAG_CHIP_ENTER_MS)) + scaleIn(initialScale = TAG_CHIP_SCALE_FROM, animationSpec = tween(TAG_CHIP_ENTER_MS)))
+                            .togetherWith(fadeOut(tween(TAG_CHIP_EXIT_MS)) + scaleOut(targetScale = TAG_CHIP_SCALE_FROM, animationSpec = tween(TAG_CHIP_EXIT_MS)))
+                    },
+                    label = "tag-slot-$slot",
+                ) { tag ->
+                    if (tag != null) TagChip(tag)
+                }
+            }
+        }
     }
 }
 
+private const val MAX_DISPLAYED_TAG_SLOTS = 3
+private const val TAG_CHIP_ENTER_MS = 220
+private const val TAG_CHIP_EXIT_MS = 160
+private const val TAG_CHIP_SCALE_FROM = 0.85f
+
 @Composable
-private fun TopicChip(topic: TopicCloud.Topic) {
-    val (fontSize, verticalPadding) = when (topic.tier) {
-        TopicCloud.Tier.LARGE -> 18.sp to 10.dp
-        TopicCloud.Tier.MEDIUM -> 15.sp to 8.dp
-        TopicCloud.Tier.SMALL -> 13.sp to 6.dp
+private fun TagChip(tag: DisplayedTag) {
+    val (fontSize, verticalPadding) = when (tag.tier) {
+        TagTier.PRIMARY -> 18.sp to 10.dp
+        TagTier.SECONDARY -> 15.sp to 8.dp
+        TagTier.TERTIARY -> 13.sp to 6.dp
     }
     Box(
         modifier = Modifier
@@ -419,7 +458,7 @@ private fun TopicChip(topic: TopicCloud.Topic) {
             .padding(horizontal = 14.dp, vertical = verticalPadding),
     ) {
         Text(
-            text = topic.word,
+            text = tag.tag,
             fontSize = fontSize,
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -505,12 +544,11 @@ private fun LoudnessMeterBarPreviewLoud() {
     }
 }
 
-/** Synthetic topic chips, largest-weight first, for the bottom-of-screen preview below. */
-private fun syntheticTopics(): List<TopicCloud.Topic> = listOf(
-    TopicCloud.Topic("budget", 4.0, TopicCloud.Tier.LARGE),
-    TopicCloud.Topic("timeline", 3.0, TopicCloud.Tier.MEDIUM),
-    TopicCloud.Topic("vendor", 2.0, TopicCloud.Tier.MEDIUM),
-    TopicCloud.Topic("permit", 1.0, TopicCloud.Tier.SMALL),
+/** Synthetic tag chips, most confident first, for the bottom-of-screen preview below. */
+private fun syntheticTags(): List<DisplayedTag> = listOf(
+    DisplayedTag("budget", 0.9, rank = 1, tier = TagTier.PRIMARY),
+    DisplayedTag("timeline", 0.65, rank = 2, tier = TagTier.SECONDARY),
+    DisplayedTag("vendor", 0.55, rank = 3, tier = TagTier.SECONDARY),
 )
 
 /**
@@ -529,7 +567,7 @@ private fun StopBarPreview() {
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
                 verticalArrangement = Arrangement.Bottom,
             ) {
-                TopicChipsRow(topics = syntheticTopics())
+                TagChipsRow(tags = syntheticTags())
                 Spacer(modifier = Modifier.height(24.dp))
             }
             StopBar(modifier = Modifier.weight(1f), onClick = {})
@@ -580,7 +618,7 @@ private fun LiveTranscriptPaneOverlongPreview() {
             Spacer(modifier = Modifier.height(16.dp))
             LiveTranscriptPane(transcript = transcript, modifier = Modifier.weight(1f))
             Spacer(modifier = Modifier.height(16.dp))
-            TopicChipsRow(topics = syntheticTopics())
+            TagChipsRow(tags = syntheticTags())
             Spacer(modifier = Modifier.height(24.dp))
         }
     }

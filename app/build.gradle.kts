@@ -39,6 +39,11 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "ASSEMBLYAI_API_KEY", "\"${localProperty("assemblyai.apiKey", "ASSEMBLYAI_API_KEY")}\"")
+        // Live tags v2 (bead vn-edu.38): same secret pattern as
+        // assemblyai.apiKey above. Blank means "not configured" --
+        // TagScorerFactory falls back to the keyless HeuristicTagScorer
+        // rather than the app failing to build or crashing at runtime.
+        buildConfigField("String", "ANTHROPIC_API_KEY", "\"${localProperty("anthropic.apiKey", "ANTHROPIC_API_KEY")}\"")
         buildConfigField("String", "GITHUB_TOKEN", "\"${localProperty("github.token", "GITHUB_TOKEN")}\"")
         buildConfigField("String", "VAULT_OWNER", "\"${localProperty("vault.owner").ifBlank { "dobromirmontauk" }}\"")
         buildConfigField("String", "VAULT_REPO", "\"${localProperty("vault.repo").ifBlank { "voice-vault" }}\"")

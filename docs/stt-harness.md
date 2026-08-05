@@ -87,19 +87,24 @@ scoring rather than trying to reconcile "thirty five thousand" with
 On failure, the assertion message includes the actual score, the full
 script, and the full transcript.
 
-## Topic-cloud hook
+## Live-tags hook
 
-`com.montauk.voicecapture.topics.TopicCloud` already exists on `main` (Wave
-3 work landed it ahead of this bead). `AssemblyAiLiveStreamingTest` has a
-`@Ignore`d test, `kitchen remodel topic cloud surfaces expected topic
-words`, that feeds the kitchen-remodel run's final transcript segments into
-`TopicCloud.compute` and asserts >=2 of `{kitchen, remodel, contractor,
-countertop, cabinets}` land in the top 5 terms. It's left disabled because
-topic ranking depends on turn segmentation (how AssemblyAI chunks the
-transcript into `Turn`s), which can vary slightly run to run -- flip the
-`@Ignore` off once a live run's output has been eyeballed. No other wiring
-is needed; the test body is already correct against the real `TopicCloud`
-API (`TopicCloud.Line(text, endMs)` -> `TopicCloud.compute(lines, nowMs)`).
+Bead vn-edu.38 replaced the old plain word-frequency `topics/TopicCloud.kt`
+with a confidence-ranked, hysteresis-gated MAJOR-topic tracker
+(`com.montauk.voicecapture.tags.TagTracker`). `AssemblyAiLiveStreamingTest`
+has `kitchen remodel tags surface at least one expected topic via the
+keyless heuristic scorer`, which feeds the kitchen-remodel run's final
+transcript segments through the real end-to-end keyless path --
+`HeuristicTagScorer` driving a `TagCoordinator` exactly as
+`RecordingService` does -- and asserts at least one of `{kitchen, remodel,
+contractor, countertop, cabinets}` is still visible in whatever tags were
+last displayed once the whole script has played. Deliberately a lower bar
+than the old topic-cloud test's ">=2 in the top 5": the new tracker only
+surfaces up to 3 slots with a very high bar for slots 2/3 by design ("one
+strong tag beats three weak ones"), so demanding multiple simultaneous hits
+would fight the feature's own stated goal. Enabled (not `@Ignore`d) since
+it only requires *one* topic word to survive tracking, which has held up
+across live runs.
 
 ## AssemblyAI streaming behaviors worth knowing for future tests
 

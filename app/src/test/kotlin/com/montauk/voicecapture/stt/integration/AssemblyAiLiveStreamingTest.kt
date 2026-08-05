@@ -3,7 +3,8 @@ package com.montauk.voicecapture.stt.integration
 import com.montauk.voicecapture.stt.AssemblyAiStreamingSttClient
 import com.montauk.voicecapture.stt.SttConnectionState
 import com.montauk.voicecapture.stt.TranscriptPartial
-import com.montauk.voicecapture.topics.TopicCloud
+import com.montauk.voicecapture.tags.HeuristicTagScorer
+import com.montauk.voicecapture.tags.TagCoordinator
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -44,26 +45,41 @@ class AssemblyAiLiveStreamingTest {
     }
 
     /**
-     * [TopicCloud] (see `com.montauk.voicecapture.topics`) already exists on
-     * main, computing top terms over timestamped [TopicCloud.Line]s. This
-     * wires the same kitchen-remodel run's final transcript segments into it
-     * and asserts at least 2 of the script's distinct topic words ("kitchen",
-     * "remodel", "contractor", "countertop", "cabinets") land in the top 5.
-     * Enabled 2026-08-05 after a live run was reviewed: expected topic
-     * words ranked correctly in the top 5.
+     * Bead vn-edu.38 (live tags v2) replaced the old top-terms word cloud
+     * this test used to exercise ([com.montauk.voicecapture.tags.TagTracker]
+     * supersedes `topics/TopicCloud.kt`) with a confidence-ranked, hysteresis-
+     * gated MAJOR-topic tracker. This wires the same kitchen-remodel run's
+     * final transcript segments through the real end-to-end keyless path --
+     * [HeuristicTagScorer] feeding a [TagCoordinator] exactly as
+     * [com.montauk.voicecapture.service.RecordingService] does -- and asserts
+     * at least one of the script's topic words ("kitchen", "remodel",
+     * "contractor", "countertop", "cabinets") is still visible in whatever
+     * [TagCoordinator] was last displaying once the whole script has played.
+     * Deliberately a lower bar than the old test's ">=2 in the top 5": the
+     * new tracker is conservative by design ("one strong tag beats three
+     * weak ones") and only surfaces up to 3 slots with a very high bar for
+     * slots 2/3, so demanding multiple simultaneous hits would fight the
+     * feature's own stated goal rather than verify it.
      */
-
     @Test
-    fun `kitchen remodel topic cloud surfaces expected topic words`() {
-        val lines = mutableListOf<TopicCloud.Line>()
+    fun `kitchen remodel tags surface at least one expected topic via the keyless heuristic scorer`() {
+        val coordinator = TagCoordinator(HeuristicTagScorer())
+        var lastDisplayedTags: List<String> = emptyList()
         runFixtureThroughAssemblyAi(
             scriptResource = "kitchen-remodel.txt",
             wavResource = "kitchen-remodel.wav",
-            onFinals = { finals -> lines += finals.map { TopicCloud.Line(it.text, it.endMs) } },
+            onFinals = { finals ->
+                runBlocking {
+                    finals.sortedBy { it.startMs }.forEach { final ->
+                        coordinator.onFinalLine(final.text, final.endMs)?.let { displayed ->
+                            lastDisplayedTags = displayed.map { it.tag.lowercase() }
+                        }
+                    }
+                }
+            },
         )
-        val topics = TopicCloud.compute(lines, nowMs = lines.maxOf { it.endMs }).map { it.word }
-        val hits = EXPECTED_KITCHEN_TOPICS.count { it in topics }
-        assertTrue("expected >=2 of $EXPECTED_KITCHEN_TOPICS in topic cloud $topics", hits >= 2)
+        val hits = EXPECTED_KITCHEN_TOPICS.count { topic -> lastDisplayedTags.any { it.contains(topic) } }
+        assertTrue("expected >=1 of $EXPECTED_KITCHEN_TOPICS reflected in displayed tags $lastDisplayedTags", hits >= 1)
     }
 
     private fun runFixtureThroughAssemblyAi(

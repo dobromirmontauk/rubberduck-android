@@ -6,9 +6,10 @@ Someone to talk to to help think through your own thoughts. rubberduck is a
 minimal voice-first Android capture app: record, live-transcribe, ship
 sessions to voice-vault.
 
-The recording core (crash-safe WAL, session store, foreground service) plus
-live streaming transcription (AssemblyAI Universal-Streaming) and bundle
-upload (to the git-backed voice-vault, pure HTTPS) are all wired up.
+The recording core (crash-safe WAL, session store, foreground service),
+live streaming transcription (AssemblyAI Universal-Streaming), confidence-
+ranked live topic tags (Claude Haiku, keyless fallback), and bundle upload
+(to the git-backed voice-vault, pure HTTPS) are all wired up.
 
 ## Build
 
@@ -29,7 +30,7 @@ live transcription end-to-end from Android Studio. `AudioEngine` captures
 from an `AudioSource` interface rather than `AudioRecord` directly (see
 `audio/AudioSource.kt`), so a debug-only `FileAudioSource` can stand in for
 the mic and feed a recording session from a WAV file instead -- WAL, live
-transcript, mic-level meter, and topic chips all behave exactly as they
+transcript, mic-level meter, and tag chips all behave exactly as they
 would with a real mic, and the recording screen's source chip shows `FILE`
 instead of `PHONE MIC`/`BLUETOOTH` so it's obvious which one is active. Two
 bundled fixtures (`app/src/debug/assets/fixtures/`, the same 16kHz mono WAVs
@@ -70,6 +71,7 @@ add these keys to `local.properties` (gitignored, never committed):
 ```properties
 sdk.dir=/path/to/android-sdk
 assemblyai.apiKey=<your AssemblyAI API key>
+anthropic.apiKey=<your Anthropic API key>
 github.token=<a token with repo access to dobromirmontauk/voice-vault>
 # optional overrides, default to the values below:
 vault.owner=dobromirmontauk
@@ -80,7 +82,7 @@ Each key also has an environment-variable fallback for one-off builds
 without writing a secret to disk (`local.properties` wins if both are set):
 
 ```
-ASSEMBLYAI_API_KEY=... GITHUB_TOKEN=$(gh auth token) ./gradlew assembleDebug
+ASSEMBLYAI_API_KEY=... ANTHROPIC_API_KEY=... GITHUB_TOKEN=$(gh auth token) ./gradlew assembleDebug
 ```
 
 `github.token` needs `repo` scope on the private `dobromirmontauk/voice-vault`
@@ -114,6 +116,13 @@ com.montauk.voicecapture
 │   ├── StreamingSttClient.kt          interface + factory (real impl vs. no-op by API key)
 │   ├── AssemblyAiStreamingSttClient.kt  AssemblyAI Universal-Streaming v3 WebSocket client
 │   └── TurnMessage.kt                 wire-format parsing, no OkHttp dep -- plain JVM testable
+├── tags/
+│   ├── TagTracker.kt         pure-Kotlin confidence ranking/hysteresis/decay, store 10 show <=3
+│   ├── TagScorer.kt          pluggable scoring interface
+│   ├── HeuristicTagScorer.kt  keyless noun-phrase-ish fallback, no network
+│   ├── AnthropicTagScorer.kt  Claude Haiku via the Messages API, degrades to the heuristic
+│   ├── TagCoordinator.kt     rolling-tail + scorer-cadence glue in front of TagTracker
+│   └── TagsEventLine.kt      `{"event":"tags",...}` live-transcript.jsonl event line
 ├── upload/
 │   ├── BundleUploader.kt          interface + factory (real impl vs. no-op by token)
 │   ├── GitHubBundleUploader.kt    Git Data API + Git LFS batch API, one commit per session
@@ -203,7 +212,7 @@ device. It runs in the default `./gradlew test` (part of `testDebugUnitTest`).
 `app/src/test/kotlin/com/montauk/voicecapture/screenshot/KeyScreensScreenshotTest.kt`
 (bead vn-edu.34) renders five key screens -- Sessions list + bottom nav, the
 full Recording stack (timer, chips, loudness meter, mode switcher, live
-transcript, topic chips, STOP), Session detail, Settings, and Login -- via
+transcript, tag chips, STOP), Session detail, Settings, and Login -- via
 Robolectric's native-graphics renderer and diffs each against a committed
 golden PNG under `src/test/screenshot/goldens/`. No emulator, no device.
 
@@ -261,6 +270,40 @@ See the compare image at .../build/outputs/roborazzi/settings_compare.png
 Reverting the change (`git checkout -- app/src/main/kotlin/com/montauk/voicecapture/ui/SettingsScreen.kt`)
 and rerunning `verifyRoborazziDebug` goes green again -- no golden update
 needed since nothing legitimately changed.
+
+## Live tags (MAJOR-topic chips)
+
+The recording screen shows up to 3 confidence-ranked chips for the MAJOR
+topics of the current conversation (`tags/TagTracker.kt`, replacing an
+earlier plain word-frequency cloud). Chip size scales with confidence;
+chips reorder, grow, shrink, and get replaced as the conversation moves on
+-- gated by hysteresis (a real entry bar for the 1st chip, a *very* high one
+for the 2nd/3rd, a much lower exit bar, and a minimum on-screen dwell) so a
+brief dip in confidence doesn't make a chip flicker away and back.
+
+- **Scoring** (`tags/AnthropicTagScorer.kt`): every ~25s, a rolling tail of
+  the recent final transcript (plus the tags currently being tracked, so
+  the model can prefer sticking with an existing label) is sent to Claude
+  Haiku's Messages API, asking for up to 5 MAJOR topics with a 0.0-1.0
+  confidence each. At that cadence, even a 30-60 minute session costs
+  pennies. `anthropic.apiKey` in `local.properties`/`BuildConfig` follows
+  the exact same secret pattern as `assemblyai.apiKey` -- see "Configuring
+  secrets for the live demo" above.
+- **Keyless fallback** (`tags/HeuristicTagScorer.kt`): with no Anthropic key
+  configured, or if any call to it fails/returns unparseable output,
+  tagging degrades silently to a local, offline noun-phrase-ish extractor --
+  no network, no cost, conservative by design ("one strong tag beats three
+  weak ones"). Recording, transcription, and upload are all completely
+  unaffected either way; a scorer only ever feeds `TagTracker`, never the
+  audio/STT pipeline.
+- **Persistence** (`tags/TagsEventLine.kt`): every time the *displayed* set
+  changes, a `{"t_ms":...,"event":"tags","tags":[{"tag":"marathon
+  training","confidence":0.87,"rank":1}]}` line is appended to
+  `live-transcript.jsonl` -- same contract-tolerant event-line pattern as
+  mode-change events (see `session/ModeEventLine.kt`): a reader decoding
+  only transcript segments simply fails to parse this line's shape and
+  skips it. An offline organizer that cares about tags derives per-tag
+  intervals from consecutive "tags" lines.
 
 ## Toolchain notes for the next agent
 

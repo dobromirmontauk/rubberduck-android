@@ -9,6 +9,8 @@ import com.montauk.voicecapture.session.SessionStore
 import com.montauk.voicecapture.settings.AppSecretsStore
 import com.montauk.voicecapture.stt.SttClientFactory
 import com.montauk.voicecapture.stt.StreamingSttClient
+import com.montauk.voicecapture.tags.TagScorer
+import com.montauk.voicecapture.tags.TagScorerFactory
 import com.montauk.voicecapture.upload.BundleUploader
 import com.montauk.voicecapture.upload.BundleUploaderFactory
 import java.io.File
@@ -43,6 +45,15 @@ class VoiceCaptureApp : Application() {
     /** A fresh [StreamingSttClient] per recording session -- it owns one WebSocket connection's lifecycle. */
     fun newSttClient(): StreamingSttClient =
         SttClientFactory.create(secretsStore.effectiveAssemblyKey(BuildConfig.ASSEMBLYAI_API_KEY))
+
+    /**
+     * A fresh [TagScorer] per recording session (bead vn-edu.38). No
+     * settings-UI override yet, unlike the AssemblyAI key -- `anthropic.apiKey`
+     * in `local.properties`/`BuildConfig` is the only source for now;
+     * [TagScorerFactory] falls back to the keyless [com.montauk.voicecapture.tags.HeuristicTagScorer]
+     * when it's blank.
+     */
+    fun newTagScorer(): TagScorer = TagScorerFactory.create(BuildConfig.ANTHROPIC_API_KEY)
 
     fun refreshBundleUploader() {
         bundleUploader = BundleUploaderFactory.create(

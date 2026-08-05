@@ -8,12 +8,15 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
+import com.montauk.voicecapture.service.TagsStateHolder
 import com.montauk.voicecapture.service.TranscriptLine
 import com.montauk.voicecapture.service.TranscriptStateHolder
 import com.montauk.voicecapture.service.TranscriptUiState
 import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.session.UploadState
 import com.montauk.voicecapture.stt.SttConnectionState
+import com.montauk.voicecapture.tags.DisplayedTag
+import com.montauk.voicecapture.tags.TagTier
 import com.montauk.voicecapture.testutil.SessionFixtures
 import com.montauk.voicecapture.ui.AppNavHost
 import com.montauk.voicecapture.ui.Routes
@@ -66,6 +69,7 @@ class KeyScreensScreenshotTest {
         app = ApplicationProvider.getApplicationContext()
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
+        TagsStateHolder.reset()
     }
 
     @Test
@@ -115,6 +119,18 @@ class KeyScreensScreenshotTest {
                 sourceLabel = "FILE",
             )
         }
+        // Bead vn-edu.38: tag chips no longer derive synchronously from
+        // TranscriptStateHolder inside the composable (the way the old
+        // TopicCloud-based chips did) -- they come from TagsStateHolder,
+        // which only RecordingService's TagCoordinator pipeline populates.
+        // No such pipeline runs in this Robolectric render, so this golden
+        // seeds fixed tags directly, matching the transcript fixture above.
+        TagsStateHolder.update(
+            listOf(
+                DisplayedTag("kitchen remodel", 0.92, rank = 1, tier = TagTier.PRIMARY),
+                DisplayedTag("budget", 0.7, rank = 2, tier = TagTier.SECONDARY),
+            ),
+        )
 
         composeTestRule.setContent {
             AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
