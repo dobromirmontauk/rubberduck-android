@@ -45,16 +45,28 @@ internal data class TurnMessage(
  * i.e. already in the same "offset into the recording" units the vault
  * ingest contract's `t0_ms`/`t1_ms` expect. A turn with no words yet (rare,
  * very start of an utterance) falls back to 0/0.
+ *
+ * `stableText`/`unstableTail` (bead vn-edu.45) split [WordSpan.wordIsFinal]
+ * into the prefix AssemblyAI has already committed to (won't be revised
+ * further, even while the turn itself stays open) versus the still-forming
+ * tail -- `takeWhile` rather than `filter` because word finality is
+ * documented to only ever flip false-to-true moving forward through a turn's
+ * word stream, never the reverse, so the split point is a single boundary,
+ * not a scattered set.
  */
 internal fun parseTurnMessage(raw: String): TranscriptPartial? {
     val message = runCatching { turnJson.decodeFromString(TurnMessage.serializer(), raw) }.getOrNull() ?: return null
     if (message.type != "Turn") return null
     val startMs = message.words.firstOrNull()?.start ?: 0L
     val endMs = message.words.lastOrNull()?.end ?: startMs
+    val stableWords = message.words.takeWhile { it.wordIsFinal }
+    val unstableWords = message.words.drop(stableWords.size)
     return TranscriptPartial(
         text = message.transcript,
         isFinal = message.endOfTurn,
         startMs = startMs,
         endMs = endMs,
+        stableText = stableWords.joinToString(" ") { it.text },
+        unstableTail = unstableWords.joinToString(" ") { it.text },
     )
 }

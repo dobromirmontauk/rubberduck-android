@@ -55,8 +55,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -293,22 +297,47 @@ private val LOUDNESS_METER_REST_HEIGHT = 4.dp
 /** One rendered row of [LiveTranscriptPane], oldest-to-newest order matching [LazyColumn] item order. */
 private sealed interface TranscriptRow {
     data class Final(val line: TranscriptLine) : TranscriptRow
-    data class Partial(val text: String) : TranscriptRow
+    /**
+     * The current open turn (bead vn-edu.45): [stableText] is the
+     * word-level-final prefix, painted solid; [unstableTail] is the
+     * still-forming remainder, painted dimmed. Either may be blank (a fresh
+     * turn has no stable words yet; a turn about to close may have no
+     * unstable tail left).
+     */
+    data class Partial(val stableText: String, val unstableTail: String) : TranscriptRow
     object Silence : TranscriptRow
     object Placeholder : TranscriptRow
 }
 
 /**
  * All finalized lines (large, solid) plus the current in-progress partial
- * (large, dimmed) as the newest row -- or, if neither has arrived in the
- * last ~4s and the mic is quiet, a dimmed italic "(silence)" row instead. A
- * bare "Listening…" placeholder row covers the empty-session case.
+ * -- its word-level-stable prefix solid, its still-forming tail dimmed
+ * (bead vn-edu.45), so the reader sees words lock in as they're spoken
+ * instead of the whole turn staying dimmed until `end_of_turn` (which can be
+ * 45-60s+ into a continuous monologue) -- as the newest row. Or, if neither
+ * has arrived in the last ~4s and the mic is quiet, a dimmed italic
+ * "(silence)" row instead. A bare "Listening…" placeholder row covers the
+ * empty-session case.
+ *
+ * [TranscriptUiState.partialStableText]/[TranscriptUiState.partialUnstableTail]
+ * come from the STT backend's per-word finality when it's sent one; when
+ * neither is populated but [TranscriptUiState.currentPartial] is non-blank
+ * (no word-level data yet, or a caller that only sets the legacy field),
+ * this falls back to treating the whole partial as the unstable tail --
+ * exactly the pre-vn-edu.45 whole-partial-dimmed rendering.
  */
 private fun transcriptRows(transcript: TranscriptUiState): List<TranscriptRow> {
     val rows = mutableListOf<TranscriptRow>()
     transcript.finalLines.forEach { rows += TranscriptRow.Final(it) }
     when {
-        transcript.currentPartial.isNotBlank() -> rows += TranscriptRow.Partial(transcript.currentPartial)
+        transcript.currentPartial.isNotBlank() -> {
+            val hasWordLevelSplit = transcript.partialStableText.isNotBlank() || transcript.partialUnstableTail.isNotBlank()
+            rows += if (hasWordLevelSplit) {
+                TranscriptRow.Partial(transcript.partialStableText, transcript.partialUnstableTail)
+            } else {
+                TranscriptRow.Partial(stableText = "", unstableTail = transcript.currentPartial)
+            }
+        }
         transcript.silenceHintVisible -> rows += TranscriptRow.Silence
     }
     if (rows.isEmpty()) rows += TranscriptRow.Placeholder
@@ -368,7 +397,13 @@ private fun LazyListLayoutInfo.isScrolledToNewest(): Boolean {
  */
 @Composable
 private fun LiveTranscriptPane(transcript: TranscriptUiState, modifier: Modifier = Modifier) {
-    val rows = remember(transcript.finalLines, transcript.currentPartial, transcript.silenceHintVisible) {
+    val rows = remember(
+        transcript.finalLines,
+        transcript.currentPartial,
+        transcript.partialStableText,
+        transcript.partialUnstableTail,
+        transcript.silenceHintVisible,
+    ) {
         transcriptRows(transcript)
     }
     val newestFirstRows = remember(rows) { rows.asReversed() }
@@ -415,11 +450,14 @@ private fun TranscriptRowText(row: TranscriptRow) {
             style = MaterialTheme.typography.headlineMedium,
             color = MaterialTheme.colorScheme.onBackground,
         )
-        is TranscriptRow.Partial -> Text(
-            text = row.text,
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-        )
+        is TranscriptRow.Partial -> {
+            val stableColor = MaterialTheme.colorScheme.onBackground
+            val unstableColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+            Text(
+                text = partialAnnotatedString(row.stableText, row.unstableTail, stableColor, unstableColor),
+                style = MaterialTheme.typography.headlineMedium,
+            )
+        }
         TranscriptRow.Silence -> Text(
             text = "(silence)",
             style = MaterialTheme.typography.headlineMedium.copy(fontStyle = FontStyle.Italic),
@@ -430,6 +468,32 @@ private fun TranscriptRowText(row: TranscriptRow) {
             style = MaterialTheme.typography.headlineMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/**
+ * Bead vn-edu.45: one [AnnotatedString] spanning the still-open turn's
+ * word-level-stable prefix (solid, [stableColor]) and still-forming
+ * [unstableTail] (dimmed, [unstableColor]) -- a single [Text] with two
+ * [SpanStyle]s rather than two separate [Text] composables so the words
+ * keep flowing as one continuously word-wrapped paragraph (two composables
+ * would force a hard line break between them even when there's room to
+ * keep going on the same visual line, and would also reintroduce the
+ * single-tall-item-taller-than-viewport risk vn-edu.43 fixed if either half
+ * grew large on its own).
+ */
+internal fun partialAnnotatedString(
+    stableText: String,
+    unstableTail: String,
+    stableColor: Color,
+    unstableColor: Color,
+): AnnotatedString = buildAnnotatedString {
+    if (stableText.isNotBlank()) {
+        withStyle(SpanStyle(color = stableColor)) { append(stableText) }
+    }
+    if (stableText.isNotBlank() && unstableTail.isNotBlank()) append(" ")
+    if (unstableTail.isNotBlank()) {
+        withStyle(SpanStyle(color = unstableColor)) { append(unstableTail) }
     }
 }
 

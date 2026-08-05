@@ -14,6 +14,18 @@ data class TranscriptUiState(
     val finalLines: List<TranscriptLine> = emptyList(),
     /** The current in-progress (not yet `end_of_turn`) segment, dimmed in the UI; blank when there isn't one. */
     val currentPartial: String = "",
+    /**
+     * Bead vn-edu.45: word-level-final prefix of [currentPartial], painted
+     * solid/stable rather than waiting on `end_of_turn` -- see
+     * [com.montauk.voicecapture.stt.TranscriptPartial.stableText]. Blank
+     * when there's no current partial, or when the backend hasn't sent
+     * per-word finality for it yet (the UI falls back to treating all of
+     * [currentPartial] as [partialUnstableTail] in that case, same as the
+     * pre-vn-edu.45 whole-partial-dimmed rendering).
+     */
+    val partialStableText: String = "",
+    /** The still-forming tail of [currentPartial] beyond [partialStableText] -- dimmed in the UI. */
+    val partialUnstableTail: String = "",
     /** Normalized (0f..1f) RMS from [com.montauk.voicecapture.audio.MicLevelMeter], updated ~every 100ms. */
     val micLevel: Float = 0f,
     /** True when [com.montauk.voicecapture.service.SilenceDetector] says to show the "(silence)" hint. */

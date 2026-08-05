@@ -275,9 +275,18 @@ class RecordingService : LifecycleService() {
                         cleared.copy(
                             finalLines = cleared.finalLines + TranscriptLine(partial.text, partial.startMs, partial.endMs),
                             currentPartial = "",
+                            partialStableText = "",
+                            partialUnstableTail = "",
                         )
                     } else {
-                        cleared.copy(currentPartial = partial.text)
+                        // Bead vn-edu.45: thread the word-level-final split
+                        // through so the pane can paint stabilized words
+                        // solid without waiting for end_of_turn.
+                        cleared.copy(
+                            currentPartial = partial.text,
+                            partialStableText = partial.stableText,
+                            partialUnstableTail = partial.unstableTail,
+                        )
                     }
                 }
                 // Ingest contract: live-transcript.jsonl carries only immutable

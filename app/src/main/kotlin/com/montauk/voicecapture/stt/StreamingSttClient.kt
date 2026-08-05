@@ -18,6 +18,17 @@ data class TranscriptPartial(
     val isFinal: Boolean,
     val startMs: Long,
     val endMs: Long,
+    /**
+     * Bead vn-edu.45: for a still-open turn ([isFinal] false), the
+     * word-level-final prefix of [text] -- AssemblyAI's Universal-Streaming
+     * words are immutable once emitted, so this can render solid/stable
+     * without waiting for `end_of_turn`. Blank when [isFinal] is true (the
+     * whole line is already stable by then) or when the backend hasn't sent
+     * per-word finality.
+     */
+    val stableText: String = "",
+    /** The remaining still-forming tail of [text] beyond [stableText] -- renders dimmed, same as the old whole-partial treatment. */
+    val unstableTail: String = "",
 )
 
 /** Connection lifecycle of a [StreamingSttClient], surfaced to the UI as a status chip. */

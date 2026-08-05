@@ -90,6 +90,24 @@ class AssemblyAiStreamingSttClient(
         senderJob = scope.launch { pumpPcmToSocket() }
     }
 
+    /**
+     * Bead vn-edu.45 evaluated (but deliberately did not add) AssemblyAI's
+     * end-of-turn query params here -- `end_of_turn_confidence_threshold`,
+     * `min_end_of_turn_silence_when_confident`, and `max_turn_silence`
+     * (https://www.assemblyai.com/docs/speech-to-text/universal-streaming#configuring-the-end-of-turn-detection).
+     * Tuning those down would make `end_of_turn` fire sooner on a
+     * continuous monologue, but they're a tradeoff, not a fix: too
+     * aggressive and a mid-sentence pause (a breath, "um", swallowing) splits
+     * one utterance into several finals, which is worse for the vault
+     * ingest contract's per-turn `live-transcript.jsonl` lines than an
+     * occasional long turn is for the UI. The actual fix for "why does it
+     * stay partial that long" is this bead's real change: painting
+     * word-level-stable text solid via [TranscriptPartial.stableText] while
+     * the turn is still open, so the UX never depends on how soon
+     * `end_of_turn` fires in the first place. Revisit these params only if a
+     * *separate* problem shows up with turns staying open too long for
+     * `live-transcript.jsonl`'s own per-turn granularity, not for rendering.
+     */
     private suspend fun openSocket() {
         connectionStateFlow.value = SttConnectionState.CONNECTING
         val ready = CompletableDeferred<Unit>()

@@ -153,8 +153,8 @@ tasks.withType<Test>().configureEach {
         exclude("**/stt/integration/**")
     }
     // Compose interaction tests (vn-edu.35, AppNavHostInteractionTest; vn-edu.43,
-    // LiveTranscriptPaneOverlongPartialTest) and Roborazzi screenshot tests
-    // (vn-edu.34, `**/screenshot/**`) both need
+    // LiveTranscriptPaneOverlongPartialTest; vn-edu.45, LiveTranscriptPaneWordFinalityTest)
+    // and Roborazzi screenshot tests (vn-edu.34, `**/screenshot/**`) both need
     // androidx.compose.ui:ui-test-manifest's merged-in host Activity to launch
     // createComposeRule()'s content -- that library is debugImplementation-only
     // on purpose (shipping a test-only Activity declaration in the *release*
@@ -165,6 +165,7 @@ tasks.withType<Test>().configureEach {
     if (name == "testReleaseUnitTest") {
         exclude("**/AppNavHostInteractionTest.class")
         exclude("**/LiveTranscriptPaneOverlongPartialTest.class")
+        exclude("**/LiveTranscriptPaneWordFinalityTest.class")
         exclude("**/screenshot/**")
     }
     if (!roborazziTaskRequested) {
