@@ -40,7 +40,12 @@ class SessionStore(private val baseDir: File) {
             timeZone = TimeZone.getTimeZone("UTC")
         }
 
-        private val json = Json { prettyPrint = true }
+        // encodeDefaults=true: the ingest contract lists `stt` and `schema_version`
+        // as required meta.json keys (stt may be null, but the key must be
+        // present) -- without this, kotlinx.serialization silently omits any
+        // field left at its Kotlin default, which is exactly `stt` and
+        // `schema_version` on every session recorded without live STT wired up.
+        private val json = Json { prettyPrint = true; encodeDefaults = true }
 
         fun isoTimestamp(date: Date): String = ISO_FORMAT.format(date)
     }

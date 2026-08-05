@@ -33,6 +33,7 @@ class AudioEngine(
         private const val TAG = "AudioEngine"
         private const val TIMEOUT_US = 10_000L
         private const val STOP_JOIN_TIMEOUT_MS = 5_000L
+        private const val PROBE_MAX_ATTEMPTS = 50
     }
 
     /** Hook for later Bluetooth-mic work; null means "use the system default input". */
@@ -216,9 +217,22 @@ class AudioEngine(
             val header = reader.header
             val frames = reader.readAll()
 
-            val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, header.sampleRateHz, header.channels).apply {
-                setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
-            }
+            // MediaMuxer's OGG writer needs the Opus codec-config (OpusHead, in
+            // `csd-0`, plus the `csd-1`/`csd-2` pre-skip/seek-preroll buffers the
+            // encoder emits alongside it) on the track's MediaFormat *before*
+            // any sample data is written -- otherwise it fails with "Did not
+            // get valid opus header before first sample data". The live
+            // capture loop in [runCaptureLoop]/[drainOutput] deliberately never
+            // persists that config buffer into the WAL (it's not audio data,
+            // and the WAL format is audio-frames-only per docs/audio-wal.md),
+            // so it isn't recoverable from the WAL alone -- re-derive it here
+            // by running a throwaway encoder with the same (sampleRate,
+            // channels, bitRate) just long enough to observe its
+            // INFO_OUTPUT_FORMAT_CHANGED event. Works identically for the
+            // normal-stop and crash-recovery paths since both only need the
+            // WAL header's sampleRate/channels plus this class's own default
+            // bitRate (both callers construct `AudioEngine()` with no override).
+            val format = probeOpusCodecConfig(header.sampleRateHz, header.channels)
 
             val muxer = MediaMuxer(outputOggFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_OGG)
             val trackIndex = muxer.addTrack(format)
@@ -235,6 +249,48 @@ class AudioEngine(
                 muxer.stop()
                 muxer.release()
             }
+        }
+    }
+
+    /**
+     * Runs a short-lived Opus encoder configured identically to [start]'s,
+     * feeding it a little silence, purely to capture the `csd-0`/`csd-1`/
+     * `csd-2` buffers from its [MediaCodec.INFO_OUTPUT_FORMAT_CHANGED] event.
+     * Falls back to the plain (config-less) format if the encoder never
+     * reports one within the attempt budget -- callers still get a file,
+     * just possibly one the OGG muxer rejects, which is no worse than before
+     * this method existed.
+     */
+    private fun probeOpusCodecConfig(sampleRateHz: Int, channelCount: Int): MediaFormat {
+        val inputFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, sampleRateHz, channelCount).apply {
+            setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
+        }
+        val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_OPUS)
+        codec.configure(inputFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        codec.start()
+        try {
+            val silence = ByteArray((sampleRateHz / 50) * channelCount * 2) // ~20ms of 16-bit silence
+            val bufferInfo = MediaCodec.BufferInfo()
+            repeat(PROBE_MAX_ATTEMPTS) {
+                val inputIndex = codec.dequeueInputBuffer(TIMEOUT_US)
+                if (inputIndex >= 0) {
+                    codec.getInputBuffer(inputIndex)?.apply {
+                        clear()
+                        put(silence)
+                    }
+                    codec.queueInputBuffer(inputIndex, 0, silence.size, 0, 0)
+                }
+                val outputIndex = codec.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
+                when {
+                    outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> return codec.outputFormat
+                    outputIndex >= 0 -> codec.releaseOutputBuffer(outputIndex, false)
+                }
+            }
+            Log.w(TAG, "never observed INFO_OUTPUT_FORMAT_CHANGED while probing Opus codec config; muxer may reject the output")
+            return inputFormat
+        } finally {
+            runCatching { codec.stop() }
+            codec.release()
         }
     }
 }
