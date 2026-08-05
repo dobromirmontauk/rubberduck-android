@@ -1,5 +1,7 @@
 # rubberduck
 
+[![CI](https://github.com/dobromirmontauk/voice-capture-android/actions/workflows/ci.yml/badge.svg)](https://github.com/dobromirmontauk/voice-capture-android/actions/workflows/ci.yml)
+
 Someone to talk to to help think through your own thoughts. rubberduck is a
 minimal voice-first Android capture app: record, live-transcribe, ship
 sessions to voice-vault.

@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # Android SDK ships preinstalled on ubuntu-latest GitHub runners
+      # (ANDROID_HOME is already set), so no manual SDK setup step here.
+      - name: Unit tests
+        run: ./gradlew test --stacktrace
+        # Once vn-edu.34 (Roborazzi) lands, fold its verification task in here:
+        # run: ./gradlew test verifyRoborazzi --stacktrace
+
+      # integrationTest (AssemblyAiLiveStreamingTest) hits the real AssemblyAI
+      # streaming endpoint (~$0.01/run) and needs ASSEMBLYAI_API_KEY, so it is
+      # intentionally excluded from the default job above. To wire it up as a
+      # separate, opt-in job once a secret is added (Settings -> Secrets and
+      # variables -> Actions -> New repository secret -> ASSEMBLYAI_API_KEY):
+      #
+      # integration-test:
+      #   runs-on: ubuntu-latest
+      #   steps:
+      #     - uses: actions/checkout@v4
+      #     - uses: actions/setup-java@v4
+      #       with:
+      #         distribution: temurin
+      #         java-version: "21"
+      #         cache: gradle
+      #     - name: Integration test
+      #       env:
+      #         ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
+      #       run: ./gradlew integrationTest --stacktrace
