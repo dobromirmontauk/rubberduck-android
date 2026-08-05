@@ -35,6 +35,17 @@ class AppSecretsStore(context: Context) {
         get() = prefs.getString(KEY_USER_ASSEMBLYAI_KEY, null)
         set(value) = prefs.edit().putString(KEY_USER_ASSEMBLYAI_KEY, value).apply()
 
+    /**
+     * Set by the setup wizard's Intelligence step (word cloud + titles) or
+     * Settings' Replace flow (bead vn-edu.48); skippable, so this is commonly
+     * null. Powers [com.montauk.voicecapture.tags.AnthropicTagScorer] and
+     * [com.montauk.voicecapture.session.AnthropicTitleGenerator] -- see
+     * [effectiveAnthropicKey].
+     */
+    var userAnthropicKey: String?
+        get() = prefs.getString(KEY_USER_ANTHROPIC_KEY, null)
+        set(value) = prefs.edit().putString(KEY_USER_ANTHROPIC_KEY, value).apply()
+
     /** The vault repo picked in the wizard's step 2; null until a first sign-in has run it. */
     var selectedVaultOwner: String?
         get() = prefs.getString(KEY_SELECTED_VAULT_OWNER, null)
@@ -64,6 +75,17 @@ class AppSecretsStore(context: Context) {
         return userAssemblyAiKey?.takeIf { it.isNotBlank() } ?: buildConfigKey
     }
 
+    /**
+     * Same precedence rule as [effectiveAssemblyKey]: a runtime-entered
+     * Anthropic key always wins over the `local.properties`/`BuildConfig`
+     * dev fallback (bead vn-edu.48) -- the latter remains a dev-build
+     * convenience only, never surfaced to a real user as "configured."
+     */
+    fun effectiveAnthropicKey(buildConfigKey: String): String {
+        if (isSignedOut) return ""
+        return userAnthropicKey?.takeIf { it.isNotBlank() } ?: buildConfigKey
+    }
+
     /** True once the login screen has stored a real, user-entered token (device flow or PAT). */
     fun hasSignedInWithGithub(): Boolean = !userGithubToken.isNullOrBlank()
 
@@ -84,6 +106,7 @@ class AppSecretsStore(context: Context) {
         private const val KEY_USER_GITHUB_TOKEN = "user_github_token"
         private const val KEY_USER_GITHUB_LOGIN = "user_github_login"
         private const val KEY_USER_ASSEMBLYAI_KEY = "user_assemblyai_key"
+        private const val KEY_USER_ANTHROPIC_KEY = "user_anthropic_key"
         private const val KEY_SELECTED_VAULT_OWNER = "selected_vault_owner"
         private const val KEY_SELECTED_VAULT_REPO = "selected_vault_repo"
         private const val KEY_SETUP_WIZARD_COMPLETED = "setup_wizard_completed"

@@ -13,12 +13,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -28,7 +28,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -53,28 +52,31 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.auth.GitHubAccountClient
 import com.montauk.voicecapture.auth.GitHubRepoOption
+import com.montauk.voicecapture.llm.AnthropicKeyError
+import com.montauk.voicecapture.llm.AnthropicKeyValidator
 import com.montauk.voicecapture.stt.AssemblyAiKeyError
 import com.montauk.voicecapture.stt.AssemblyAiKeyValidator
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 import kotlinx.coroutines.launch
 
-private enum class WizardStep { ACCOUNT, VAULT, TRANSCRIPTION }
+private enum class WizardStep { ACCOUNT, VAULT, INTELLIGENCE }
 
 /**
  * Design frame 1b: a 3-segment progress rail over ① Account (already
  * satisfied by login -- just shows the signed-in identity), ② Choose your
- * vault (repo picker with silent per-repo validation), ③ Live transcription
- * (optional AssemblyAI key, always skippable). Shown once after a user's
- * first sign-in ([AppSecretsStore.setupWizardCompleted][com.montauk.voicecapture.settings.AppSecretsStore]),
- * re-runnable from Settings. The close action and per-step Back are always
- * available -- this screen must never be the only thing standing between a
- * user and Sessions/recording.
+ * vault (repo picker with silent per-repo validation), ③ Intelligence (bead
+ * vn-edu.48 -- two optional keys, each individually skippable: an AssemblyAI
+ * key for "Live transcription" and an Anthropic key for "Word cloud &
+ * titles"). Shown once after a user's first sign-in
+ * ([AppSecretsStore.setupWizardCompleted][com.montauk.voicecapture.settings.AppSecretsStore]),
+ * re-runnable from Settings, where both keys can also be viewed (masked,
+ * last-4 visible) and replaced later. The close action and per-step Back are
+ * always available -- this screen must never be the only thing standing
+ * between a user and Sessions/recording.
  */
 @Composable
 fun SetupWizardScreen(onFinished: () -> Unit) {
@@ -114,14 +116,15 @@ fun SetupWizardScreen(onFinished: () -> Unit) {
                                 onSelected = { owner, repo ->
                                     app.secretsStore.selectedVaultOwner = owner
                                     app.secretsStore.selectedVaultRepo = repo
-                                    step = WizardStep.TRANSCRIPTION
+                                    step = WizardStep.INTELLIGENCE
                                 },
                             )
-                            WizardStep.TRANSCRIPTION -> TranscriptionStep(
+                            WizardStep.INTELLIGENCE -> IntelligenceStep(
                                 onBack = { step = WizardStep.VAULT },
                                 onSkip = ::finish,
-                                onKeyValidated = { key ->
-                                    app.secretsStore.userAssemblyAiKey = key
+                                onContinue = { assemblyKey, anthropicKey ->
+                                    if (assemblyKey != null) app.secretsStore.userAssemblyAiKey = assemblyKey
+                                    if (anthropicKey != null) app.secretsStore.userAnthropicKey = anthropicKey
                                     finish()
                                 },
                             )
@@ -286,57 +289,105 @@ private fun CreateNewVaultRow(onClick: () -> Unit) {
     }
 }
 
+/**
+ * Bead vn-edu.48: two independently-skippable key fields, each labeled by
+ * the feature it powers rather than the vendor mechanics ("Live
+ * transcription" / "Word cloud & titles"), per the copy rules -- a user
+ * only learns the specific vendor (AssemblyAI / Anthropic) from the field's
+ * own placeholder text, matching how Settings labels the same two keys.
+ * Continue validates only whichever field(s) are non-blank (a blank field is
+ * simply skipped, never blocks); a validation failure on either field shows
+ * that field's own inline error and does not advance, so a typo is never
+ * silently accepted as "configured." Fields validate in order (AssemblyAI,
+ * then Anthropic) -- a failure on the first stops before ever calling the
+ * second's network check.
+ *
+ * [assemblyValidator]/[anthropicValidator] default to the real network
+ * validators; `internal` (not `private`) and overridable purely for test
+ * visibility -- same convention as [ApiKeyManagementRow] -- so
+ * [IntelligenceStepTest] can point them at a [okhttp3.mockwebserver.MockWebServer]
+ * instead of the real AssemblyAI/Anthropic APIs.
+ */
 @Composable
-private fun TranscriptionStep(onBack: () -> Unit, onSkip: () -> Unit, onKeyValidated: (String) -> Unit) {
+internal fun IntelligenceStep(
+    onBack: () -> Unit,
+    onSkip: () -> Unit,
+    onContinue: (assemblyKey: String?, anthropicKey: String?) -> Unit,
+    assemblyValidator: AssemblyAiKeyValidator = AssemblyAiKeyValidator(),
+    anthropicValidator: AnthropicKeyValidator = AnthropicKeyValidator(),
+) {
     val scope = rememberCoroutineScope()
-    var key by remember { mutableStateOf("") }
-    var revealed by remember { mutableStateOf(false) }
+    var assemblyKey by remember { mutableStateOf("") }
+    var assemblyError by remember { mutableStateOf<String?>(null) }
+    var anthropicKey by remember { mutableStateOf("") }
+    var anthropicError by remember { mutableStateOf<String?>(null) }
     var validating by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Text("Live transcription", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
-        Spacer(modifier = Modifier.height(16.dp))
-        OutlinedTextField(
-            value = key,
-            onValueChange = { key = it; errorMessage = null },
-            label = { Text("AssemblyAI API key") },
-            singleLine = true,
-            isError = errorMessage != null,
-            visualTransformation = if (revealed) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = {
-                IconButton(onClick = { revealed = !revealed }) {
-                    Icon(
-                        imageVector = if (revealed) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                        contentDescription = if (revealed) "Hide key" else "Show key",
-                    )
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
+        Text("Intelligence", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Both are optional -- recording keeps working fully without either.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (errorMessage != null) {
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(text = errorMessage!!, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
+        Spacer(modifier = Modifier.height(20.dp))
+        Column(modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
+            MaskedKeyField(
+                value = assemblyKey,
+                onValueChange = { assemblyKey = it; assemblyError = null },
+                label = "Live transcription",
+                errorMessage = assemblyError,
+                enabled = !validating,
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            MaskedKeyField(
+                value = anthropicKey,
+                onValueChange = { anthropicKey = it; anthropicError = null },
+                label = "Word cloud & titles",
+                errorMessage = anthropicError,
+                enabled = !validating,
+            )
         }
-        Spacer(modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.height(16.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedButton(onClick = onBack) { Text("Back") }
+            OutlinedButton(onClick = onBack, enabled = !validating) { Text("Back") }
             Spacer(modifier = Modifier.weight(1f))
             TextButton(onClick = onSkip, enabled = !validating) { Text("Skip") }
             Button(
-                enabled = key.isNotBlank() && !validating,
+                enabled = !validating,
                 onClick = {
+                    assemblyError = null
+                    anthropicError = null
                     validating = true
                     scope.launch {
-                        AssemblyAiKeyValidator().validate(key.trim()).fold(
-                            onSuccess = { onKeyValidated(key.trim()) },
-                            onFailure = { e ->
+                        val assemblyTrimmed = assemblyKey.trim()
+                        if (assemblyTrimmed.isNotEmpty()) {
+                            val result = assemblyValidator.validate(assemblyTrimmed)
+                            if (result.isFailure) {
                                 validating = false
-                                errorMessage = when (e) {
+                                assemblyError = when (result.exceptionOrNull()) {
                                     is AssemblyAiKeyError.Invalid -> "That key didn't work"
                                     else -> "Couldn't reach AssemblyAI"
                                 }
-                            },
+                                return@launch
+                            }
+                        }
+                        val anthropicTrimmed = anthropicKey.trim()
+                        if (anthropicTrimmed.isNotEmpty()) {
+                            val result = anthropicValidator.validate(anthropicTrimmed)
+                            if (result.isFailure) {
+                                validating = false
+                                anthropicError = when (result.exceptionOrNull()) {
+                                    is AnthropicKeyError.Invalid -> "That key didn't work"
+                                    else -> "Couldn't reach Anthropic"
+                                }
+                                return@launch
+                            }
+                        }
+                        onContinue(
+                            assemblyTrimmed.takeIf { it.isNotEmpty() },
+                            anthropicTrimmed.takeIf { it.isNotEmpty() },
                         )
                     }
                 },

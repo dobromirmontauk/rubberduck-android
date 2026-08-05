@@ -64,23 +64,28 @@ class VoiceCaptureApp : Application() {
         SttClientFactory.create(secretsStore.effectiveAssemblyKey(BuildConfig.ASSEMBLYAI_API_KEY))
 
     /**
-     * A fresh [TagScorer] per recording session (bead vn-edu.38). No
-     * settings-UI override yet, unlike the AssemblyAI key -- `anthropic.apiKey`
-     * in `local.properties`/`BuildConfig` is the only source for now;
-     * [TagScorerFactory] falls back to the keyless [com.montauk.voicecapture.tags.HeuristicTagScorer]
-     * when it's blank.
+     * A fresh [TagScorer] per recording session (bead vn-edu.38). Bead
+     * vn-edu.48: a runtime-entered Anthropic key (Settings' Replace flow or
+     * the setup wizard's Intelligence step) now takes precedence over
+     * `anthropic.apiKey`'s `local.properties`/`BuildConfig` dev-build
+     * convenience, same pattern as [newSttClient] -- see
+     * [AppSecretsStore.effectiveAnthropicKey]. [TagScorerFactory] falls back
+     * to the keyless [com.montauk.voicecapture.tags.NoOpTagScorer] when the
+     * effective key is blank (bead vn-edu.46 superseding decision -- no
+     * heuristic guess, just no tags; see [isAnthropicKeyConfigured]).
      */
-    fun newTagScorer(): TagScorer = TagScorerFactory.create(BuildConfig.ANTHROPIC_API_KEY)
+    fun newTagScorer(): TagScorer = TagScorerFactory.create(secretsStore.effectiveAnthropicKey(BuildConfig.ANTHROPIC_API_KEY))
 
     /**
-     * Null when `anthropic.apiKey` isn't configured (bead vn-edu.42) -- same
-     * keyless-means-skip-the-feature contract as [TitleGeneratorFactory],
-     * one level up. Callers ([com.montauk.voicecapture.service.RecordingService],
+     * Null when the effective Anthropic key isn't configured (bead
+     * vn-edu.42, precedence updated by vn-edu.48) -- same keyless-means-
+     * skip-the-feature contract as [TitleGeneratorFactory], one level up.
+     * Callers ([com.montauk.voicecapture.service.RecordingService],
      * [com.montauk.voicecapture.ui.SessionDetailScreen]) treat null as "don't
      * even attempt title generation," matching today's keyless behavior
      * exactly.
      */
-    fun newTitleGenerator(): TitleGenerator? = TitleGeneratorFactory.create(BuildConfig.ANTHROPIC_API_KEY)
+    fun newTitleGenerator(): TitleGenerator? = TitleGeneratorFactory.create(secretsStore.effectiveAnthropicKey(BuildConfig.ANTHROPIC_API_KEY))
 
     fun refreshBundleUploader() {
         bundleUploader = BundleUploaderFactory.create(
@@ -96,6 +101,14 @@ class VoiceCaptureApp : Application() {
     /** Booleans only for the settings screen -- never surface the actual key/token values. */
     fun isAssemblyKeyConfigured(): Boolean = secretsStore.effectiveAssemblyKey(BuildConfig.ASSEMBLYAI_API_KEY).isNotBlank()
     fun isGithubTokenConfigured(): Boolean = secretsStore.effectiveGithubToken(BuildConfig.GITHUB_TOKEN).isNotBlank()
+
+    /**
+     * Bead vn-edu.48/vn-edu.46: gates both Settings' "Word cloud & titles"
+     * key row display and [com.montauk.voicecapture.ui.RecordingScreen]'s
+     * tags slot -- keyless shows the exact register-key message there
+     * instead of an empty (or heuristic-guessed) chips row.
+     */
+    fun isAnthropicKeyConfigured(): Boolean = secretsStore.effectiveAnthropicKey(BuildConfig.ANTHROPIC_API_KEY).isNotBlank()
 
     /**
      * False whenever no real GitHub OAuth App has been registered (bead
