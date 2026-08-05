@@ -19,6 +19,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.montauk.voicecapture.VoiceCaptureApp
+import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 
 /**
  * Hosts the nav graph + Material 3 bottom bar. The bottom bar is visible on
@@ -40,6 +41,12 @@ fun AppNavHost(
     val currentRoute = backStackEntry?.destination?.route
     val showBottomBar = currentRoute == Routes.SESSIONS || currentRoute == Routes.SETTINGS || currentRoute == Routes.SESSION_DETAIL
 
+    // Wraps the Scaffold (and therefore the bottom nav bar's chrome) in the
+    // app's dark theme -- each screen composable also wraps itself in
+    // VoiceCaptureTheme for previewability, but without this outer wrap the
+    // NavigationBar/Scaffold surfaces fall back to Compose's default (light)
+    // Material3 baseline theme since they sit outside any screen's own wrap.
+    VoiceCaptureTheme {
     Scaffold(
         bottomBar = {
             if (showBottomBar) {
@@ -129,6 +136,7 @@ fun AppNavHost(
             },
             onDismiss = { showLogoutDialog = false },
         )
+    }
     }
 }
 
