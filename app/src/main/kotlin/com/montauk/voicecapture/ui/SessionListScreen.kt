@@ -33,6 +33,10 @@ import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.session.SessionSummary
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
+import kotlinx.coroutines.delay
+
+private const val POST_STOP_POLL_ATTEMPTS = 8
+private const val POST_STOP_POLL_INTERVAL_MS = 750L
 
 @Composable
 fun SessionListScreen(onSessionClick: (String) -> Unit) {
@@ -40,11 +44,29 @@ fun SessionListScreen(onSessionClick: (String) -> Unit) {
     val recordingState by RecordingStateHolder.state.collectAsStateWithLifecycle()
     var sessions by remember { mutableStateOf<List<SessionSummary>>(emptyList()) }
 
-    // Re-reads on first entry and whenever a recording starts/stops; also
-    // effectively re-reads on every navigation back to this screen since
-    // NavHost recomposes this composable fresh each time it re-enters the
-    // back stack, which is what picks up an upload-state change made from
-    // the session-detail screen's Re-upload action.
+    // Re-reads on every fresh mount of this screen (including on navigation
+    // back to it, since NavHost recomposes it fresh each time it re-enters
+    // the back stack -- that's what picks up an upload-state change made
+    // from the session-detail screen's Re-upload action). Also polls briefly
+    // afterward: tapping Stop navigates here immediately, but the just-ended
+    // session's meta.json isn't written until RecordingService's async
+    // finalize (WAL -> ogg remux, see docs/audio-wal.md) completes, which for
+    // a longer recording can take a few real seconds -- without this poll,
+    // the session wouldn't appear until the user manually left this screen
+    // and came back.
+    LaunchedEffect(Unit) {
+        val app = context.applicationContext as VoiceCaptureApp
+        sessions = app.sessionStore.listSessions()
+        repeat(POST_STOP_POLL_ATTEMPTS) {
+            delay(POST_STOP_POLL_INTERVAL_MS)
+            val refreshed = app.sessionStore.listSessions()
+            if (refreshed != sessions) sessions = refreshed
+        }
+    }
+
+    // Also re-reads immediately on any isRecording transition seen while this
+    // screen stays mounted (e.g. a recording that finishes well after the
+    // poll above has given up).
     LaunchedEffect(recordingState.isRecording) {
         val app = context.applicationContext as VoiceCaptureApp
         sessions = app.sessionStore.listSessions()

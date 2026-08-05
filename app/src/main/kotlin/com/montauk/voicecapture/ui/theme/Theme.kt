@@ -22,6 +22,13 @@ private val DarkColors = darkColorScheme(
     onSurface = Color(0xFFF2F2F2),
     surfaceVariant = Color(0xFF232327),
     onSurfaceVariant = Color(0xFFB8B8BD),
+    // Material3's default dark-theme error role is a light salmon/pink for
+    // tonal-contrast reasons that make sense on a typical dark surface, but
+    // it clashes badly with this app's near-black palette once it's the
+    // full-width STOP bar rather than a small dot -- pin it to a deep red
+    // with light text instead.
+    error = Color(0xFFB3261E),
+    onError = Color(0xFFF2F2F2),
 )
 
 private val LightColors = lightColorScheme(

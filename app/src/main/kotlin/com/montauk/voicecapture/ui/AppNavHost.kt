@@ -89,8 +89,18 @@ fun AppNavHost(
                 RecordingScreen(
                     onStopRecording = {
                         onStopRecording()
+                        // Pop up to (and including) any existing "sessions"
+                        // entry, not just "recording" -- the back stack when
+                        // Stop is tapped is [sessions, recording] (New Session
+                        // pushes recording on top without popping sessions),
+                        // so popping only "recording" would leave the OLD
+                        // sessions entry underneath and stack a second, new
+                        // one on top of it instead of replacing it. Two
+                        // sessions entries isn't just wasteful -- the buried
+                        // one can end up being what's effectively rendered
+                        // stale, so this always collapses to exactly one.
                         navController.navigate(Routes.SESSIONS) {
-                            popUpTo(Routes.RECORDING) { inclusive = true }
+                            popUpTo(Routes.SESSIONS) { inclusive = true }
                         }
                     },
                 )
