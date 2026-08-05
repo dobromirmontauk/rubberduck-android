@@ -1,6 +1,8 @@
-# voice-capture-android
+# rubberduck
 
-Minimal voice-first Android capture app: record, live-transcribe, ship sessions to voice-vault.
+Someone to talk to to help think through your own thoughts. rubberduck is a
+minimal voice-first Android capture app: record, live-transcribe, ship
+sessions to voice-vault.
 
 The recording core (crash-safe WAL, session store, foreground service) plus
 live streaming transcription (AssemblyAI Universal-Streaming) and bundle
