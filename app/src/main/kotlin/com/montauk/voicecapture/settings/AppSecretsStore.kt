@@ -11,6 +11,18 @@ import android.content.SharedPreferences
  * doesn't erase [userGithubToken] -- it flips [isSignedOut], which makes
  * every `effective*` getter behave as if nothing is configured until the
  * user signs back in. See [com.montauk.voicecapture.VoiceCaptureApp].
+ *
+ * TODO(vn-edu.48 follow-up): [prefs] is plain (unencrypted) `SharedPreferences`,
+ * same as it was before this bead added [userAnthropicKey] -- every secret
+ * here (GitHub token, AssemblyAI key, Anthropic key) is stored in plaintext
+ * on-device. Migrating to `androidx.security.crypto`'s
+ * `EncryptedSharedPreferences` was considered for this round; deferred
+ * because its Robolectric/Android-Keystore interaction is enough of an open
+ * question (real device Keystore-backed encryption has no clean JVM-only
+ * unit-test story) that it risked destabilizing this bead's test suite and
+ * CI rather than improving it. Not a regression -- these keys already lived
+ * in plaintext `local.properties` on developer machines before any of this
+ * existed -- but a real upgrade, not a "good enough forever" decision.
  */
 class AppSecretsStore(context: Context) {
     private val prefs: SharedPreferences =
