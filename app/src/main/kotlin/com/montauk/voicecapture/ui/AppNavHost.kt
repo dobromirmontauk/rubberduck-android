@@ -30,7 +30,7 @@ import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 @Composable
 fun AppNavHost(
     startDestination: String,
-    onNewSessionTapped: () -> Unit,
+    onNewSessionTapped: (injectAssetFileName: String?) -> Unit,
     onStopRecording: () -> Unit,
     onSetMode: (RecordingMode) -> Unit = {},
 ) {
@@ -38,6 +38,9 @@ fun AppNavHost(
     val context = LocalContext.current
     val app = context.applicationContext as VoiceCaptureApp
     var showLogoutDialog by remember { mutableStateOf(false) }
+    // Debug-only (bead vn-edu.20): long-pressing the "New Session" tab opens
+    // this instead of starting a live-mic recording -- see BottomNavBar.
+    var showFixturePicker by remember { mutableStateOf(false) }
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
@@ -46,6 +49,17 @@ fun AppNavHost(
     // cached in remembered state -- a sign-in/log-out always triggers a navigation,
     // which recomposes this whole function, so the 4th tab's label picks it up for free.
     val isConnectedToGithub = app.secretsStore.isConnectedToGithub()
+
+    fun startNewSession(injectAssetFileName: String?) {
+        // Permission-gated service start lives in MainActivity (it owns the
+        // ActivityResult permission launcher); navigation lives here (this
+        // composable owns the NavController). Navigate immediately regardless
+        // of whether the permission prompt is about to show -- RecordingScreen
+        // just renders "not recording yet" for the brief window until the
+        // service actually starts.
+        onNewSessionTapped(injectAssetFileName)
+        navController.navigate(Routes.RECORDING) { launchSingleTop = true }
+    }
 
     // Wraps the Scaffold (and therefore the bottom nav bar's chrome) in the
     // app's dark theme -- each screen composable also wraps itself in
@@ -59,17 +73,8 @@ fun AppNavHost(
                 BottomNavBar(
                     currentRoute = currentRoute,
                     isConnectedToGithub = isConnectedToGithub,
-                    onNewSession = {
-                        // Permission-gated service start lives in MainActivity
-                        // (it owns the ActivityResult permission launcher);
-                        // navigation lives here (this composable owns the
-                        // NavController). Navigate immediately regardless of
-                        // whether the permission prompt is about to show --
-                        // RecordingScreen just renders "not recording yet"
-                        // for the brief window until the service actually starts.
-                        onNewSessionTapped()
-                        navController.navigate(Routes.RECORDING) { launchSingleTop = true }
-                    },
+                    onNewSession = { startNewSession(null) },
+                    onNewSessionLongPress = { showFixturePicker = true },
                     onSessions = {
                         navController.navigate(Routes.SESSIONS) {
                             popUpTo(Routes.SESSIONS) { inclusive = true }
@@ -176,6 +181,16 @@ fun AppNavHost(
                 }
             },
             onDismiss = { showLogoutDialog = false },
+        )
+    }
+
+    if (showFixturePicker) {
+        FixturePickerDialog(
+            onPick = { fixture ->
+                showFixturePicker = false
+                startNewSession(fixture.assetFileName)
+            },
+            onDismiss = { showFixturePicker = false },
         )
     }
     }

@@ -19,6 +19,45 @@ Requires a JDK compatible with Android Gradle Plugin 8.7 (JDK 17 or 21 --
 newer JDKs are not yet supported by AGP; see "Toolchain notes" below if
 `./gradlew` picks the wrong one).
 
+## Testing without a working microphone (debug builds only)
+
+The macOS emulator's host-mic passthrough is unreliable (it delivers a few
+seconds of real audio, then goes silent), which makes it hard to exercise
+live transcription end-to-end from Android Studio. `AudioEngine` captures
+from an `AudioSource` interface rather than `AudioRecord` directly (see
+`audio/AudioSource.kt`), so a debug-only `FileAudioSource` can stand in for
+the mic and feed a recording session from a WAV file instead -- WAL, live
+transcript, mic-level meter, and topic chips all behave exactly as they
+would with a real mic, and the recording screen's source chip shows `FILE`
+instead of `PHONE MIC`/`BLUETOOTH` so it's obvious which one is active. Two
+bundled fixtures (`app/src/debug/assets/fixtures/`, the same 16kHz mono WAVs
+`AssemblyAiLiveStreamingTest` uses) ship in every debug build only -- never
+in release.
+
+**From the emulator UI (no adb needed):** long-press the "New Session" tab
+in the bottom nav. A picker lists the bundled fixtures ("Kitchen remodel",
+"Marathon training"); pick one and recording starts immediately, fed from
+that file instead of the mic.
+
+**From the command line, injecting your own file:** push any 16kHz mono
+16-bit PCM WAV to the device and pass its path as the `inject_audio` extra
+on the start action:
+
+```
+adb push my-test-clip.wav /sdcard/my-test-clip.wav
+adb shell am start-foreground-service \
+  -a com.montauk.voicecapture.action.START \
+  -e inject_audio /sdcard/my-test-clip.wav \
+  com.montauk.voicecapture/.service.RecordingService
+```
+
+Either path only works in a debug build (`FileAudioSource` is never wired up
+when `BuildConfig.DEBUG` is false, regardless of what extras a crafted
+intent carries). Recording continues normally once the file is exhausted --
+end-of-file behaves like silence rather than stopping the session, so tap
+Stop in the app when you're done. Non-16kHz-mono or non-16-bit WAVs fail
+fast with a clear exception instead of silently misdecoding.
+
 ## Configuring secrets for the live demo
 
 Both live transcription and bundle upload are optional at runtime -- with no
@@ -52,7 +91,13 @@ use a fine-grained PAT scoped to just that repo for anything longer-lived).
 com.montauk.voicecapture
 ├── audio/
 │   ├── OpusFrameWal.kt    append-only, crash-safe log of encoded Opus packets
-│   └── AudioEngine.kt     AudioRecord -> MediaCodec (Opus) -> OpusFrameWal;
+│   ├── AudioSource.kt     start/read/stop PCM interface -- AudioEngine and everything
+│   │                      downstream is agnostic to where the PCM comes from
+│   ├── MicAudioSource.kt  AudioSource backed by a real AudioRecord (production path)
+│   ├── FileAudioSource.kt debug-only AudioSource that paces a decoded WAV file in
+│   │                      real time instead of a live mic -- see "Testing without a
+│   │                      working microphone" above
+│   └── AudioEngine.kt     AudioSource -> MediaCodec (Opus) -> OpusFrameWal;
 │                          finalizes a WAL into a playable audio.ogg via MediaMuxer
 ├── session/
 │   ├── SessionId.kt       YYYY-MM-DD_HHMM_<4 random lowercase alnum> ids

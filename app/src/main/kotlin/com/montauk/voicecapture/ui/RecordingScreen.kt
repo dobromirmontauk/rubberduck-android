@@ -205,10 +205,13 @@ private fun BigTimer(elapsedMs: Long) {
 private fun ChipsRow(transcript: TranscriptUiState, hasBluetoothMic: Boolean) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         SttStatusChip(transcript.connectionState)
-        val (label, color) = if (hasBluetoothMic) {
-            "BLUETOOTH" to Color(0xFF5FBF6E)
-        } else {
-            "PHONE MIC" to MaterialTheme.colorScheme.onSurfaceVariant
+        val (label, color) = when {
+            // Debug-only audio injection (bead vn-edu.20) -- takes priority over
+            // the live bluetooth/phone-mic detection below since there's no real
+            // AudioRecord device to ask about while a file is standing in for one.
+            transcript.sourceLabel == "FILE" -> "FILE" to Color(0xFFE0A93A)
+            hasBluetoothMic -> "BLUETOOTH" to Color(0xFF5FBF6E)
+            else -> "PHONE MIC" to MaterialTheme.colorScheme.onSurfaceVariant
         }
         StatusChip(label, color)
     }

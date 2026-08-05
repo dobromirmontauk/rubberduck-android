@@ -12,8 +12,12 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import com.montauk.voicecapture.BuildConfig
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.audio.AudioEngine
+import com.montauk.voicecapture.audio.AudioSource
+import com.montauk.voicecapture.audio.FileAudioSource
+import com.montauk.voicecapture.audio.MicAudioSource
 import com.montauk.voicecapture.audio.MicLevelMeter
 import com.montauk.voicecapture.session.LiveTranscriptLine
 import com.montauk.voicecapture.session.LiveTranscriptWriter
@@ -34,6 +38,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
+import java.io.InputStream
 import java.util.Date
 import kotlin.concurrent.thread
 
@@ -54,6 +60,20 @@ class RecordingService : LifecycleService() {
         const val ACTION_SET_MODE = "com.montauk.voicecapture.action.SET_MODE"
         const val EXTRA_MODE = "mode"
 
+        /**
+         * Debug-only (bead vn-edu.20): a value here on the [ACTION_START]
+         * intent swaps [MicAudioSource] for a [FileAudioSource] reading the
+         * given path/asset instead -- see [createAudioSource]. Ignored
+         * entirely in release builds. Two ways to set it, both documented in
+         * README.md's testing section: an `adb shell am start-foreground-service`
+         * extra pointing at a file pushed to the device, or the "New Session"
+         * bottom-nav tab's long-press fixture picker (debug builds only).
+         */
+        const val EXTRA_INJECT_AUDIO = "inject_audio"
+
+        /** Prefix on [EXTRA_INJECT_AUDIO] meaning "read from debug assets/fixtures/<rest>", not a filesystem path. */
+        const val ASSET_PREFIX = "asset:"
+
         private const val TAG = "RecordingService"
         private const val NOTIFICATION_CHANNEL_ID = "recording"
         private const val NOTIFICATION_ID = 1001
@@ -64,7 +84,10 @@ class RecordingService : LifecycleService() {
         // service never looks stuck to the user.
         private const val FINALIZE_TIMEOUT_MS = 20_000L
 
-        fun startIntent(context: Context): Intent = Intent(context, RecordingService::class.java).setAction(ACTION_START)
+        fun startIntent(context: Context, injectAudio: String? = null): Intent =
+            Intent(context, RecordingService::class.java).setAction(ACTION_START).apply {
+                if (injectAudio != null) putExtra(EXTRA_INJECT_AUDIO, injectAudio)
+            }
         fun stopIntent(context: Context): Intent = Intent(context, RecordingService::class.java).setAction(ACTION_STOP)
         fun setModeIntent(context: Context, mode: RecordingMode): Intent =
             Intent(context, RecordingService::class.java).setAction(ACTION_SET_MODE).putExtra(EXTRA_MODE, mode.wireValue)
@@ -91,14 +114,14 @@ class RecordingService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
-            ACTION_START -> beginRecording()
+            ACTION_START -> beginRecording(intent.getStringExtra(EXTRA_INJECT_AUDIO))
             ACTION_STOP -> endRecording()
             ACTION_SET_MODE -> setMode(intent)
         }
         return START_NOT_STICKY
     }
 
-    private fun beginRecording() {
+    private fun beginRecording(injectAudioSpec: String?) {
         if (currentSession != null) return // already recording
 
         val app = application as VoiceCaptureApp
@@ -129,8 +152,13 @@ class RecordingService : LifecycleService() {
             micLevelMeter.onPcmFrame(pcm, length)
         }
 
+        val audioSource = createAudioSource(injectAudioSpec)
         val walFile = app.sessionStore.walFile(session.dir)
-        audioEngine.start(walFile)
+        audioEngine.start(walFile, audioSource)
+        // Drives the recording screen's source chip -- "FILE" when injecting
+        // (bead vn-edu.20), otherwise the existing bluetooth/phone-mic chip
+        // logic in RecordingScreen/ChipsRow takes over.
+        TranscriptStateHolder.update { it.copy(sourceLabel = audioSource.deviceLabel) }
         startSttPipeline(stt, session)
 
         RecordingStateHolder.update {
@@ -143,6 +171,25 @@ class RecordingService : LifecycleService() {
         startForeground(NOTIFICATION_ID, buildNotification(elapsedMs = 0L))
         startTicker()
     }
+
+    /**
+     * [injectAudioSpec] is [EXTRA_INJECT_AUDIO] off the start intent -- non-null
+     * only when the adb-injection path or the debug fixture picker set it (see
+     * companion KDoc). `!BuildConfig.DEBUG` makes this dead code in release
+     * builds regardless of what a crafted intent might carry: an exported
+     * activity/service extra is not a trustworthy gate on its own.
+     */
+    private fun createAudioSource(injectAudioSpec: String?): AudioSource {
+        if (!BuildConfig.DEBUG || injectAudioSpec.isNullOrBlank()) return MicAudioSource()
+        return FileAudioSource(openStream = { openInjectedAudioStream(injectAudioSpec) })
+    }
+
+    private fun openInjectedAudioStream(spec: String): InputStream =
+        if (spec.startsWith(ASSET_PREFIX)) {
+            assets.open("fixtures/${spec.removePrefix(ASSET_PREFIX)}")
+        } else {
+            File(spec).inputStream()
+        }
 
     /** Handles [ACTION_SET_MODE]: switchable mid-session, a no-op unless the mode actually changes. */
     private fun setMode(intent: Intent) {

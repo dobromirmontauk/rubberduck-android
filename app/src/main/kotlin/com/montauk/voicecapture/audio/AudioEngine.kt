@@ -1,7 +1,5 @@
 package com.montauk.voicecapture.audio
 
-import android.media.AudioFormat
-import android.media.AudioRecord
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.media.MediaMuxer
@@ -11,16 +9,20 @@ import java.nio.ByteBuffer
 import kotlin.concurrent.thread
 
 /**
- * The recording core: AudioRecord -> MediaCodec Opus encoder -> [OpusFrameWal].
+ * The recording core: [AudioSource] -> MediaCodec Opus encoder -> [OpusFrameWal].
  *
  * Capture runs on its own dedicated thread so it is never blocked by UI, STT
  * streaming, or upload work. The WAL write in [OpusFrameWal.Writer.append] is
  * the crash-safety boundary described in docs/audio-wal.md: every call to
  * [onEncodedFrame] durably persists before the next chunk of PCM is even read.
  *
- * Device selection (e.g. a paired Bluetooth mic) is intentionally not wired up
- * yet -- [AudioRecord] is constructed with the default input device, and
- * [preferredInputDeviceId] is a hook for that follow-up work.
+ * Source-agnostic (bead vn-edu.20): [start] takes an [AudioSource] rather
+ * than owning an [android.media.AudioRecord] directly, so a debug-only
+ * [FileAudioSource] can stand in for [MicAudioSource] without this class (or
+ * anything downstream of it) knowing the difference. This engine is
+ * configured for a fixed [sampleRateHz]/[channelCount] -- [start] fails fast
+ * if the given source doesn't actually report that rate, rather than
+ * silently mis-encoding.
  */
 class AudioEngine(
     private val sampleRateHz: Int = DEFAULT_SAMPLE_RATE_HZ,
@@ -36,12 +38,9 @@ class AudioEngine(
         private const val PROBE_MAX_ATTEMPTS = 50
     }
 
-    /** Hook for later Bluetooth-mic work; null means "use the system default input". */
-    var preferredInputDeviceId: Int? = null
-
     /**
      * Tee for raw PCM frames, fired on the capture thread right after each
-     * successful [AudioRecord.read] -- alongside, not instead of, the
+     * successful [AudioSource.read] -- alongside, not instead of, the
      * Opus-encode-then-WAL path below. Set by [com.montauk.voicecapture.service.RecordingService]
      * to feed [com.montauk.voicecapture.stt.StreamingSttClient.sendPcm]. Must
      * return quickly and never throw: this call sits directly in the capture
@@ -51,7 +50,7 @@ class AudioEngine(
      */
     var onPcmFrame: ((pcm: ByteArray, length: Int) -> Unit)? = null
 
-    private var audioRecord: AudioRecord? = null
+    private var audioSource: AudioSource? = null
     private var encoder: MediaCodec? = null
     private var walWriter: OpusFrameWal.Writer? = null
     private var captureThread: Thread? = null
@@ -64,36 +63,19 @@ class AudioEngine(
     // in some players and downstream tooling that trusts container timing).
     @Volatile private var recordingStartNanos: Long = 0L
 
-    private val channelConfig =
-        if (channelCount == 1) AudioFormat.CHANNEL_IN_MONO else AudioFormat.CHANNEL_IN_STEREO
-
     /**
-     * Starts capturing into [walFile]. Returns once the encoder and recorder
-     * are both running; encoding happens on a background thread until [stop]
-     * is called.
+     * Starts capturing [audioSource] into [walFile]. Returns once the
+     * encoder and source are both running; encoding happens on a background
+     * thread until [stop] is called. Throws if [audioSource] doesn't report
+     * this engine's configured [sampleRateHz]/[channelCount] -- see class KDoc.
      */
-    @Suppress("MissingPermission") // caller (RecordingService) verifies RECORD_AUDIO before starting
-    fun start(walFile: File) {
+    fun start(walFile: File, audioSource: AudioSource) {
         check(!recording) { "AudioEngine already recording" }
 
-        val minBufferSize = AudioRecord.getMinBufferSize(
-            sampleRateHz,
-            channelConfig,
-            AudioFormat.ENCODING_PCM_16BIT,
-        )
-        require(minBufferSize > 0) { "Unable to size AudioRecord buffer for this device" }
-
-        val record = AudioRecord(
-            android.media.MediaRecorder.AudioSource.MIC,
-            sampleRateHz,
-            channelConfig,
-            AudioFormat.ENCODING_PCM_16BIT,
-            minBufferSize * 4,
-        )
-        preferredInputDeviceId?.let { deviceId ->
-            // TODO(bluetooth-mic): resolve deviceId to an AudioDeviceInfo and call
-            // record.setPreferredDevice(...). Not wired up yet -- see class KDoc.
-            Log.d(TAG, "preferredInputDeviceId=$deviceId requested but routing not implemented yet")
+        audioSource.start()
+        require(audioSource.sampleRateHz == sampleRateHz && audioSource.channelCount == channelCount) {
+            "AudioSource '${audioSource.deviceLabel}' reports ${audioSource.sampleRateHz}Hz/" +
+                "${audioSource.channelCount}ch but AudioEngine is configured for ${sampleRateHz}Hz/${channelCount}ch"
         }
 
         val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, sampleRateHz, channelCount).apply {
@@ -103,24 +85,23 @@ class AudioEngine(
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
 
         walWriter = OpusFrameWal.Writer(walFile, OpusFrameWal.Header(sampleRateHz, channelCount))
-        audioRecord = record
+        this.audioSource = audioSource
         encoder = codec
         recordingStartNanos = System.nanoTime()
 
-        record.startRecording()
         codec.start()
         recording = true
 
         captureThread = thread(name = "audio-engine-capture") {
-            runCaptureLoop(record, codec, minBufferSize)
+            runCaptureLoop(audioSource, codec)
         }
     }
 
-    private fun runCaptureLoop(record: AudioRecord, codec: MediaCodec, minBufferSize: Int) {
-        val pcmBuffer = ByteArray(minBufferSize)
+    private fun runCaptureLoop(source: AudioSource, codec: MediaCodec) {
+        val pcmBuffer = ByteArray(source.recommendedReadBufferSize)
         try {
             while (recording) {
-                val bytesRead = record.read(pcmBuffer, 0, pcmBuffer.size)
+                val bytesRead = source.read(pcmBuffer, 0, pcmBuffer.size)
                 if (bytesRead > 0) {
                     runCatching { onPcmFrame?.invoke(pcmBuffer, bytesRead) }
                         .onFailure { e -> Log.w(TAG, "onPcmFrame tee failed (STT unaffected audio path)", e) }
@@ -203,9 +184,8 @@ class AudioEngine(
         captureThread?.join(STOP_JOIN_TIMEOUT_MS)
         captureThread = null
 
-        runCatching { audioRecord?.stop() }
-        audioRecord?.release()
-        audioRecord = null
+        runCatching { audioSource?.stop() }
+        audioSource = null
 
         runCatching { encoder?.stop() }
         encoder?.release()

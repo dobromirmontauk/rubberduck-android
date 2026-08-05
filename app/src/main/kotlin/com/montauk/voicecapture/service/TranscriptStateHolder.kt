@@ -18,6 +18,14 @@ data class TranscriptUiState(
     val micLevel: Float = 0f,
     /** True when [com.montauk.voicecapture.service.SilenceDetector] says to show the "(silence)" hint. */
     val silenceHintVisible: Boolean = false,
+    /**
+     * [com.montauk.voicecapture.audio.AudioSource.deviceLabel] for the session
+     * currently recording -- null before a session starts. RecordingScreen's
+     * source chip shows "FILE" verbatim when this is "FILE" (debug-only audio
+     * injection, bead vn-edu.20); any other value falls back to its existing
+     * bluetooth/phone-mic detection instead of trusting a live mic's label.
+     */
+    val sourceLabel: String? = null,
 )
 
 /**
