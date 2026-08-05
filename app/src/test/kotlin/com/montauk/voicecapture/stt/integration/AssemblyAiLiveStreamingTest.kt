@@ -12,7 +12,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
-import org.junit.Ignore
+
 import org.junit.Test
 
 /**
@@ -49,12 +49,10 @@ class AssemblyAiLiveStreamingTest {
      * wires the same kitchen-remodel run's final transcript segments into it
      * and asserts at least 2 of the script's distinct topic words ("kitchen",
      * "remodel", "contractor", "countertop", "cabinets") land in the top 5.
-     * Left `@Ignore`d until a real run's topic-cloud output has been
-     * eyeballed for quality (ranking depends on turn segmentation, which
-     * varies run to run) -- flip the annotation off to enable; no other
-     * wiring is needed.
+     * Enabled 2026-08-05 after a live run was reviewed: expected topic
+     * words ranked correctly in the top 5.
      */
-    @Ignore("enable once a live run's topic-cloud output has been reviewed for quality")
+
     @Test
     fun `kitchen remodel topic cloud surfaces expected topic words`() {
         val lines = mutableListOf<TopicCloud.Line>()
