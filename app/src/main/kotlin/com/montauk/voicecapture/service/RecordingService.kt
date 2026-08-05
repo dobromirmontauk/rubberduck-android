@@ -111,18 +111,32 @@ class RecordingService : LifecycleService() {
     private var sttClient: StreamingSttClient? = null
     private var sttJobs: List<Job> = emptyList()
 
-    /** One entry per newly-finalized transcript line, drained by [tagPumpJob] -- see [beginRecording]. */
-    private data class FinalTagLine(val text: String, val endMs: Long)
+    /**
+     * One event per thing [tagPumpJob] should feed into [TagCoordinator]:
+     * either a newly-finalized transcript line, or a recording-time tick
+     * (bead vn-edu.44) carrying whatever partial is currently open --
+     * [startTicker] sends one of the latter every second regardless of
+     * whether any turn has closed, which is what lets [TagCoordinator.onTick]
+     * score a long-running monologue that never produces a [FinalLine].
+     */
+    private sealed interface TagPumpEvent {
+        /** Recording-elapsed ms this event corresponds to, for the `tags` event line's timestamp. */
+        val atMs: Long
+        data class FinalLine(val text: String, override val atMs: Long) : TagPumpEvent
+        data class Tick(val partialText: String, override val atMs: Long) : TagPumpEvent
+    }
 
     /**
      * Decouples tag scoring (bead vn-edu.38) from the STT partials collector:
-     * [startSttPipeline] only ever does a non-blocking [Channel.trySend] here,
-     * same pattern as [com.montauk.voicecapture.stt.AssemblyAiStreamingSttClient.sendPcm]'s
+     * [startSttPipeline] and [startTicker] only ever do a non-blocking
+     * [Channel.trySend] here, same pattern as
+     * [com.montauk.voicecapture.stt.AssemblyAiStreamingSttClient.sendPcm]'s
      * `pcmChannel` -- a slow or hung [com.montauk.voicecapture.tags.TagScorer]
      * call (e.g. Anthropic over the network) can only delay this queue's own
-     * drain, never the transcript pane or `live-transcript.jsonl` writes.
+     * drain, never the transcript pane, `live-transcript.jsonl` writes, or the
+     * audio capture path.
      */
-    private var tagLineChannel: Channel<FinalTagLine>? = null
+    private var tagLineChannel: Channel<TagPumpEvent>? = null
     private var tagPumpJob: Job? = null
     private var tagCoordinator: TagCoordinator? = null
 
@@ -277,7 +291,7 @@ class RecordingService : LifecycleService() {
                     // KDoc. DROP_OLDEST means a saturated tag pump (e.g. a slow
                     // AnthropicTagScorer call) sheds old lines rather than ever
                     // making this collector wait.
-                    tagLineChannel?.trySend(FinalTagLine(partial.text, partial.endMs))
+                    tagLineChannel?.trySend(TagPumpEvent.FinalLine(partial.text, partial.endMs))
                 }
             }
         }
@@ -291,26 +305,48 @@ class RecordingService : LifecycleService() {
      * Starts the tag-scoring pipeline (bead vn-edu.38): a dedicated pump
      * coroutine drains [tagLineChannel] serially (so [TagCoordinator]/
      * [com.montauk.voicecapture.tags.TagTracker], neither of which is
-     * thread-safe, only ever see one line at a time) and, whenever the
+     * thread-safe, only ever see one event at a time) and, whenever the
      * displayed-tags set actually changes, publishes it to [TagsStateHolder]
      * and appends a `tags` event line to `live-transcript.jsonl` -- the
      * exact same "publish to UI state, then persist" order [writeModeEvent]
      * uses for mode changes.
+     *
+     * [TagPumpEvent.FinalLine] (from [startSttPipeline]) and
+     * [TagPumpEvent.Tick] (from [startTicker], bead vn-edu.44) both land on
+     * this same channel/pump so [TagCoordinator] is only ever driven from one
+     * coroutine, matching [RecordingModeStateMachine]'s single-owner pattern.
      */
     private fun startTagPipeline(app: VoiceCaptureApp, session: SessionHandle) {
         val coordinator = TagCoordinator(app.newTagScorer())
         tagCoordinator = coordinator
-        val channel = Channel<FinalTagLine>(capacity = TAG_LINE_CHANNEL_CAPACITY, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        val channel = Channel<TagPumpEvent>(capacity = TAG_LINE_CHANNEL_CAPACITY, onBufferOverflow = BufferOverflow.DROP_OLDEST)
         tagLineChannel = channel
         tagPumpJob = lifecycleScope.launch(Dispatchers.IO) {
-            for (line in channel) {
-                val changed = runCatching { coordinator.onFinalLine(line.text, line.endMs) }.getOrNull() ?: continue
+            for (event in channel) {
+                val changed = runCatching {
+                    when (event) {
+                        is TagPumpEvent.FinalLine -> coordinator.onFinalLine(event.text, event.atMs)
+                        is TagPumpEvent.Tick -> coordinator.onTick(event.atMs, event.partialText)
+                    }
+                }.getOrNull() ?: continue
                 TagsStateHolder.update(changed)
-                app.sessionStore.transcriptFile(session.dir).appendText(TagsEventWriter.encodeLine(line.endMs, changed) + "\n")
+                app.sessionStore.transcriptFile(session.dir).appendText(TagsEventWriter.encodeLine(event.atMs, changed) + "\n")
             }
         }
     }
 
+    /**
+     * Drives elapsed-time UI/notification updates every second, and (bead
+     * vn-edu.44) also feeds [TagCoordinator] a [TagPumpEvent.Tick] carrying
+     * whatever partial is currently open on every tick -- this is what lets a
+     * long-running monologue that never closes a turn (no `end_of_turn` for
+     * 45-60s+) still reach the scorer instead of waiting on a
+     * [TagPumpEvent.FinalLine] that may not arrive for a minute or more.
+     * Reads [TranscriptStateHolder] directly rather than threading the
+     * partial text through a separate field -- that's already the single
+     * source of truth [RecordingScreen][com.montauk.voicecapture.ui.RecordingScreen]
+     * itself renders from.
+     */
     private fun startTicker() {
         lifecycleScope.launch {
             while (isActive && currentSession != null) {
@@ -318,6 +354,7 @@ class RecordingService : LifecycleService() {
                 RecordingStateHolder.update { it.copy(elapsedMs = elapsed) }
                 getSystemService(NotificationManager::class.java)
                     ?.notify(NOTIFICATION_ID, buildNotification(elapsed))
+                tagLineChannel?.trySend(TagPumpEvent.Tick(TranscriptStateHolder.state.value.currentPartial, elapsed))
                 delay(TICK_INTERVAL_MS)
             }
         }

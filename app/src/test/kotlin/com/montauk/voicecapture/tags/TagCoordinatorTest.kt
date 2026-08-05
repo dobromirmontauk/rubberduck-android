@@ -157,4 +157,117 @@ class TagCoordinatorTest {
 
         assertTrue("expected the tag to have decayed out via tick(), got $result", result != null && result.isEmpty())
     }
+
+    // --- Bead vn-edu.44: tags never appear when speech stays in one long partial ---
+    //
+    // User screenshots 2026-08-05: zero tag chips across a 47s continuously-
+    // spoken session. TagCoordinator's rolling tail only ever fed on FINAL
+    // lines (via onFinalLine); with no turn closed for a minute, the scorer
+    // never received anything, so it never had a chance to produce a
+    // candidate. Fix: onTick(nowMs, currentPartialText) folds the STT's
+    // still-open partial into the rolling tail and lets the scorer's cadence
+    // fire off recording-elapsed time instead of waiting on a closed turn.
+
+    @Test
+    fun `onTick feeds the scorer the current partial even with zero final lines`() = runBlocking {
+        val scorer = StubScorer(minIntervalMs = 0L, resultsQueue = mutableListOf(listOf(TagCandidate("topic", 0.9))))
+        val coordinator = TagCoordinator(scorer)
+
+        val result = coordinator.onTick(nowMs = 1_000L, currentPartialText = "still talking about the same topic")
+
+        assertEquals(listOf("still talking about the same topic"), scorer.calls.map { it.first })
+        assertEquals(listOf("topic"), result?.map { it.tag })
+    }
+
+    @Test
+    fun `onTick respects the scorer's cadence the same way onFinalLine does`() = runBlocking {
+        val scorer = StubScorer(minIntervalMs = 30_000L, resultsQueue = mutableListOf(listOf(TagCandidate("topic", 0.9))))
+        val coordinator = TagCoordinator(scorer)
+        coordinator.onTick(nowMs = 0L, currentPartialText = "opening words")
+
+        // Not re-scored yet (30s cadence, only 5s elapsed) -- a second call to
+        // the scorer would be the bug here, not whether the returned displayed
+        // set happens to be null: the decay-driven fallback path (same as the
+        // older tick()) can legitimately report a non-null result on its own
+        // as a tracked candidate's confidence keeps decaying between scorer
+        // calls, independent of cadence.
+        coordinator.onTick(nowMs = 5_000L, currentPartialText = "opening words plus a few more")
+
+        assertEquals(1, scorer.calls.size)
+    }
+
+    @Test
+    fun `onTick still surfaces decay-driven exits when the cadence is not due`() = runBlocking {
+        val scorer = StubScorer(minIntervalMs = 999_000L, resultsQueue = mutableListOf(listOf(TagCandidate("topic", 0.9))))
+        val tracker = TagTracker(decayHalfLifeMs = 5_000L, minDwellMs = 0L, exitThreshold = 0.3)
+        val coordinator = TagCoordinator(scorer, tracker)
+        coordinator.onTick(nowMs = 0L, currentPartialText = "the one and only topic")
+
+        // Cadence isn't due again (minIntervalMs=999s), but decay/exit should still apply.
+        val result = coordinator.onTick(nowMs = 30_000L, currentPartialText = "the one and only topic keeps going")
+
+        assertTrue("expected the tag to have decayed out via onTick(), got $result", result != null && result.isEmpty())
+    }
+
+    /**
+     * Failing-first repro (mandatory per bead vn-edu.44): a 60s single
+     * continuously-growing partial, no final line ever closes, real
+     * [HeuristicTagScorer] + real [TagTracker] (the "heuristic path", no
+     * network/mocking) -- exactly the user's screenshot scenario. Simulates
+     * the STT's replace-not-append partial semantics (each tick's
+     * `currentPartialText` is the FULL transcript-so-far for the still-open
+     * turn, matching [com.montauk.voicecapture.stt.TranscriptPartial.text]),
+     * at a rough natural speaking pace (~2.5 words/sec / 150wpm), ticking
+     * once per simulated second the same way [com.montauk.voicecapture.service.RecordingService]'s
+     * ticker does.
+     *
+     * Also documents the "time to first tag" expectation from the bead's
+     * acceptance criteria: a clearly single-topic monologue should surface a
+     * first heuristic tag within ~40s of defaults.
+     */
+    @Test
+    fun `a 60s single continuous partial with no closed turn still reaches the tracker via the heuristic path`() = runBlocking {
+        // Modeled on the real drive-home-hiring.txt fixture's scenario
+        // (app/src/debug/assets/fixtures/drive-home-hiring.txt) -- a single-
+        // topic monologue ("this hiring decision") repeated/rephrased the way
+        // real unscripted narration does, which is exactly the shape
+        // HeuristicTagScorer's repetition + lead-position signals are tuned
+        // to reward.
+        val monologue = "I've been going back and forth all day on this hiring decision for the senior engineer role. " +
+            "Candidate A is stronger technically, better system design skills, more relevant experience. " +
+            "Candidate B is weaker technically but every interviewer loved candidate B's communication style. " +
+            "This hiring decision really comes down to whether we need technical depth or team fit. " +
+            "I keep coming back to this hiring decision every time I compare candidate A and candidate B. "
+        val fullText = (monologue + monologue + monologue + monologue).trim()
+        val words = fullText.split(" ")
+
+        val coordinator = TagCoordinator(HeuristicTagScorer(), TagTracker())
+        var firstTagAtMs: Long? = null
+
+        for (second in 1..60) {
+            val nowMs = second * 1_000L
+            val wordCount = (second * WORDS_PER_SECOND).toInt().coerceAtMost(words.size)
+            val partialSoFar = words.take(wordCount).joinToString(" ")
+            coordinator.onTick(nowMs, partialSoFar)
+            if (firstTagAtMs == null && coordinator.currentDisplayed().isNotEmpty()) {
+                firstTagAtMs = nowMs
+            }
+        }
+
+        assertTrue(
+            "expected at least one candidate to reach the tracker via the heuristic path over a 60s " +
+                "continuous partial with no closed turn -- got ${coordinator.currentDisplayed()}",
+            coordinator.currentDisplayed().isNotEmpty(),
+        )
+        assertTrue("expected a first tag within the 60s simulated window", firstTagAtMs != null)
+        assertTrue(
+            "documented expectation (bead vn-edu.44 acceptance criteria): a clearly single-topic " +
+                "monologue should surface a first heuristic tag within ~40s of defaults, got firstTagAtMs=$firstTagAtMs",
+            firstTagAtMs!! <= 40_000L,
+        )
+    }
+
+    private companion object {
+        const val WORDS_PER_SECOND = 2.5
+    }
 }
