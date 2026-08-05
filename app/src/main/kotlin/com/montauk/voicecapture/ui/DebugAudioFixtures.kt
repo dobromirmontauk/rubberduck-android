@@ -22,6 +22,11 @@ data class DebugFixture(val label: String, val assetFileName: String)
 val DEBUG_FIXTURES = listOf(
     DebugFixture("Kitchen remodel", "kitchen-remodel.wav"),
     DebugFixture("Marathon training", "marathon-training.wav"),
+    // Long-form (~3.5-4min) multi-topic rambles for exercising topic-chip
+    // drift over time (bead vn-edu.39) -- see the fixtures table in
+    // README.md for each one's topic ground truth.
+    DebugFixture("Dog walk download", "dog-walk-download.wav"),
+    DebugFixture("Drive home", "drive-home-hiring.wav"),
 )
 
 /**

@@ -32,15 +32,32 @@ from an `AudioSource` interface rather than `AudioRecord` directly (see
 the mic and feed a recording session from a WAV file instead -- WAL, live
 transcript, mic-level meter, and tag chips all behave exactly as they
 would with a real mic, and the recording screen's source chip shows `FILE`
-instead of `PHONE MIC`/`BLUETOOTH` so it's obvious which one is active. Two
-bundled fixtures (`app/src/debug/assets/fixtures/`, the same 16kHz mono WAVs
-`AssemblyAiLiveStreamingTest` uses) ship in every debug build only -- never
-in release.
+instead of `PHONE MIC`/`BLUETOOTH` so it's obvious which one is active. A
+handful of bundled fixtures (`app/src/debug/assets/fixtures/`, all 16kHz
+mono WAVs) ship in every debug build only -- never in release. See the
+table below for what each one covers.
 
 **From the emulator UI (no adb needed):** long-press the "New Session" tab
-in the bottom nav. A picker lists the bundled fixtures ("Kitchen remodel",
-"Marathon training"); pick one and recording starts immediately, fed from
-that file instead of the mic.
+in the bottom nav. A picker lists the bundled fixtures; pick one and
+recording starts immediately, fed from that file instead of the mic.
+
+| Fixture (picker label) | File | Duration | Topic ground truth |
+| --- | --- | --- | --- |
+| Kitchen remodel | `kitchen-remodel.wav` | ~26s | kitchen remodel |
+| Marathon training | `marathon-training.wav` | ~28s | marathon training |
+| Dog walk download | `dog-walk-download.wav` | ~3m41s | kitchen remodel, work launch, vacation -- single-topic phases with a return to the remodel decision after the launch/vacation detour (bead vn-edu.39) |
+| Drive home | `drive-home-hiring.wav` | ~3m45s | hiring decision (dominant, whole clip) -- dinner plans and car noise are brief digressions that should *not* earn their own topic chip; the single-strong-tag test case (bead vn-edu.39) |
+
+The two long-form fixtures exist to exercise topic-chip dynamics (growth,
+reordering, shrinking) that only show up once a session runs several
+minutes and drifts across multiple major topics with natural transitions,
+filler, and a few multi-second pauses (`say`'s `[[slnc N]]`). Their source
+scripts -- the exact text fed to `say`, and the ground truth for what's
+said and when the pauses land -- are committed alongside the WAVs as
+`<name>.txt` in the same `app/src/debug/assets/fixtures/` directory, and
+`scripts/generate-fixtures.sh` regenerates any fixture's WAV from its `.txt`
+(macOS `say` + `afconvert`, pinned to the `Samantha` voice for reproducible
+regeneration).
 
 **From the command line, injecting your own file:** push any 16kHz mono
 16-bit PCM WAV to the device and pass its path as the `inject_audio` extra
