@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.roborazzi)
 }
 
 // Secrets live only in local.properties (gitignored), never in the source tree.
@@ -113,24 +114,53 @@ android {
     }
 }
 
+// Roborazzi golden PNGs (bead vn-edu.34) live under source control, not
+// build/ -- committed goldens are the whole point (reviewable diffs on
+// deliberate visual changes). compare-diff overlays stay under the default
+// build/ location since those are throwaway debugging artifacts from a
+// failed verify, not something to commit.
+roborazzi {
+    outputDir.set(file("src/test/screenshot/goldens"))
+}
+
 // STT integration harness (bead vn-edu.21): AssemblyAiLiveStreamingTest
 // streams synthesized audio through the real AssemblyAiStreamingSttClient to
 // AssemblyAI's live endpoint -- real network, ~$0.01/run. Excluded from the
 // default `test` task; run it explicitly via `./gradlew integrationTest`.
 // See docs/stt-harness.md.
+// Roborazzi golden-screenshot tests (bead vn-edu.34, `**/screenshot/**`) are
+// excluded from a plain `./gradlew test` run: captureRoboImage() with no
+// roborazzi.test.{record,verify,compare} mode active just (re)writes the PNG
+// unconditionally, which would silently rewrite committed goldens (and touch
+// the working tree) on every ordinary test run instead of asserting anything.
+// The Roborazzi Gradle plugin's `recordRoborazziDebug` / `verifyRoborazziDebug`
+// / `compareRoborazziDebug` tasks depend on this same `testDebugUnitTest` task
+// (confirmed via `./gradlew help --task verifyRoborazziDebug`) rather than
+// defining a separate one, and set the record/verify/compare mode only via a
+// system property on the *forked test JVM* -- invisible to this build script
+// at configuration time. Checking the originally-requested task names instead
+// is what actually distinguishes "./gradlew test" from
+// "./gradlew verifyRoborazziDebug" here. See README's "Screenshot tests
+// (Roborazzi)" section.
+val roborazziTaskRequested = gradle.startParameter.taskNames.any { it.contains("Roborazzi") }
 tasks.withType<Test>().configureEach {
     if (name != "integrationTest") {
         exclude("**/stt/integration/**")
     }
-    // Compose interaction tests (vn-edu.35, AppNavHostInteractionTest) need
+    // Compose interaction tests (vn-edu.35, AppNavHostInteractionTest) and
+    // Roborazzi screenshot tests (vn-edu.34, `**/screenshot/**`) both need
     // androidx.compose.ui:ui-test-manifest's merged-in host Activity to launch
     // createComposeRule()'s content -- that library is debugImplementation-only
     // on purpose (shipping a test-only Activity declaration in the *release*
-    // manifest would be worse than just not re-running this suite under the
-    // release unit-test variant). The same AppNavHost/screens this exercises are
-    // already fully covered by testDebugUnitTest.
+    // manifest would be worse than just not re-running these suites under the
+    // release unit-test variant). The same AppNavHost/screens they exercise are
+    // already fully covered under the debug variant.
     if (name == "testReleaseUnitTest") {
         exclude("**/AppNavHostInteractionTest.class")
+        exclude("**/screenshot/**")
+    }
+    if (!roborazziTaskRequested) {
+        exclude("**/screenshot/**")
     }
 }
 
@@ -179,4 +209,6 @@ dependencies {
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+    // Roborazzi screenshot goldens (vn-edu.34) -- also JVM-only, no emulator/device.
+    testImplementation(libs.roborazzi)
 }

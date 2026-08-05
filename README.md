@@ -198,6 +198,70 @@ device. It runs in the default `./gradlew test` (part of `testDebugUnitTest`).
   `git checkout -- app/src/main/kotlin/com/montauk/voicecapture/ui/BottomNavBar.kt`
   (or `git stash pop`) to restore the fix.
 
+## Screenshot tests (Roborazzi)
+
+`app/src/test/kotlin/com/montauk/voicecapture/screenshot/KeyScreensScreenshotTest.kt`
+(bead vn-edu.34) renders five key screens -- Sessions list + bottom nav, the
+full Recording stack (timer, chips, loudness meter, mode switcher, live
+transcript, topic chips, STOP), Session detail, Settings, and Login -- via
+Robolectric's native-graphics renderer and diffs each against a committed
+golden PNG under `src/test/screenshot/goldens/`. No emulator, no device.
+
+**Determinism.** Every screen is driven from fixed fixture state: fixed
+session ids/dates/transcript text via `testutil/SessionFixtures.kt` (no
+`Date()`/`System.currentTimeMillis()`/`Random`), a fixed device
+(`@Config(qualifiers = RobolectricDeviceQualifiers.Pixel7)`), and the app's
+theme is always dark regardless of system setting (`VoiceCaptureTheme`).
+None of these screens have a persistent animation running at first render,
+so no explicit clock-advance/animation-disable is needed beyond
+`composeTestRule.waitForIdle()`.
+
+**Where the goldens live.** `build.gradle.kts` sets
+`roborazzi { outputDir.set(file("src/test/screenshot/goldens")) }`, but that
+extension only auto-prefixes `captureRoboImage()` calls that *omit* a
+filename; each test here passes an explicit one (`GOLDEN_DIR + "<name>.png"`,
+resolved against the test JVM's working directory, which Gradle sets to the
+`app/` module root), so the directory is spelled out in both places rather
+than relying on the extension alone -- see the comment on
+`KeyScreensScreenshotTest.GOLDEN_DIR`.
+
+**Running it.**
+
+- `./gradlew verifyRoborazziDebug` -- re-renders every screen and fails the
+  build on any pixel diff (writes a `<name>_compare.png` diff overlay under
+  `app/build/outputs/roborazzi/` on failure, not committed). This is the gate;
+  run it after any change that touches a screen these tests cover.
+- `./gradlew recordRoborazziDebug` -- re-renders and *overwrites* the
+  committed goldens. Run this once you've reviewed a deliberate visual change
+  and confirmed it's correct, then `git diff` the resulting PNGs (or eyeball
+  them) and commit the updated goldens **in the same commit** as the code
+  change that caused them to move -- a golden update with no accompanying
+  code change, or a code change with no golden update, should read as
+  suspicious in review.
+- `./gradlew test` / `./gradlew testDebugUnitTest` deliberately do **not**
+  run these: `captureRoboImage()` with no `roborazzi.test.{record,verify,
+  compare}` mode active just writes the PNG unconditionally, which would
+  silently rewrite committed goldens (and dirty the working tree) on every
+  ordinary test run instead of asserting anything. `build.gradle.kts` excludes
+  `**/screenshot/**` from `Test` tasks unless one of Roborazzi's own tasks
+  (`recordRoborazziDebug` / `verifyRoborazziDebug` / `compareRoborazziDebug`)
+  was what was actually requested -- see the comment above
+  `roborazziTaskRequested` there for how that's detected.
+- Also excluded from `testReleaseUnitTest` regardless of task name, same
+  reason as `AppNavHostInteractionTest` above (`ui-test-manifest` is
+  `debugImplementation`-only).
+
+**Proof it catches a regression.** Verified while building this suite:
+temporarily changed `SettingsScreen.kt`'s headline text (`"Settings"` ->
+`"SETTINGS BROKEN"`), ran `./gradlew verifyRoborazziDebug`, and got:
+```
+java.lang.AssertionError: Roborazzi: .../src/test/screenshot/goldens/settings.png is changed.
+See the compare image at .../build/outputs/roborazzi/settings_compare.png
+```
+Reverting the change (`git checkout -- app/src/main/kotlin/com/montauk/voicecapture/ui/SettingsScreen.kt`)
+and rerunning `verifyRoborazziDebug` goes green again -- no golden update
+needed since nothing legitimately changed.
+
 ## Toolchain notes for the next agent
 
 - Built and tested on this machine with **Temurin JDK 21** (the system
