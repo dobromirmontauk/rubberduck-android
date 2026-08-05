@@ -11,11 +11,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -39,7 +39,6 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -63,9 +62,11 @@ import kotlin.math.roundToInt
 /**
  * The full-glance recording screen: huge timer, LIVE/OFFLINE + Bluetooth
  * chips, a mic-level bar, the mode switcher, the last couple of transcript
- * lines, topic chips, and a full-width STOP bar owning the bottom fifth. No
- * bottom nav here -- this screen is meant to be readable at arm's length
- * while walking.
+ * lines, topic chips, and a large inset STOP button anchored to the bottom
+ * (bead vn-edu.32 -- a floating button with clear margins, not a full-bleed
+ * slab flush with the screen edge, which read as sitting exactly where the
+ * app's own bottom nav normally lives). No bottom nav here -- this screen is
+ * meant to be readable at arm's length while walking.
  */
 @Composable
 fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> Unit = {}) {
@@ -99,7 +100,9 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
                     LiveTranscriptPane(transcript = transcript, modifier = Modifier.weight(1f))
                     Spacer(modifier = Modifier.height(16.dp))
                     TopicChipsRow(topics = topics)
-                    Spacer(modifier = Modifier.height(16.dp))
+                    // Extra air below the chips row (bead vn-edu.32) so the inset STOP
+                    // button reads as floating above content, not touching the chips.
+                    Spacer(modifier = Modifier.height(24.dp))
                 }
                 StopBar(modifier = Modifier.weight(1f), onClick = onStopRecording)
             }
@@ -346,22 +349,41 @@ private fun TopicChip(topic: TopicCloud.Topic) {
     }
 }
 
-/** Full-width bottom bar owning the bottom fifth of the screen. */
+/**
+ * Large, deep-red STOP control rendered as an inset rounded button rather
+ * than a full-bleed slab (bead vn-edu.32): [STOP_BUTTON_HORIZONTAL_MARGIN]
+ * side margins and [navigationBarsPadding] plus a small bottom margin keep
+ * it clear of the gesture-nav inset, so it reads as a button floating above
+ * content rather than a bar replacing the (hidden) bottom nav. Still very
+ * large -- full-width-minus-margins, at least [STOP_BUTTON_MIN_HEIGHT] tall.
+ */
 @Composable
 private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        modifier = modifier.fillMaxWidth(),
-        shape = RectangleShape,
-        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = STOP_BUTTON_HORIZONTAL_MARGIN, vertical = 8.dp)
+            .navigationBarsPadding(),
+        contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = "STOP",
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onError,
-        )
+        Button(
+            onClick = onClick,
+            modifier = Modifier.fillMaxSize().heightIn(min = STOP_BUTTON_MIN_HEIGHT),
+            shape = RoundedCornerShape(STOP_BUTTON_CORNER_RADIUS),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+        ) {
+            Text(
+                text = "STOP",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onError,
+            )
+        }
     }
 }
+
+private val STOP_BUTTON_HORIZONTAL_MARGIN = 16.dp
+private val STOP_BUTTON_CORNER_RADIUS = 20.dp
+private val STOP_BUTTON_MIN_HEIGHT = 72.dp
 
 /**
  * Deterministic stand-in for real speech, used only by the previews below:
@@ -402,5 +424,37 @@ private fun LoudnessMeterBarPreviewQuiet() {
 private fun LoudnessMeterBarPreviewLoud() {
     VoiceCaptureTheme {
         LoudnessMeterBarContent(history = syntheticLoudHistory())
+    }
+}
+
+/** Synthetic topic chips, largest-weight first, for the bottom-of-screen preview below. */
+private fun syntheticTopics(): List<TopicCloud.Topic> = listOf(
+    TopicCloud.Topic("budget", 4.0, TopicCloud.Tier.LARGE),
+    TopicCloud.Topic("timeline", 3.0, TopicCloud.Tier.MEDIUM),
+    TopicCloud.Topic("vendor", 2.0, TopicCloud.Tier.MEDIUM),
+    TopicCloud.Topic("permit", 1.0, TopicCloud.Tier.SMALL),
+)
+
+/**
+ * Preview-only: the bottom of [RecordingScreen] -- topic chips, the air gap
+ * below them, and the STOP control -- rendered standalone at phone-bottom
+ * proportions (bead vn-edu.32) so the inset-rounded-button treatment (margins,
+ * corner radius, clearance from the gesture-nav inset) can be inspected
+ * without needing the full recording state or a device.
+ */
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 280)
+@Composable
+private fun StopBarPreview() {
+    VoiceCaptureTheme {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
+                verticalArrangement = Arrangement.Bottom,
+            ) {
+                TopicChipsRow(topics = syntheticTopics())
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+            StopBar(modifier = Modifier.weight(1f), onClick = {})
+        }
     }
 }
