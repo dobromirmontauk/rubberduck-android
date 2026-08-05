@@ -64,6 +64,14 @@ android {
         buildConfig = true
     }
 
+    // AssemblyAiStreamingSttClient logs via android.util.Log on its failure
+    // paths; plain JVM unit tests otherwise crash with "Method w in
+    // android.util.Log not mocked" the moment a real socket hiccups (which
+    // the STT integration harness needs to tolerate, not choke on).
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -77,6 +85,37 @@ android {
         }
         getByName("test") {
             kotlin.srcDirs("src/test/kotlin")
+            // WAV/text fixtures for the STT integration harness (bead
+            // vn-edu.21) -- kept under integrationTest/ rather than
+            // test/resources so they read as fixtures, not ordinary test data.
+            resources.srcDirs("src/integrationTest/resources")
+        }
+    }
+}
+
+// STT integration harness (bead vn-edu.21): AssemblyAiLiveStreamingTest
+// streams synthesized audio through the real AssemblyAiStreamingSttClient to
+// AssemblyAI's live endpoint -- real network, ~$0.01/run. Excluded from the
+// default `test` task; run it explicitly via `./gradlew integrationTest`.
+// See docs/stt-harness.md.
+tasks.withType<Test>().configureEach {
+    if (name != "integrationTest") {
+        exclude("**/stt/integration/**")
+    }
+}
+
+afterEvaluate {
+    tasks.register<Test>("integrationTest") {
+        group = "verification"
+        description = "Runs the mic-free AssemblyAI streaming STT integration test (real network, ~\$0.01/run). See docs/stt-harness.md."
+        val debugUnitTest = tasks.named<Test>("testDebugUnitTest").get()
+        testClassesDirs = debugUnitTest.testClassesDirs
+        classpath = debugUnitTest.classpath
+        include("**/stt/integration/**")
+        outputs.upToDateWhen { false }
+        testLogging {
+            events("passed", "skipped", "failed", "standard_out")
+            showStandardStreams = true
         }
     }
 }
