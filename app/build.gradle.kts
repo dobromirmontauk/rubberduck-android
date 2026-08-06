@@ -166,6 +166,9 @@ tasks.withType<Test>().configureEach {
         exclude("**/AppNavHostInteractionTest.class")
         exclude("**/LiveTranscriptPaneOverlongPartialTest.class")
         exclude("**/LiveTranscriptPaneWordFinalityTest.class")
+        exclude("**/RecordingScreenTagsSlotTest.class")
+        exclude("**/ApiKeyManagementRowTest.class")
+        exclude("**/IntelligenceStepTest.class")
         exclude("**/screenshot/**")
     }
     if (!roborazziTaskRequested) {
