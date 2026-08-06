@@ -22,4 +22,10 @@ internal fun DuckFrame.drawableRes(): Int = when (this) {
     DuckFrame.LISTENING_INTRO_3 -> R.drawable.duck_listen_intro_03
     DuckFrame.SLEEPY_1 -> R.drawable.duck_sleepy_01
     DuckFrame.SLEEPY_2 -> R.drawable.duck_sleepy_02
+    DuckFrame.THINKING_1 -> R.drawable.duck_thinking_01
+    DuckFrame.THINKING_2 -> R.drawable.duck_thinking_02
+    DuckFrame.THINKING_3 -> R.drawable.duck_thinking_03
+    DuckFrame.HAPPY_BOUNCE_1 -> R.drawable.duck_happy_01
+    DuckFrame.HAPPY_BOUNCE_2 -> R.drawable.duck_happy_02
+    DuckFrame.HAPPY_BOUNCE_3 -> R.drawable.duck_happy_03
 }

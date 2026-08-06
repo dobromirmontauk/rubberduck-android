@@ -61,6 +61,12 @@ class LiveTranscriptPaneWordFinalityTest {
     fun setUp() {
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
+        // Bead asn-3sm: RecordingScreen now also reads these three
+        // singletons -- reset so an earlier test class's state (approvals,
+        // a fake summary, a latency badge) never leaks into this one.
+        com.montauk.voicecapture.service.TagApprovalStateHolder.reset()
+        com.montauk.voicecapture.service.SummaryStateHolder.reset()
+        com.montauk.voicecapture.service.LatencyBadgeStateHolder.reset()
         // Bead vn-edu.66: the pane now gates on the effective AssemblyAI key
         // -- this test's fixture implies a real CONNECTED session (it seeds
         // currentPartial directly), so it needs a configured key or it would

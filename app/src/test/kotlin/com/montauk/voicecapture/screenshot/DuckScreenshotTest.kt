@@ -14,8 +14,9 @@ import com.montauk.voicecapture.duck.DuckFrame
 import com.montauk.voicecapture.duck.DuckPoseFrame
 import com.montauk.voicecapture.duck.DuckState
 import com.montauk.voicecapture.duck.DuckVisual
-import com.montauk.voicecapture.duck.TopicWordCloudTopics
-import com.montauk.voicecapture.duck.WordCloud
+import com.montauk.voicecapture.duck.TagWordStatus
+import com.montauk.voicecapture.duck.ThoughtCloud
+import com.montauk.voicecapture.duck.ThoughtCloudWord
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 import org.junit.Rule
 import org.junit.Test
@@ -34,7 +35,9 @@ import org.robolectric.annotation.GraphicsMode
  * recording screen never stops animating, which also means capturing "the"
  * frame of a running instance would be nondeterministic across CI runs.
  * These goldens instead exercise exactly what a viewer would see at the
- * first frame of each state, including the real [WordCloud] layout.
+ * first frame of each state, including the real [ThoughtCloud] layout --
+ * with `reducedMotion = true` so the cloud's own continuous drift/shimmer
+ * doesn't introduce the same nondeterminism.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -49,15 +52,20 @@ class DuckScreenshotTest {
     val composeTestRule = createComposeRule()
 
     @Test
-    fun duckListeningWithWordCloud() {
+    fun duckListeningWithThoughtCloud() {
         composeTestRule.setContent {
             VoiceCaptureTheme {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    WordCloud(
-                        topics = TopicWordCloudTopics(
-                            confirmed = listOf("kitchen remodel", "budget", "timeline"),
-                            candidates = listOf("vendor", "electrician"),
+                    ThoughtCloud(
+                        words = listOf(
+                            ThoughtCloudWord("family-trust", 0.9, TagWordStatus.EXISTING),
+                            ThoughtCloudWord("kitchen-remodel", 0.85, TagWordStatus.PROPOSED),
+                            ThoughtCloudWord("dog-walks", 0.8, TagWordStatus.APPROVED),
+                            ThoughtCloudWord("contractors", 0.4, TagWordStatus.CANDIDATE),
+                            ThoughtCloudWord("permits", 0.3, TagWordStatus.CANDIDATE),
                         ),
+                        reducedMotion = true,
+                        onApprove = {},
                         modifier = Modifier.fillMaxSize(),
                     )
                     DuckPoseFrame(
@@ -70,7 +78,7 @@ class DuckScreenshotTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_listening_word_cloud.png")
+        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_listening_thought_cloud.png")
     }
 
     @Test
@@ -89,6 +97,24 @@ class DuckScreenshotTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_sleepy.png")
+    }
+
+    @Test
+    fun duckThinking() {
+        composeTestRule.setContent {
+            VoiceCaptureTheme {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    DuckPoseFrame(
+                        visual = DuckVisual.Pose(DuckFrame.THINKING_1),
+                        state = DuckState.THINKING,
+                        modifier = Modifier.fillMaxWidth(0.55f).aspectRatio(1f),
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_thinking.png")
     }
 
     @Test

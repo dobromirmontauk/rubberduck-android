@@ -39,6 +39,12 @@ class RecordingScreenDuckToggleTest {
         app = ApplicationProvider.getApplicationContext()
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
+        // Bead asn-3sm: RecordingScreen now also reads these three
+        // singletons -- reset so an earlier test class's state (approvals,
+        // a fake summary, a latency badge) never leaks into this one.
+        com.montauk.voicecapture.service.TagApprovalStateHolder.reset()
+        com.montauk.voicecapture.service.SummaryStateHolder.reset()
+        com.montauk.voicecapture.service.LatencyBadgeStateHolder.reset()
         TagsStateHolder.reset()
         // A configured AssemblyAI key (rather than the keyless default) so the
         // debug view renders LiveTranscriptPane's keyed LazyColumn --

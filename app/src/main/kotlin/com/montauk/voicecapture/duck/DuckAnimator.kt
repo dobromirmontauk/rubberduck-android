@@ -47,12 +47,21 @@ import kotlinx.coroutines.delay
  * normal viewing speed.
  */
 @Composable
-fun DuckAnimator(state: DuckState, modifier: Modifier = Modifier) {
+fun DuckAnimator(state: DuckState, modifier: Modifier = Modifier, happyBounceTrigger: Int = 0) {
     val engine = remember { DuckAnimationEngine(initialState = state) }
     var visual by remember { mutableStateOf<DuckVisual>(engine.tick(0L)) }
 
     LaunchedEffect(state) {
         engine.setState(state, nowMillis())
+    }
+    // Bead asn-0jk/asn-3sm: "Got it!" -- a new tag approved (or a summary
+    // bullet added) plays a one-shot happy-bounce over whatever's currently
+    // showing. [happyBounceTrigger] is a plain incrementing counter (not a
+    // one-shot event flow) -- simplest reliable "fire on every real change"
+    // signal for a Compose LaunchedEffect key; callers only ever increment
+    // it, never reset it to 0, so 0 itself never (re-)triggers a bounce.
+    LaunchedEffect(happyBounceTrigger) {
+        if (happyBounceTrigger != 0) engine.triggerHappyBounce(nowMillis())
     }
     LaunchedEffect(engine) {
         while (true) {

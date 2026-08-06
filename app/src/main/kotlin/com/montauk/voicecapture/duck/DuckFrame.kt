@@ -19,6 +19,12 @@ enum class DuckFrame {
     LISTENING_INTRO_3,
     SLEEPY_1,
     SLEEPY_2,
+    THINKING_1,
+    THINKING_2,
+    THINKING_3,
+    HAPPY_BOUNCE_1,
+    HAPPY_BOUNCE_2,
+    HAPPY_BOUNCE_3,
 }
 
 /** Resting/default loop (bead asn-3sm) -- MANIFEST.md sequence 1, frames 01-04. */
@@ -41,3 +47,17 @@ internal val LISTENING_INTRO_SEQUENCE = listOf(
 
 /** Slow-cadence loop for SLEEPY -- MANIFEST.md sequence 12, frames 38-39. */
 internal val SLEEPY_SEQUENCE = listOf(DuckFrame.SLEEPY_1, DuckFrame.SLEEPY_2)
+
+/**
+ * Loops for THINKING ("taking notes" stand-in until the real
+ * writing-on-notepad pose lands as 41+, per the design board's asset-gap
+ * note) -- MANIFEST.md sequence 7, frames 23-25.
+ */
+internal val THINKING_SEQUENCE = listOf(DuckFrame.THINKING_1, DuckFrame.THINKING_2, DuckFrame.THINKING_3)
+
+/**
+ * One-shot squash-stretch bounce (design-board section 1: "Got it!" -- new
+ * tag approved / summary bullet added) that can interrupt any other state
+ * for its duration -- MANIFEST.md sequence 8, frames 26-28.
+ */
+internal val HAPPY_BOUNCE_SEQUENCE = listOf(DuckFrame.HAPPY_BOUNCE_1, DuckFrame.HAPPY_BOUNCE_2, DuckFrame.HAPPY_BOUNCE_3)

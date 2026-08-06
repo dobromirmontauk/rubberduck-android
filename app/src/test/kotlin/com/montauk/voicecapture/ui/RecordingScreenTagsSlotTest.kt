@@ -8,8 +8,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import com.montauk.voicecapture.VoiceCaptureApp
-import com.montauk.voicecapture.duck.CANDIDATE_WORD_TEST_TAG_PREFIX
-import com.montauk.voicecapture.duck.CONFIRMED_WORD_TEST_TAG_PREFIX
+import com.montauk.voicecapture.duck.EXISTING_WORD_TEST_TAG_PREFIX
+import com.montauk.voicecapture.duck.PROPOSED_WORD_TEST_TAG_PREFIX
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
 import com.montauk.voicecapture.service.TagsStateHolder
@@ -49,6 +49,9 @@ class RecordingScreenTagsSlotTest {
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
         TagsStateHolder.reset()
+        com.montauk.voicecapture.service.TagApprovalStateHolder.reset()
+        com.montauk.voicecapture.service.SummaryStateHolder.reset()
+        com.montauk.voicecapture.service.LatencyBadgeStateHolder.reset()
         app.secretsStore.userAnthropicKey = null
         // isSignedOut = true forces AppSecretsStore.effectiveAnthropicKey() to
         // "" unconditionally (same guard KeyScreensScreenshotTest uses) --
@@ -118,7 +121,9 @@ class RecordingScreenTagsSlotTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithText("kitchen remodel").assertIsDisplayed()
+        // substring = true: a tag with no tagId renders PROPOSED (bead asn-0jk),
+        // which appends a " new?" affix to the word text itself.
+        composeTestRule.onNodeWithText("kitchen remodel", substring = true).assertIsDisplayed()
         composeTestRule.onNodeWithText("(register your API key to see the word cloud)").assertDoesNotExist()
     }
 
@@ -138,14 +143,15 @@ class RecordingScreenTagsSlotTest {
         composeTestRule.onNodeWithText("STOP").assertIsDisplayed()
     }
 
-    // --- Bead vn-edu.47 (superseded by asn-3sm's word cloud): a tree-anchored
-    // tag renders distinctly from a proposal. Pre-asn-3sm this was a
-    // dashed-vs-solid chip border; asn-3sm's word cloud expresses the same
-    // "not confirmed yet" distinction via GREEN (confirmed) vs. WHITE
-    // (candidate) word-cloud slots instead -- see TopicWordCloudTopics.fromDisplayedTags.
+    // --- Bead asn-0jk's color semantics, built on the word cloud asn-3sm
+    // replaced the old dashed-chip UI with: BLUE/EXISTING is strictly
+    // "already in the tree" (tagId != null); anything else in the top set
+    // is PURPLE/PROPOSED -- see ThoughtCloudWords.fromDisplayedTags. This
+    // supersedes bead vn-edu.47's dashed-vs-solid distinction, which keyed
+    // off DisplayedTag.isProposal specifically rather than tree membership.
 
     @Test
-    fun `a tree-matched tag renders as a GREEN confirmed word, not a candidate`() {
+    fun `a tree-matched tag renders as an EXISTING (blue) word`() {
         app.secretsStore.isSignedOut = false
         app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
@@ -156,11 +162,11 @@ class RecordingScreenTagsSlotTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithTag("${CONFIRMED_WORD_TEST_TAG_PREFIX}0").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("${EXISTING_WORD_TEST_TAG_PREFIX}kitchen-remodel").assertIsDisplayed()
     }
 
     @Test
-    fun `a genuinely new proposal renders as a WHITE candidate word, not a confirmed one`() {
+    fun `a genuinely new proposal renders as a PROPOSED (purple, tappable) word`() {
         app.secretsStore.isSignedOut = false
         app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
@@ -171,12 +177,12 @@ class RecordingScreenTagsSlotTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithTag("${CANDIDATE_WORD_TEST_TAG_PREFIX}0").assertIsDisplayed()
-        composeTestRule.onNodeWithText("gardening").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("${PROPOSED_WORD_TEST_TAG_PREFIX}gardening").assertIsDisplayed()
+        composeTestRule.onNodeWithText("gardening", substring = true).assertIsDisplayed()
     }
 
     @Test
-    fun `a legacy free-form tag (no tree, no proposal flag) renders as a GREEN confirmed word, not a candidate`() {
+    fun `a legacy free-form tag (no tree, no proposal flag) also renders PROPOSED -- blue is strictly tree-matched`() {
         app.secretsStore.isSignedOut = false
         app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
@@ -187,6 +193,26 @@ class RecordingScreenTagsSlotTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithTag("${CONFIRMED_WORD_TEST_TAG_PREFIX}0").assertIsDisplayed()
+        // No tagId at all (legacy free-form, no vault tree match) -> PROPOSED,
+        // not EXISTING -- asn-0jk's rule is "blue means tree-matched", full stop.
+        composeTestRule.onNodeWithTag("${PROPOSED_WORD_TEST_TAG_PREFIX}marathon training").assertIsDisplayed()
+    }
+
+    @Test
+    fun `tapping a PROPOSED word approves it, turning it GREEN`() {
+        app.secretsStore.isSignedOut = false
+        app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
+        RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
+        TagsStateHolder.update(listOf(DisplayedTag("kitchen remodel", 0.9, rank = 1, tier = TagTier.PRIMARY)))
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("${PROPOSED_WORD_TEST_TAG_PREFIX}kitchen remodel").performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("${com.montauk.voicecapture.duck.APPROVED_WORD_TEST_TAG_PREFIX}kitchen remodel").assertIsDisplayed()
     }
 }

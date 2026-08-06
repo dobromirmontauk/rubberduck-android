@@ -2,14 +2,17 @@ package com.montauk.voicecapture.ui
 
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingStateHolder
@@ -67,6 +70,12 @@ class AppNavHostInteractionTest {
         // them explicitly rather than depending on that isolation.
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
+        // Bead asn-3sm: RecordingScreen now also reads these three
+        // singletons -- reset so an earlier test class's state (approvals,
+        // a fake summary, a latency badge) never leaks into this one.
+        com.montauk.voicecapture.service.TagApprovalStateHolder.reset()
+        com.montauk.voicecapture.service.SummaryStateHolder.reset()
+        com.montauk.voicecapture.service.LatencyBadgeStateHolder.reset()
         // Bead vn-edu.54: SessionListScreen now fetches vault-integration
         // status on every mount. connectedToGithubShowsLogOutTab below sets a
         // (fake) non-blank GitHub token while rendering Routes.SESSIONS, which
@@ -153,6 +162,10 @@ class AppNavHostInteractionTest {
                 onSetMode = { setModeCalls += it },
             )
         }
+        composeTestRule.waitForIdle()
+        // Bead asn-3sm: the mode switcher now lives in the double-tap debug
+        // view (the duck stage is the default), not always-visible.
+        composeTestRule.onNodeWithTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG).performTouchInput { doubleClick() }
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithContentDescription("Converse, coming soon").performClick()

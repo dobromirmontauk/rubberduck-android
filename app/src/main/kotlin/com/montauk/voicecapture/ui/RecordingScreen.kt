@@ -63,11 +63,16 @@ import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.audio.AudioRouteType
 import com.montauk.voicecapture.audio.LoudnessVisualizer
 import com.montauk.voicecapture.duck.DuckStage
-import com.montauk.voicecapture.duck.TopicWordCloudTopics
+import com.montauk.voicecapture.duck.DuckState
+import com.montauk.voicecapture.duck.ThoughtCloudWords
+import com.montauk.voicecapture.duck.rememberReducedMotionEnabled
 import com.montauk.voicecapture.duck.toDuckState
 import com.montauk.voicecapture.session.RecordingMode
+import com.montauk.voicecapture.service.LatencyBadgeStateHolder
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
+import com.montauk.voicecapture.service.SummaryStateHolder
+import com.montauk.voicecapture.service.TagApprovalStateHolder
 import com.montauk.voicecapture.service.TagsStateHolder
 import com.montauk.voicecapture.service.TranscriptLine
 import com.montauk.voicecapture.service.TranscriptStateHolder
@@ -76,42 +81,57 @@ import com.montauk.voicecapture.service.crudeRecordingActivity
 import com.montauk.voicecapture.stt.SttConnectionState
 import com.montauk.voicecapture.tags.DisplayedTag
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
- * The full-glance recording screen: huge timer, LIVE/OFFLINE + Bluetooth
- * chips, a mic-level bar, the mode switcher, the animated duck (bead
- * asn-3sm, DEFAULT view) with its topic word cloud, and a large inset STOP
- * button anchored to the bottom (bead vn-edu.32 -- a floating button with
- * clear margins, not a full-bleed slab flush with the screen edge, which
- * read as sitting exactly where the app's own bottom nav normally lives).
- * No bottom nav here -- this screen is meant to be readable at arm's length
- * while walking.
+ * The full-glance recording screen. Bead asn-3sm's "layout A" (design board
+ * section 2, the decided home state): minimal chrome -- a tiny rec/mode
+ * indicator and the big timer up top, the animated duck stage filling the
+ * rest, a large inset STOP button anchored to the bottom (bead vn-edu.32 --
+ * a floating button with clear margins, not a full-bleed slab flush with
+ * the screen edge). No bottom nav, no persistent notepad, no persistent
+ * transcript -- this screen is meant to be readable at arm's length while
+ * walking. (A "pause" control belongs in this same bottom chrome per the
+ * design board, but bead asn-r60 owns that entire button + its pause/
+ * auto-pause behavior on its own branch; this bead intentionally leaves it
+ * out rather than build a second, conflicting one.)
  *
- * **Duck view vs. debug transcript view (bead asn-3sm).** The duck +
- * word-cloud stage is the default; double-tapping it swaps in the
- * old-style live transcript pane instead (all pre-asn-3sm transcript
- * functionality, including its own keyless message, lives there
- * unchanged) -- double-tapping again returns to the duck. [showDebugView]
- * is plain composable-local state: it resets to the duck view every fresh
- * visit to this screen, which is the expected default.
+ * **Duck view vs. debug transcript view (bead asn-3sm).** The duck stage is
+ * the default; double-tapping it swaps in the old-style live transcript
+ * pane plus the demoted status chrome (Bluetooth/STT chips, loudness meter,
+ * mode switcher) instead -- all pre-asn-3sm functionality, including the
+ * transcript pane's own keyless message, unchanged, just relocated here.
+ * Double-tapping again returns to the duck. [showDebugView] is plain
+ * composable-local state: it resets to the duck view every fresh visit to
+ * this screen, which is the expected default.
  *
  * The duck's LISTENING/SLEEPY state is derived via [crudeRecordingActivity]
  * -- a crude stand-in (silence hint -> QUIET, else SPEAKING) for asn-r60's
- * real `StateFlow<RecordingActivity>`, which hasn't landed yet; neither
- * paused activity (and therefore GONE_BRB) is reachable until it does. The
- * topic word cloud's GREEN/WHITE split comes from [TopicWordCloudTopics.fromDisplayedTags],
- * today's adapter over [TagsStateHolder]'s [DisplayedTag] output.
+ * real `StateFlow<RecordingActivityState>` ([com.montauk.voicecapture.service.RecordingActivityStateHolder]
+ * on that branch), which hasn't landed on `main` yet; neither paused
+ * activity (and therefore GONE_BRB) is reachable until it does. THINKING
+ * briefly overrides whichever of those is current for [THINKING_DISPLAY_MS]
+ * every time [SummaryStateHolder] publishes a fresh summary (design board:
+ * "duck plays 'taking notes', then the notes card slides up") -- the
+ * closest real signal available today; there's no equivalent signal yet for
+ * a tag-scorer LLM call in flight.
+ *
+ * The thought cloud's BLUE/PURPLE/GREEN/WHITE split comes from
+ * [ThoughtCloudWords.fromDisplayedTags], today's adapter over
+ * [TagsStateHolder]'s [DisplayedTag] output plus [TagApprovalStateHolder]'s
+ * session-local approvals; tapping a PURPLE word approves it (green +
+ * haptic tick + the duck's happy-bounce, via [happyBounceTrigger]).
  *
  * [onOpenSettings] (bead vn-edu.46 superseding decision, extended by
- * vn-edu.66) is invoked when either keyless message is tapped: the tags-slot
- * message (visible directly on the duck view) deep-links to Settings' "Word
- * cloud & titles" key row ([ANTHROPIC_KEY_ROW_TEST_TAG]), the
- * transcript-pane message (in the debug view) to its "Live transcription"
- * key row ([ASSEMBLYAI_KEY_ROW_TEST_TAG]) -- both just navigate to
- * [SettingsScreen] itself (no in-screen scroll target exists yet) rather
- * than opening any dialog on this glance-mode screen.
+ * vn-edu.66) is invoked when either keyless message is tapped: the
+ * word-cloud message (visible directly on the duck view) deep-links to
+ * Settings' "Word cloud & titles" key row ([ANTHROPIC_KEY_ROW_TEST_TAG]),
+ * the transcript-pane message (in the debug view) to its "Live
+ * transcription" key row ([ASSEMBLYAI_KEY_ROW_TEST_TAG]) -- both just
+ * navigate to [SettingsScreen] itself (no in-screen scroll target exists
+ * yet) rather than opening any dialog on this glance-mode screen.
  */
 @Composable
 fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> Unit = {}, onOpenSettings: () -> Unit = {}) {
@@ -121,76 +141,105 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
     val transcript by TranscriptStateHolder.state.collectAsStateWithLifecycle()
     val hasBluetoothMic = remember { hasBluetoothInputDevice(context) }
     val tags by TagsStateHolder.state.collectAsStateWithLifecycle()
+    val summary by SummaryStateHolder.state.collectAsStateWithLifecycle()
+    val latencyState by LatencyBadgeStateHolder.state.collectAsStateWithLifecycle()
+    val approvedKeys by TagApprovalStateHolder.approvedKeys.collectAsStateWithLifecycle()
     val anthropicKeyConfigured = app.isAnthropicKeyConfigured()
     val assemblyKeyConfigured = app.isAssemblyKeyConfigured()
     var showDebugView by remember { mutableStateOf(false) }
-    val duckState = remember(transcript) { crudeRecordingActivity(transcript).toDuckState() }
+    var happyBounceTrigger by remember { mutableStateOf(0) }
+    val reducedMotion = rememberReducedMotionEnabled()
+
+    // THINKING override window -- see the class KDoc's THINKING paragraph.
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            delay(THINKING_TICK_INTERVAL_MS)
+        }
+    }
+    var thinkingUntilMs by remember { mutableStateOf(0L) }
+    LaunchedEffect(summary.updatedAtMs) {
+        if (summary.bullets.isNotEmpty()) thinkingUntilMs = System.currentTimeMillis() + THINKING_DISPLAY_MS
+    }
+    val baseDuckState = remember(transcript) { crudeRecordingActivity(transcript).toDuckState() }
+    val duckState = if (nowMs < thinkingUntilMs) DuckState.THINKING else baseDuckState
+
     // Bead vn-edu.46's keyless guard, preserved: no key means NO word-cloud
     // data at all, even if TagsStateHolder is stale/non-empty (shouldn't
     // happen with NoOpTagScorer, but the UI gate must be on the key, not on
     // "is the list empty") -- matches the pre-asn-3sm TagChipsRow early return.
-    val topics = remember(tags, anthropicKeyConfigured) {
-        if (anthropicKeyConfigured) TopicWordCloudTopics.fromDisplayedTags(tags) else TopicWordCloudTopics.EMPTY
+    val words = remember(tags, approvedKeys, anthropicKeyConfigured) {
+        if (anthropicKeyConfigured) ThoughtCloudWords.fromDisplayedTags(tags, approvedKeys) else ThoughtCloudWords.EMPTY
     }
 
     VoiceCaptureTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(modifier = Modifier.fillMaxSize()) {
-                Column(
-                    modifier = Modifier
-                        .weight(4f)
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Spacer(modifier = Modifier.height(28.dp))
+                Spacer(modifier = Modifier.height(20.dp))
+                MinimalTopChrome(mode = recordingState.mode, modifier = Modifier.padding(horizontal = 24.dp))
+                Spacer(modifier = Modifier.height(4.dp))
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     BigTimer(elapsedMs = recordingState.elapsedMs)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    ChipsRow(transcript = transcript, hasBluetoothMic = hasBluetoothMic, recordingState = recordingState)
-                    Spacer(modifier = Modifier.height(10.dp))
-                    LoudnessMeterBar(level = transcript.micLevel, sessionId = recordingState.sessionId)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    ModeSwitcher(currentMode = recordingState.mode, onSelect = onSetMode)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                            .testTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG)
-                            .pointerInput(Unit) {
-                                detectTapGestures(onDoubleTap = { showDebugView = !showDebugView })
-                            },
-                    ) {
-                        if (showDebugView) {
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .testTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG)
+                        .pointerInput(Unit) {
+                            detectTapGestures(onDoubleTap = { showDebugView = !showDebugView })
+                        },
+                ) {
+                    if (showDebugView) {
+                        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            ChipsRow(transcript = transcript, hasBluetoothMic = hasBluetoothMic, recordingState = recordingState)
+                            Spacer(modifier = Modifier.height(10.dp))
+                            LoudnessMeterBar(level = transcript.micLevel, sessionId = recordingState.sessionId)
+                            Spacer(modifier = Modifier.height(16.dp))
+                            ModeSwitcher(currentMode = recordingState.mode, onSelect = onSetMode)
+                            Spacer(modifier = Modifier.height(16.dp))
                             LiveTranscriptPane(
                                 transcript = transcript,
                                 assemblyKeyConfigured = assemblyKeyConfigured,
                                 onOpenSettings = onOpenSettings,
-                                modifier = Modifier.fillMaxSize(),
+                                modifier = Modifier.weight(1f),
                             )
-                        } else {
-                            DuckStage(duckState = duckState, topics = topics, modifier = Modifier.fillMaxSize())
                         }
-                    }
-                    // Keyless word-cloud message stays on the default duck view (not
-                    // gated behind the double-tap toggle) -- mirrors the pre-asn-3sm
-                    // TagChipsRow keyless message 1:1 (bead vn-edu.46), just relocated.
-                    if (!showDebugView && !anthropicKeyConfigured) {
-                        Text(
-                            text = "(register your API key to see the word cloud)",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable(onClick = onOpenSettings)
-                                .testTag(REGISTER_KEY_MESSAGE_TEST_TAG),
+                    } else {
+                        DuckStage(
+                            duckState = duckState,
+                            words = words,
+                            reducedMotion = reducedMotion,
+                            onApproveWord = { word ->
+                                TagApprovalStateHolder.approve(word.text)
+                                happyBounceTrigger++
+                            },
+                            summary = summary,
+                            latencyState = latencyState,
+                            onLatencyBadgeTap = {}, // asn-55q's L2 HUD opens here once that bead lands
+                            happyBounceTrigger = happyBounceTrigger,
+                            modifier = Modifier.fillMaxSize(),
                         )
                     }
-                    // Extra air below (bead vn-edu.32) so the inset STOP button reads
-                    // as floating above content, not touching whatever's above it.
-                    Spacer(modifier = Modifier.height(24.dp))
                 }
-                StopBar(modifier = Modifier.weight(1f), onClick = onStopRecording)
+                // Keyless word-cloud message stays on the default duck view (not
+                // gated behind the double-tap toggle) -- mirrors the pre-asn-3sm
+                // TagChipsRow keyless message 1:1 (bead vn-edu.46), just relocated.
+                if (!showDebugView && !anthropicKeyConfigured) {
+                    Text(
+                        text = "(register your API key to see the word cloud)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp)
+                            .clickable(onClick = onOpenSettings)
+                            .testTag(REGISTER_KEY_MESSAGE_TEST_TAG),
+                    )
+                }
+                StopBar(modifier = Modifier.height(STOP_BAR_HEIGHT), onClick = onStopRecording)
             }
         }
     }
@@ -198,6 +247,37 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
 
 /** Test-only anchor for the duck-view/debug-transcript-view double-tap toggle (bead asn-3sm). */
 const val DUCK_TRANSCRIPT_TOGGLE_TEST_TAG = "recording_duck_transcript_toggle"
+
+private const val THINKING_TICK_INTERVAL_MS = 250L
+
+/** How long THINKING overrides the duck's base state after a fresh summary lands (design board: "holds a few seconds"). */
+const val THINKING_DISPLAY_MS = 1_800L
+
+private val STOP_BAR_HEIGHT = 140.dp
+
+/**
+ * Layout A's minimal top chrome (design board section 2): a small "● REC"
+ * indicator plus the current mode, replacing the pre-asn-3sm [ChipsRow] /
+ * [LoudnessMeterBar] / [ModeSwitcher] row up here -- those move into the
+ * double-tap debug view (see [RecordingScreen]) since the home state's
+ * whole point is "duck + thought cloud, nothing else."
+ */
+@Composable
+private fun MinimalTopChrome(mode: RecordingMode, modifier: Modifier = Modifier) {
+    Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(
+            text = "● REC",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.error,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = mode.label().lowercase(),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
 
 /**
  * Glance-safe Listen / Converse / Challenge segmented control. Listen is the

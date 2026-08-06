@@ -12,7 +12,20 @@ package com.montauk.voicecapture.duck
  *   interrupted by a one-shot [BLINK_SEQUENCE] every [blinkEveryMs].
  * - **SLEEPY**: loops [SLEEPY_SEQUENCE] at the slower [sleepyFrameDurationMs]
  *   cadence (spec: "slow cadence").
+ * - **THINKING**: loops [THINKING_SEQUENCE] ("taking notes" stand-in) at the
+ *   normal [frameDurationMs] cadence, for as long as [state] stays THINKING.
  * - **GONE_BRB**: no duck frame at all -- [tick] returns [DuckVisual.Brb].
+ *
+ * [triggerHappyBounce] layers a one-shot [HAPPY_BOUNCE_SEQUENCE] on top of
+ * whichever of the above is current -- design-board section 1's "Got it!"
+ * beat (a new tag approved / summary bullet added) -- without changing
+ * [state] itself: [tick] checks for a pending bounce before consulting
+ * [phase] at all, and once the bounce's frames are exhausted, resumes
+ * exactly where the underlying phase would have been (recomputed fresh from
+ * [state], not literally paused-and-resumed, since a bounce is expected to
+ * be rare and brief enough that the tiny discontinuity this causes -- e.g.
+ * IDLE_BREATHING restarting its cycle rather than resuming mid-cycle -- is
+ * not visible in practice).
  *
  * [isCrossfading] reports whether the most recent [setState] transition is
  * still inside its crossfade window. The actual pixel crossfade between the
@@ -37,7 +50,10 @@ class DuckAnimationEngine(
     private data class IdlePhase(override val startedAtMs: Long) : Phase
     private data class BlinkPhase(override val startedAtMs: Long) : Phase
     private data class SleepyPhase(override val startedAtMs: Long) : Phase
+    private data class ThinkingPhase(override val startedAtMs: Long) : Phase
     private data class BrbPhase(override val startedAtMs: Long) : Phase
+
+    private var happyBounceStartedAtMs: Long? = null
 
     var state: DuckState = initialState
         private set
@@ -64,11 +80,29 @@ class DuckAnimationEngine(
         return nowMs - stateEnteredAtMs < crossfadeMs
     }
 
+    /** Layers a one-shot [HAPPY_BOUNCE_SEQUENCE] on top of whatever is currently playing -- see the class KDoc. */
+    fun triggerHappyBounce(nowMs: Long) {
+        happyBounceStartedAtMs = nowMs
+    }
+
     /** Advances frame timing to [nowMs] and returns what [DuckAnimator] should render. */
     fun tick(nowMs: Long): DuckVisual {
+        val bounceStart = happyBounceStartedAtMs
+        if (bounceStart != null) {
+            val idx = ((nowMs - bounceStart) / frameDurationMs).toInt()
+            if (idx >= HAPPY_BOUNCE_SEQUENCE.size) {
+                happyBounceStartedAtMs = null
+            } else {
+                return DuckVisual.Pose(HAPPY_BOUNCE_SEQUENCE[idx])
+            }
+        }
         if (phase == null) setState(state, nowMs)
         return when (val p = phase!!) {
             is BrbPhase -> DuckVisual.Brb
+            is ThinkingPhase -> {
+                val idx = (((nowMs - p.startedAtMs) / frameDurationMs) % THINKING_SEQUENCE.size).toInt()
+                DuckVisual.Pose(THINKING_SEQUENCE[idx])
+            }
             is ListeningIntroPhase -> {
                 val idx = ((nowMs - p.startedAtMs) / frameDurationMs).toInt()
                 if (idx >= LISTENING_INTRO_SEQUENCE.size) {
@@ -107,6 +141,7 @@ class DuckAnimationEngine(
     private fun initialPhaseFor(state: DuckState, nowMs: Long): Phase = when (state) {
         DuckState.LISTENING -> ListeningIntroPhase(nowMs)
         DuckState.SLEEPY -> SleepyPhase(nowMs)
+        DuckState.THINKING -> ThinkingPhase(nowMs)
         DuckState.GONE_BRB -> BrbPhase(nowMs)
     }
 

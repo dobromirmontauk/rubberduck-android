@@ -83,6 +83,49 @@ class DuckAnimationEngineTest {
     }
 
     @Test
+    fun `THINKING loops its 3 frames`() {
+        val e = engine(initialState = DuckState.THINKING)
+        assertEquals(DuckVisual.Pose(DuckFrame.THINKING_1), e.tick(0L))
+        assertEquals(DuckVisual.Pose(DuckFrame.THINKING_2), e.tick(100L))
+        assertEquals(DuckVisual.Pose(DuckFrame.THINKING_3), e.tick(200L))
+        assertEquals(DuckVisual.Pose(DuckFrame.THINKING_1), e.tick(300L))
+    }
+
+    // --- happy-bounce (a one-shot overlay, not a DuckState) ---
+
+    @Test
+    fun `triggerHappyBounce plays its 3 frames once, then resumes the underlying state`() {
+        val e = engine(initialState = DuckState.SLEEPY, sleepyFrameDurationMs = 500L)
+        e.tick(0L) // establish SLEEPY
+        e.triggerHappyBounce(1_000L)
+
+        assertEquals(DuckVisual.Pose(DuckFrame.HAPPY_BOUNCE_1), e.tick(1_000L))
+        assertEquals(DuckVisual.Pose(DuckFrame.HAPPY_BOUNCE_2), e.tick(1_100L))
+        assertEquals(DuckVisual.Pose(DuckFrame.HAPPY_BOUNCE_3), e.tick(1_200L))
+        // 3 frames * 100ms = 300ms; past that, back to SLEEPY.
+        assertEquals(DuckVisual.Pose(DuckFrame.SLEEPY_1), e.tick(1_300L))
+    }
+
+    @Test
+    fun `triggerHappyBounce does not change state or interrupt a pending state transition`() {
+        val e = engine(initialState = DuckState.LISTENING)
+        e.tick(0L)
+        e.triggerHappyBounce(1_000L)
+        e.tick(1_000L)
+        assertEquals(DuckState.LISTENING, e.state)
+    }
+
+    @Test
+    fun `triggerHappyBounce interrupts GONE_BRB too, then resumes Brb`() {
+        val e = engine(initialState = DuckState.GONE_BRB)
+        e.tick(0L)
+        e.triggerHappyBounce(1_000L)
+
+        assertEquals(DuckVisual.Pose(DuckFrame.HAPPY_BOUNCE_1), e.tick(1_000L))
+        assertEquals(DuckVisual.Brb, e.tick(1_300L))
+    }
+
+    @Test
     fun `setState switches sequence and resets frame timing`() {
         val e = engine(initialState = DuckState.LISTENING)
         e.tick(0L)
