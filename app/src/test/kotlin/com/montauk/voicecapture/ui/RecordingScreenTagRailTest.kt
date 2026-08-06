@@ -139,25 +139,25 @@ class RecordingScreenTagRailTest {
     }
 
     @Test
-    fun `a suggested chip renders in the SUGGESTED (outlined) test tag, a user chip in the USER (filled) test tag`() {
+    fun `an approved free-form USER chip renders GREEN (APPROVED), an EXISTING suggested chip renders BLUE (EXISTING)`() {
         app.secretsStore.isSignedOut = false
         app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
         TagRailStateHolder.update(
             listOf(
+                // No tagId, source USER -- PROPOSED_NEW + approved -- green.
                 TagRailChip("kitchen remodel", source = RailChipSource.USER),
-                // tagId set -- EXISTING, so this renders as a plain outlined
-                // SUGGESTED chip rather than the PROPOSED_NEW purple variant.
+                // tagId set -- EXISTING regardless of source -- blue.
                 TagRailChip("budget", tagId = "t_budget", source = RailChipSource.SUGGESTED),
             ),
         )
         setContent()
 
-        composeTestRule.onNodeWithTag(TAG_RAIL_CHIP_USER_TEST_TAG).assertIsDisplayed()
-        composeTestRule.onNodeWithTag(TAG_RAIL_CHIP_SUGGESTED_TEST_TAG).assertIsDisplayed()
+        composeTestRule.onNodeWithTag(TAG_RAIL_CHIP_APPROVED_TEST_TAG).assertIsDisplayed()
+        composeTestRule.onNodeWithTag(TAG_RAIL_CHIP_EXISTING_TEST_TAG).assertIsDisplayed()
     }
 
     @Test
-    fun `an unapproved PROPOSED_NEW chip renders in the PROPOSED test tag, distinct from an EXISTING suggested chip`() {
+    fun `an unapproved PROPOSED_NEW chip renders in the PROPOSED (purple) test tag, distinct from an EXISTING (blue) suggested chip`() {
         app.secretsStore.isSignedOut = false
         app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
         TagRailStateHolder.update(
@@ -169,7 +169,24 @@ class RecordingScreenTagRailTest {
         setContent()
 
         composeTestRule.onNodeWithTag(TAG_RAIL_CHIP_PROPOSED_TEST_TAG).assertIsDisplayed()
-        composeTestRule.onNodeWithTag(TAG_RAIL_CHIP_SUGGESTED_TEST_TAG).assertIsDisplayed()
+        composeTestRule.onNodeWithTag(TAG_RAIL_CHIP_EXISTING_TEST_TAG).assertIsDisplayed()
+    }
+
+    @Test
+    fun `approving a proposal transitions it from the PROPOSED (purple) to the APPROVED (green) test tag`() {
+        app.secretsStore.isSignedOut = false
+        app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
+        TagRailStateHolder.update(listOf(TagRailChip("gardening", tagId = null, source = RailChipSource.SUGGESTED)))
+        setContent(onApproveTag = { tag ->
+            TagRailStateHolder.update(listOf(TagRailChip(tag, tagId = null, source = RailChipSource.USER)))
+        })
+        composeTestRule.onNodeWithTag(TAG_RAIL_CHIP_PROPOSED_TEST_TAG).assertIsDisplayed()
+
+        composeTestRule.onNodeWithText("gardening").performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag(TAG_RAIL_CHIP_APPROVED_TEST_TAG).assertIsDisplayed()
+        composeTestRule.onNodeWithTag(TAG_RAIL_CHIP_PROPOSED_TEST_TAG).assertDoesNotExist()
     }
 
     @Test

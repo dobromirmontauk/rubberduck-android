@@ -212,15 +212,27 @@ class KeyScreensScreenshotTest {
         // RecordingService's TagCoordinator/TagChipRail pipeline populates.
         // No such pipeline runs in this Robolectric render, so this golden
         // seeds the rail directly, matching the transcript fixture above.
-        // Bead asn-45m/asn-0jk: all three rail chip states in one golden --
-        // "kitchen remodel" is a USER chip (filled/green), "budget" an
-        // EXISTING (tree-matched, tagId set) SUGGESTED chip (plain
-        // outlined/white), "gardening" a still-unapproved PROPOSED_NEW (no
-        // tagId) SUGGESTED chip (tertiary-outlined/purple). The ribbon
-        // underneath derives from the rail's primary ("kitchen remodel",
-        // free-form/no tagId, no vault configured in this golden -- see
-        // setUp's isSignedOut = true) so it slugifies straight to
-        // "notes/kitchen-remodel.md".
+        // Bead asn-45m/asn-0jk: all three rail chip color states in one
+        // golden -- "kitchen remodel" (no tagId, USER) is an approved
+        // PROPOSED_NEW chip (green), "budget" (tagId set, SUGGESTED) is
+        // EXISTING (blue, regardless of source), "gardening" (no tagId,
+        // SUGGESTED) is a still-unapproved PROPOSED_NEW chip (purple,
+        // dashed). The ribbon underneath derives from the rail's primary
+        // ("kitchen remodel", free-form/no tagId, no vault configured in
+        // this golden -- see setUp's isSignedOut = true) so it slugifies
+        // straight to "notes/kitchen-remodel.md".
+        //
+        // NOTE (bead asn-p6y): this golden's committed PNG predates asn-45m/
+        // asn-0jk's layout+color changes and has NOT been re-recorded on
+        // Linux CI yet (GitHub Actions was down for the whole asn-45m
+        // session) -- verifyRoborazziDebug against it will legitimately fail
+        // until the post-outage record-goldens batch (asn-p6y) re-records
+        // it. testDebugUnitTest/testReleaseUnitTest (this repo's actual
+        // local gate) never execute this class at all -- Roborazzi
+        // screenshot tests are excluded from plain `test` runs by
+        // build.gradle.kts, only running under recordRoborazziDebug/
+        // verifyRoborazziDebug/compareRoborazziDebug -- so this staleness
+        // does not block the local suite.
         TagRailStateHolder.update(
             listOf(
                 TagRailChip("kitchen remodel", source = RailChipSource.USER),

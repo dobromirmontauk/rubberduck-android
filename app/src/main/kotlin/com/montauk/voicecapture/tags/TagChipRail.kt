@@ -30,13 +30,27 @@ val TagStatus.wireValue: String
 /**
  * One entry in the merged suggested+user list [TagChipRail.chips] returns --
  * the shared, screen-agnostic unit two different views bind to: the
- * recording screen's editable chip rail (outlined for [RailChipSource.SUGGESTED],
- * filled for [RailChipSource.USER]) and, per bead asn-3sm, an animated-duck
- * word cloud (green for confirmed/high-confidence or approved, white for
- * unapproved existing candidates, purple for an unapproved new-tag proposal).
+ * recording screen's editable chip rail and, per bead asn-3sm, an
+ * animated-duck word cloud.
+ *
+ * Bead asn-0jk's locked tag-colors design maps color from [status]/[approved]
+ * alone, **not** from [source]: [TagStatus.EXISTING] is blue regardless of
+ * whether the user has touched it (a user-confirmed existing tag stays blue,
+ * not green -- green is reserved for an approved *new* tag); an unapproved
+ * [TagStatus.PROPOSED_NEW] chip is purple (dashed, "is this a new tag?");
+ * once approved, that same proposal turns green. So the three-way color
+ * split is exactly:
+ * ```
+ * status == EXISTING            -> blue
+ * status == PROPOSED_NEW && !approved -> purple
+ * status == PROPOSED_NEW && approved  -> green
+ * ```
+ * [source] still exists (SUGGESTED vs USER) since it's what the chip rail's
+ * remove/swap/approve state machine ([TagChipRail]) tracks -- it just isn't
+ * the *color* axis anymore.
  *
  * [confidence] carries [DisplayedTag.confidence] through for [RailChipSource.SUGGESTED]
- * chips (word-cloud sizing/coloring by confidence) and is always null for
+ * chips (word-cloud sizing by confidence) and is always null for
  * [RailChipSource.USER] chips -- a user's own pick has no scorer confidence,
  * it's simply confirmed.
  *
@@ -45,7 +59,8 @@ val TagStatus.wireValue: String
  * acted on it (added, swapped-in, or, for a [TagStatus.PROPOSED_NEW] chip,
  * tapped to approve via [TagChipRail.onApprove]). Only meaningful for
  * [TagStatus.PROPOSED_NEW] -- approving an already-[TagStatus.EXISTING] tag
- * is a no-op concept, since it's already a real `tags.yaml` node either way.
+ * is a no-op concept, since it's already a real `tags.yaml` node either way,
+ * and stays blue either way.
  */
 data class TagRailChip(
     val tag: String,

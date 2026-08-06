@@ -44,10 +44,13 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -624,10 +627,10 @@ internal fun partialAnnotatedString(
  * pinned above the transcript pane -- supersedes the old read-only,
  * confidence-tiered TagChipsRow this replaced (see git history for
  * bead vn-edu.38/vn-edu.46/vn-edu.47's version of this slot): [rail] chips
- * carry no confidence/tier/proposal styling of their own anymore, only
- * [TagRailChip.source] (outlined [RailChipSource.SUGGESTED] vs. filled
- * [RailChipSource.USER]) -- the bead's whole point is that this slot is now
- * something the user edits, not just a live readout.
+ * are colored by [TagRailChip.status]/[TagRailChip.approved] (bead asn-0jk's
+ * locked tag-colors design -- see [TagRailChipView]), not by
+ * [TagRailChip.source] directly -- the bead's whole point is that this slot
+ * is now something the user edits, not just a live readout.
  *
  * Bead vn-edu.46's superseding decision -- keyless shows the exact
  * register-key message instead of guessing tags, never a stray chip from a
@@ -696,26 +699,46 @@ private fun TagRailSection(
 /** Test-only anchor for the keyless tags-slot message (bead vn-edu.46). */
 const val REGISTER_KEY_MESSAGE_TEST_TAG = "recording_register_key_message"
 
-/** Test-only anchors for the tag rail's parts (bead asn-45m). */
+/** Test-only anchors for the tag rail's parts (bead asn-45m/asn-0jk). */
 const val TAG_RAIL_TEST_TAG = "recording_tag_rail"
-const val TAG_RAIL_CHIP_SUGGESTED_TEST_TAG = "recording_tag_rail_chip_suggested"
-const val TAG_RAIL_CHIP_USER_TEST_TAG = "recording_tag_rail_chip_user"
+/** A [TagStatus.EXISTING] chip -- blue, regardless of [RailChipSource]. */
+const val TAG_RAIL_CHIP_EXISTING_TEST_TAG = "recording_tag_rail_chip_existing"
+/** A [TagStatus.PROPOSED_NEW] chip the user has approved -- green. */
+const val TAG_RAIL_CHIP_APPROVED_TEST_TAG = "recording_tag_rail_chip_approved"
+/** A still-unapproved [TagStatus.PROPOSED_NEW] chip -- purple, dashed. */
 const val TAG_RAIL_CHIP_PROPOSED_TEST_TAG = "recording_tag_rail_chip_proposed"
 const val TAG_RAIL_ADD_CHIP_TEST_TAG = "recording_tag_rail_add_chip"
 const val FILING_DESTINATION_RIBBON_TEST_TAG = "recording_filing_destination_ribbon"
 
+/** Bead asn-0jk's locked tag-colors design: color is a pure function of [TagRailChip.status]/[TagRailChip.approved] -- see [TagChipRail]'s own KDoc on [TagRailChip] for the exact mapping and why [TagRailChip.source] is NOT the color axis. */
+private enum class ChipColorState { EXISTING, PROPOSED_UNAPPROVED, PROPOSED_APPROVED }
+
+private val TagRailChip.colorState: ChipColorState
+    get() = when {
+        status == TagStatus.EXISTING -> ChipColorState.EXISTING
+        approved -> ChipColorState.PROPOSED_APPROVED
+        else -> ChipColorState.PROPOSED_UNAPPROVED
+    }
+
+// Hardcoded, not MaterialTheme-derived -- same convention as the app's other
+// status chips (Chips.kt's UploadStateChip/SessionStatusChip), since these
+// are specific brand colors from the locked design doc, not theme accents
+// that should drift with a future theme change.
+private val EXISTING_COLOR = Color(0xFF4A90D9)
+private val PROPOSED_APPROVED_COLOR = Color(0xFF5FBF6E)
+private val PROPOSED_UNAPPROVED_COLOR = Color(0xFF9B6BDF)
+private val PROPOSED_DASH_PATTERN = floatArrayOf(9f, 6f)
+private const val PROPOSED_BORDER_WIDTH_DP = 1.5f
+
 /**
- * One rendered rail chip, three visual states (bead asn-0jk's locked
- * tag-colors design, layered onto asn-45m's original outlined/filled split):
- * an unapproved [TagStatus.PROPOSED_NEW] chip (still [RailChipSource.SUGGESTED])
- * gets a distinct tertiary-tinted outline ([TAG_RAIL_CHIP_PROPOSED_TEST_TAG]
- * -- "purple" in the design doc); any other still-[RailChipSource.SUGGESTED]
- * chip (an [TagStatus.EXISTING] candidate) stays plain-outlined ("white");
- * any [RailChipSource.USER] chip -- confirmed, swapped-in, or an approved
- * former proposal -- is filled ("green"). Tapping the tag text requests a
- * swap or an approval depending on which state the chip is in (decided by
- * the caller, [TagRailSection], via [onTapBody]); tapping the ✕ removes the
- * chip ([onRemove]).
+ * One rendered rail chip. Bead asn-0jk's locked tag-colors design: color is
+ * [ChipColorState] alone (blue/[TagStatus.EXISTING], purple-dashed/still-
+ * unapproved [TagStatus.PROPOSED_NEW], green/approved [TagStatus.PROPOSED_NEW])
+ * -- see [TagRailChip]'s own KDoc for why [RailChipSource] isn't the color
+ * axis anymore. Tapping the tag text requests a swap or an approval
+ * depending on which state the chip is in (decided by the caller,
+ * [TagRailSection], via [onTapBody]); tapping the ✕ removes the chip
+ * ([onRemove]).
  *
  * [onTapBody]'s `clickable` and [onRemove]'s `clickable` are **siblings**
  * inside a plain (non-clickable) outer [Row] -- deliberately NOT one nested
@@ -733,35 +756,39 @@ const val FILING_DESTINATION_RIBBON_TEST_TAG = "recording_filing_destination_rib
 @Composable
 private fun TagRailChipView(chip: TagRailChip, onRemove: () -> Unit, onTapBody: () -> Unit) {
     val shape = RoundedCornerShape(999.dp)
-    val filled = chip.source == RailChipSource.USER
-    val isUnapprovedProposal = chip.status == TagStatus.PROPOSED_NEW && !chip.approved
-    val testTag = when {
-        filled -> TAG_RAIL_CHIP_USER_TEST_TAG
-        isUnapprovedProposal -> TAG_RAIL_CHIP_PROPOSED_TEST_TAG
-        else -> TAG_RAIL_CHIP_SUGGESTED_TEST_TAG
+    val colorState = chip.colorState
+    val (accentColor, testTag) = when (colorState) {
+        ChipColorState.EXISTING -> EXISTING_COLOR to TAG_RAIL_CHIP_EXISTING_TEST_TAG
+        ChipColorState.PROPOSED_APPROVED -> PROPOSED_APPROVED_COLOR to TAG_RAIL_CHIP_APPROVED_TEST_TAG
+        ChipColorState.PROPOSED_UNAPPROVED -> PROPOSED_UNAPPROVED_COLOR to TAG_RAIL_CHIP_PROPOSED_TEST_TAG
     }
-    val proposedBorderColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f)
-    val plainBorderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-    val borderColor = if (isUnapprovedProposal) proposedBorderColor else plainBorderColor
-    val backgroundColor = if (filled) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color.Transparent
-    val contentColor = when {
-        filled -> MaterialTheme.colorScheme.primary
-        isUnapprovedProposal -> MaterialTheme.colorScheme.tertiary
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    val backgroundColor = if (colorState == ChipColorState.PROPOSED_UNAPPROVED) Color.Transparent else accentColor.copy(alpha = 0.20f)
+    val dashedBorder = colorState == ChipColorState.PROPOSED_UNAPPROVED
+    val borderModifier = if (dashedBorder) {
+        Modifier.drawWithContent {
+            drawContent()
+            drawRoundRect(
+                color = accentColor,
+                cornerRadius = CornerRadius(size.minDimension / 2f),
+                style = Stroke(width = PROPOSED_BORDER_WIDTH_DP.dp.toPx(), pathEffect = PathEffect.dashPathEffect(PROPOSED_DASH_PATTERN)),
+            )
+        }
+    } else {
+        Modifier.border(1.dp, accentColor.copy(alpha = 0.7f), shape)
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .background(backgroundColor, shape)
-            .border(1.dp, borderColor, shape)
+            .then(borderModifier)
             .testTag(testTag)
             .padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 6.dp),
     ) {
         Text(
             text = chip.tag,
             style = MaterialTheme.typography.labelLarge,
-            fontWeight = if (filled) FontWeight.Bold else FontWeight.Medium,
-            color = contentColor,
+            fontWeight = if (colorState == ChipColorState.EXISTING) FontWeight.Medium else FontWeight.Bold,
+            color = accentColor,
             modifier = Modifier.clickable(onClick = onTapBody),
         )
         Spacer(modifier = Modifier.width(6.dp))
@@ -771,7 +798,7 @@ private fun TagRailChipView(chip: TagRailChip, onRemove: () -> Unit, onTapBody: 
                 .semantics { contentDescription = "Remove ${chip.tag}" }
                 .padding(4.dp),
         ) {
-            Text(text = "✕", style = MaterialTheme.typography.labelLarge, color = contentColor)
+            Text(text = "✕", style = MaterialTheme.typography.labelLarge, color = accentColor)
         }
     }
 }
