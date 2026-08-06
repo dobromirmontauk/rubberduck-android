@@ -28,8 +28,18 @@ jobs:
       # re-renders the 5 key-screen goldens under app/src/test/screenshot/goldens/
       # and fails the build on any pixel diff -- folded into the same step as
       # `test` since both are JVM-only, no emulator/device needed.
-      - name: Unit tests + screenshot verification
-        run: ./gradlew test verifyRoborazziDebug --stacktrace
+      # SCRATCH (not for merge): records fresh Linux-rendered goldens instead
+      # of verifying against the committed ones, so the artifact below can be
+      # downloaded and committed as the new canonical goldens. See README's
+      # "Screenshot tests (Roborazzi)" section.
+      - name: Record Roborazzi goldens (scratch)
+        run: ./gradlew recordRoborazziDebug --stacktrace
+
+      - name: Upload recorded goldens
+        uses: actions/upload-artifact@v4
+        with:
+          name: roborazzi-goldens
+          path: app/src/test/screenshot/goldens/
 
       # integrationTest (AssemblyAiLiveStreamingTest) hits the real AssemblyAI
       # streaming endpoint (~$0.01/run) and needs ASSEMBLYAI_API_KEY, so it is
