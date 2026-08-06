@@ -8,12 +8,23 @@ package com.montauk.voicecapture.tags
 enum class RailChipSource { SUGGESTED, USER }
 
 /**
- * One rendered chip in the recording screen's editable tag rail. Lighter
- * than [DisplayedTag] -- no confidence/rank/tier, since those only mean
- * something for the live scorer's own ranking, not for the merged
- * suggested+user list [TagChipRail.chips] returns.
+ * One entry in the merged suggested+user list [TagChipRail.chips] returns --
+ * the shared, screen-agnostic unit two different views bind to: the
+ * recording screen's editable chip rail (outlined for [RailChipSource.SUGGESTED],
+ * filled for [RailChipSource.USER]) and, per bead asn-3sm, an animated-duck
+ * word cloud (green for confirmed/high-confidence, white for candidates).
+ *
+ * [confidence] carries [DisplayedTag.confidence] through for [RailChipSource.SUGGESTED]
+ * chips (word-cloud sizing/coloring by confidence) and is always null for
+ * [RailChipSource.USER] chips -- a user's own pick has no scorer confidence,
+ * it's simply confirmed.
  */
-data class TagRailChip(val tag: String, val tagId: String? = null, val source: RailChipSource)
+data class TagRailChip(
+    val tag: String,
+    val tagId: String? = null,
+    val source: RailChipSource,
+    val confidence: Double? = null,
+)
 
 /**
  * State machine behind the recording screen's editable tag chip rail (bead
@@ -59,7 +70,7 @@ class TagChipRail {
         val suggestedChips = suggested
             .filter { normalize(it.tag) !in removedKeys && normalize(it.tag) !in userKeys }
             .sortedBy { it.rank }
-            .map { TagRailChip(it.tag, it.tagId, RailChipSource.SUGGESTED) }
+            .map { TagRailChip(it.tag, it.tagId, RailChipSource.SUGGESTED, confidence = it.confidence) }
         return userChips + suggestedChips
     }
 
