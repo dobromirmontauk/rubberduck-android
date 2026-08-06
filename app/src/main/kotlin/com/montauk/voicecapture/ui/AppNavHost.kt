@@ -10,6 +10,7 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -17,6 +18,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -26,8 +30,14 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.TooShortWarningStateHolder
+import com.montauk.voicecapture.session.PendingRemovalHolder
 import com.montauk.voicecapture.session.RecordingMode
+import com.montauk.voicecapture.session.SwipeHintStateHolder
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
+import kotlinx.coroutines.withTimeoutOrNull
+
+/** Bead vn-edu.67: how long a swiped delete/archive's "Undo" snackbar stays actionable before PendingRemovalHolder.flush() commits it. */
+private const val UNDO_WINDOW_MS = 5_000L
 
 /**
  * Hosts the nav graph + Material 3 bottom bar. The bottom bar is visible on
@@ -81,6 +91,53 @@ fun AppNavHost(
         if (result == SnackbarResult.ActionPerformed) {
             TooShortWarningStateHolder.saveAnyway()
         }
+    }
+
+    // Bead vn-edu.67: Gmail-style undo snackbar for a swiped delete/archive
+    // on the Sessions screen (see PendingRemovalHolder, SessionListScreen).
+    // Unlike the too-short warning above, the undo window's timing lives
+    // HERE, not in whatever scheduled the removal -- withTimeoutOrNull races
+    // the fixed window against the snackbar itself resolving (Undo tapped,
+    // or the user swiping the snackbar away, which resolves it early with
+    // SnackbarResult.Dismissed). Either a timeout (null) or a Dismissed
+    // result commits the removal; only ActionPerformed (Undo) cancels it.
+    val pendingRemoval by PendingRemovalHolder.state.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingRemoval) {
+        val removal = pendingRemoval ?: return@LaunchedEffect
+        val result = withTimeoutOrNull(UNDO_WINDOW_MS) {
+            snackbarHostState.showSnackbar(message = removal.message, actionLabel = "Undo", duration = SnackbarDuration.Indefinite)
+        }
+        if (result == SnackbarResult.ActionPerformed) {
+            PendingRemovalHolder.undo()
+        } else {
+            PendingRemovalHolder.flush()
+        }
+    }
+
+    // Bead vn-edu.67: transient "Not yet integrated" hint when a right-swipe
+    // (archive) settles back on an ineligible row -- no undo/execute
+    // semantics at all, just a message shown once and cleared.
+    val swipeHint by SwipeHintStateHolder.message.collectAsStateWithLifecycle()
+    LaunchedEffect(swipeHint) {
+        val hint = swipeHint ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(message = hint, duration = SnackbarDuration.Short)
+        SwipeHintStateHolder.clear()
+    }
+
+    // Bead vn-edu.67: "the app backgrounds" leg of PendingRemovalHolder's
+    // flush triggers (window expiry and snackbar dismissal are both handled
+    // by the LaunchedEffect above). ON_STOP is the Activity going invisible
+    // -- multitasking away, screen off, or an incoming call -- the same
+    // signal a real Gmail-style undo commits on, since there's no guarantee
+    // the process (and this composition) survives to show the snackbar's
+    // resolution otherwise.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) PendingRemovalHolder.flush()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     fun startNewSession(injectAssetFileName: String?) {
