@@ -38,6 +38,9 @@ import com.montauk.voicecapture.session.UploadState
 import com.montauk.voicecapture.stt.StreamingSttClient
 import com.montauk.voicecapture.stt.SttConnectionState
 import com.montauk.voicecapture.stt.SttTimelineTracker
+import com.montauk.voicecapture.summary.SummaryCoordinator
+import com.montauk.voicecapture.summary.SummaryEventWriter
+import com.montauk.voicecapture.summary.SummaryMarkdownWriter
 import com.montauk.voicecapture.tags.TagChipRail
 import com.montauk.voicecapture.tags.TagCoordinator
 import com.montauk.voicecapture.tags.TagsEventWriter
@@ -132,6 +135,12 @@ class RecordingService : LifecycleService() {
         // so a well-behaved scorer call always gets to finish and write its
         // event line before this gives up waiting on it.
         private const val TAG_PUMP_SHUTDOWN_TIMEOUT_MS = 20_000L
+        // Bead asn-evl: mirrors TAG_LINE_CHANNEL_CAPACITY/TAG_PUMP_SHUTDOWN_TIMEOUT_MS
+        // for the summary pump -- generous enough to absorb one slow
+        // AnthropicSummaryGenerator round (up to its own 20s read timeout)
+        // without dropping a real recording-elapsed tick.
+        private const val SUMMARY_TICK_CHANNEL_CAPACITY = 32
+        private const val SUMMARY_PUMP_SHUTDOWN_TIMEOUT_MS = 25_000L
 
         /** Bead asn-r60: the two [RecordingActivityState] values in which live PCM should still be fed to STT. */
         private val STT_ACTIVE_STATES = setOf(RecordingActivityState.SPEAKING, RecordingActivityState.QUIET)
@@ -212,6 +221,21 @@ class RecordingService : LifecycleService() {
      * user-attributed tags event line to `live-transcript.jsonl`.
      */
     private var tagChipRail: TagChipRail? = null
+
+    /**
+     * Bead asn-evl: the live rolling bullet summary's own tick channel/pump,
+     * separate from [tagLineChannel] -- [SummaryCoordinator] only ever needs
+     * a recording-elapsed tick (it reads the full transcript itself off
+     * [TranscriptStateHolder] when a tick actually triggers a round), not
+     * the per-final-line events tags care about. Same non-blocking
+     * [Channel.trySend] decoupling rationale as [tagLineChannel]'s KDoc: a
+     * slow/hung [com.montauk.voicecapture.summary.SummaryGenerator] call can
+     * only delay this pump's own drain, never [startTicker]'s notification/
+     * elapsed-time updates.
+     */
+    private var summaryTickChannel: Channel<Long>? = null
+    private var summaryPumpJob: Job? = null
+    private var summaryCoordinator: SummaryCoordinator? = null
 
     /** Mode history for the session currently recording (or just finished) -- reset in [beginRecording]. */
     private var modeStateMachine = RecordingModeStateMachine()
@@ -305,6 +329,7 @@ class RecordingService : LifecycleService() {
         TagsStateHolder.reset()
         TagRailStateHolder.reset()
         TagTreeStateHolder.reset()
+        SummaryStateHolder.reset()
         silenceDetector.reset()
         modeStateMachine = RecordingModeStateMachine()
         sttEverConnected = false
@@ -325,6 +350,7 @@ class RecordingService : LifecycleService() {
         }
 
         startTagPipeline(app, session)
+        startSummaryPipeline(app, session)
 
         // Set before audioEngine.start() so the very first mic-level window
         // has a correct (near-zero) baseline instead of measuring against the
@@ -829,6 +855,39 @@ class RecordingService : LifecycleService() {
     }
 
     /**
+     * Starts the live-summary pipeline (bead asn-evl): a dedicated pump
+     * coroutine drains [summaryTickChannel] serially -- [SummaryCoordinator]
+     * is not thread-safe, same reasoning as [TagCoordinator] -- and, whenever
+     * a round actually changes anything, publishes the new [SummaryUiState]
+     * to [SummaryStateHolder], appends a `summary` event line to
+     * `live-transcript.jsonl`, and rewrites `summary.md` in full (bead
+     * asn-evl: cheap at this bullet-list size, and keeps the uploaded file
+     * always exactly matching the coordinator's own state).
+     *
+     * [app.newSummaryGenerator] is null when no Anthropic key is configured
+     * -- [SummaryCoordinator.onTick] then unconditionally no-ops on every
+     * tick, so this pump still runs (harmlessly) rather than needing its own
+     * keyless branch here.
+     */
+    private fun startSummaryPipeline(app: VoiceCaptureApp, session: SessionHandle) {
+        val coordinator = SummaryCoordinator(app.newSummaryGenerator())
+        summaryCoordinator = coordinator
+        val channel = Channel<Long>(capacity = SUMMARY_TICK_CHANNEL_CAPACITY, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        summaryTickChannel = channel
+        summaryPumpJob = lifecycleScope.launch(Dispatchers.IO) {
+            for (atMs in channel) {
+                val fullTranscript = TranscriptStateHolder.state.value.finalLines.joinToString(" ") { it.text }
+                val result = runCatching { coordinator.onTick(atMs, fullTranscript) }.getOrNull() ?: continue
+                SummaryStateHolder.update(
+                    SummaryUiState(bullets = result.bullets, newestIndex = result.newestIndex, updatedAtMs = atMs, stale = result.stale),
+                )
+                app.sessionStore.transcriptFile(session.dir).appendText(SummaryEventWriter.encodeLine(atMs, result.added) + "\n")
+                app.sessionStore.summaryFile(session.dir).writeText(SummaryMarkdownWriter.render(result.bullets))
+            }
+        }
+    }
+
+    /**
      * Drives elapsed-time UI/notification updates every second, and (bead
      * vn-edu.44) also feeds [TagCoordinator] a [TagPumpEvent.Tick] carrying
      * whatever partial is currently open on every tick -- this is what lets a
@@ -867,6 +926,7 @@ class RecordingService : LifecycleService() {
                 getSystemService(NotificationManager::class.java)
                     ?.notify(NOTIFICATION_ID, buildNotification(visibleElapsed))
                 tagLineChannel?.trySend(TagPumpEvent.Tick(TranscriptStateHolder.state.value.currentPartial, elapsed))
+                summaryTickChannel?.trySend(elapsed)
             }
         }
     }
@@ -902,6 +962,16 @@ class RecordingService : LifecycleService() {
         tagCoordinator = null
         tagChipRail = null
 
+        // Bead asn-evl: same close-not-cancel reasoning as tagLineChannel
+        // above -- let the summary pump finish writing out whatever round
+        // it's already mid-processing before the for-loop over the channel
+        // ends on its own.
+        summaryTickChannel?.close()
+        summaryTickChannel = null
+        val summaryJobToJoin = summaryPumpJob
+        summaryPumpJob = null
+        summaryCoordinator = null
+
         // Bead vn-edu.56: snapshot the too-short inputs now, before anything
         // async runs -- both are already fully known at the instant Stop was
         // tapped (finalLines is whatever STT had finalized so far;
@@ -925,6 +995,7 @@ class RecordingService : LifecycleService() {
             // from stopping -- see TagCoordinator/AnthropicTagScorer's own
             // "never blocks" contract; this is just defense in depth.
             val tagPumpCloseJob = tagJobToJoin?.let { launch { withTimeoutOrNull(TAG_PUMP_SHUTDOWN_TIMEOUT_MS) { it.join() } } }
+            val summaryPumpCloseJob = summaryJobToJoin?.let { launch { withTimeoutOrNull(SUMMARY_PUMP_SHUTDOWN_TIMEOUT_MS) { it.join() } } }
 
             // Bead vn-edu.56: "Session too short to save" -- awaits up to
             // TooShortPolicy.WARNING_WINDOW_MS for a "Save anyway" tap (routed
@@ -965,6 +1036,7 @@ class RecordingService : LifecycleService() {
 
             sttCloseJob?.join()
             tagPumpCloseJob?.join()
+            summaryPumpCloseJob?.join()
             jobsToCancel.forEach { it.cancel() }
 
             RecordingStateHolder.update { it.copy(isRecording = false, elapsedMs = elapsedMs) }

@@ -36,6 +36,9 @@ class SessionStore(private val baseDir: File) {
         const val AUDIO_OGG_FILENAME = "audio.ogg"
         const val META_FILENAME = "meta.json"
         const val TRANSCRIPT_FILENAME = "live-transcript.jsonl"
+        // Bead asn-evl: the live rolling bullet summary, rewritten whole
+        // each round by com.montauk.voicecapture.summary.SummaryMarkdownWriter.
+        const val SUMMARY_FILENAME = "summary.md"
         private const val UPLOAD_STATE_FILENAME = ".upload-state"
 
         private val ISO_FORMAT = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
@@ -63,6 +66,7 @@ class SessionStore(private val baseDir: File) {
     fun oggFile(dir: File): File = File(dir, AUDIO_OGG_FILENAME)
     fun metaFile(dir: File): File = File(dir, META_FILENAME)
     fun transcriptFile(dir: File): File = File(dir, TRANSCRIPT_FILENAME)
+    fun summaryFile(dir: File): File = File(dir, SUMMARY_FILENAME)
     private fun uploadStateFile(dir: File): File = File(dir, UPLOAD_STATE_FILENAME)
 
     /** Creates a fresh session directory and returns its id/handle. Does not touch audio files. */

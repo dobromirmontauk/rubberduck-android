@@ -5,6 +5,8 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArrayBuilder
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.jsonArray
@@ -12,10 +14,26 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+
+/**
+ * One text block of a [AnthropicClient.completeWithCache] prompt.
+ * [cacheControl] `true` marks this block as a prompt-caching breakpoint
+ * (`cache_control: {"type": "ephemeral"}`) -- Anthropic caches everything up
+ * to and including the last such breakpoint in a request and reuses it on a
+ * later request sharing the same prefix verbatim, at a fraction of the
+ * cost/latency of a full re-read. Bead asn-evl: a system-prompt block that
+ * never changes call to call is always a cache hit after the first round; a
+ * transcript block that only ever grows by appending is a *partial* hit each
+ * round (the unchanged prefix is served from cache, only the newly-appended
+ * tail is billed as fresh input) -- this is what makes resending the entire
+ * transcript every round affordable.
+ */
+data class PromptBlock(val text: String, val cacheControl: Boolean = false)
 
 /**
  * Minimal shared HTTP plumbing for Anthropic's Messages API -- extracted
@@ -53,6 +71,23 @@ class AnthropicClient(
             .getOrNull()
     }
 
+    /**
+     * Same contract as [complete] (never throws, null on any failure) but
+     * with [systemBlocks]/[userBlocks] each rendered as an Anthropic content
+     * block array instead of a single string, so callers can mark a
+     * [PromptBlock.cacheControl] breakpoint -- see [PromptBlock]'s KDoc.
+     * Bead asn-evl's first caller ([com.montauk.voicecapture.summary.AnthropicSummaryGenerator])
+     * needs this because its transcript-plus-previous-bullets prompt is
+     * resent in full every round; the plain [complete] has no way to mark a
+     * cacheable prefix.
+     */
+    suspend fun completeWithCache(model: String, maxTokens: Int, systemBlocks: List<PromptBlock>, userBlocks: List<PromptBlock>): String? {
+        if (apiKey.isBlank()) return null
+        return runCatching { withContext(Dispatchers.IO) { requestAndExtractTextWithCache(model, maxTokens, systemBlocks, userBlocks) } }
+            .onFailure { e -> Log.w(TAG, "AnthropicClient cached request threw: ${e.message}") }
+            .getOrNull()
+    }
+
     private fun requestAndExtractText(model: String, maxTokens: Int, systemPrompt: String, userContent: String): String? {
         val payload = buildJsonObject {
             put("model", model)
@@ -65,6 +100,45 @@ class AnthropicClient(
                 }
             }
         }
+        return executeAndExtractText(payload)
+    }
+
+    /**
+     * [systemBlocks]/[userBlocks] render as Anthropic's content-block-array
+     * shape (`[{"type":"text","text":"...","cache_control":{"type":"ephemeral"}}]`)
+     * rather than [requestAndExtractText]'s plain strings -- see [PromptBlock].
+     */
+    private fun requestAndExtractTextWithCache(
+        model: String,
+        maxTokens: Int,
+        systemBlocks: List<PromptBlock>,
+        userBlocks: List<PromptBlock>,
+    ): String? {
+        val payload = buildJsonObject {
+            put("model", model)
+            put("max_tokens", maxTokens)
+            putJsonArray("system") { systemBlocks.forEach { addTextBlock(it) } }
+            putJsonArray("messages") {
+                addJsonObject {
+                    put("role", "user")
+                    putJsonArray("content") { userBlocks.forEach { addTextBlock(it) } }
+                }
+            }
+        }
+        return executeAndExtractText(payload)
+    }
+
+    private fun JsonArrayBuilder.addTextBlock(block: PromptBlock) {
+        addJsonObject {
+            put("type", "text")
+            put("text", block.text)
+            if (block.cacheControl) {
+                putJsonObject("cache_control") { put("type", "ephemeral") }
+            }
+        }
+    }
+
+    private fun executeAndExtractText(payload: JsonObject): String? {
         val request = Request.Builder()
             .url(endpoint)
             .addHeader("x-api-key", apiKey)

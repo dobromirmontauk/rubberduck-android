@@ -11,6 +11,8 @@ import com.montauk.voicecapture.session.TitleGeneratorFactory
 import com.montauk.voicecapture.settings.AppSecretsStore
 import com.montauk.voicecapture.stt.SttClientFactory
 import com.montauk.voicecapture.stt.StreamingSttClient
+import com.montauk.voicecapture.summary.SummaryGenerator
+import com.montauk.voicecapture.summary.SummaryGeneratorFactory
 import com.montauk.voicecapture.tags.TagScorer
 import com.montauk.voicecapture.tags.TagScorerFactory
 import com.montauk.voicecapture.tags.TagTree
@@ -175,6 +177,15 @@ class VoiceCaptureApp : Application() {
      * exactly.
      */
     fun newTitleGenerator(): TitleGenerator? = TitleGeneratorFactory.create(secretsStore.effectiveAnthropicKey(BuildConfig.ANTHROPIC_API_KEY))
+
+    /**
+     * Null when the effective Anthropic key isn't configured (bead
+     * asn-evl) -- same keyless-means-skip-the-feature contract as
+     * [newTitleGenerator]. [com.montauk.voicecapture.service.RecordingService]
+     * treats null as "don't even start the summary pipeline for this
+     * session," matching today's keyless behavior for tags/titles.
+     */
+    fun newSummaryGenerator(): SummaryGenerator? = SummaryGeneratorFactory.create(secretsStore.effectiveAnthropicKey(BuildConfig.ANTHROPIC_API_KEY))
 
     fun refreshBundleUploader() {
         bundleUploader = BundleUploaderFactory.create(
