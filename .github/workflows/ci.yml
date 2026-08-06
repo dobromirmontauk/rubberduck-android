@@ -31,6 +31,23 @@ jobs:
       - name: Unit tests + screenshot verification
         run: ./gradlew test verifyRoborazziDebug --stacktrace
 
+      # SCRATCH STEP for bead asn-45m's [not for merge] golden-recording PR --
+      # runs even if verifyRoborazziDebug above failed (it will, since
+      # recording_full_stack.png's layout changed), records fresh Linux
+      # goldens, and uploads them as a downloadable artifact per README's
+      # "Screenshot tests (Roborazzi)" section. Revert this step before
+      # merging to main.
+      - name: (scratch) record Roborazzi goldens
+        if: always()
+        run: ./gradlew recordRoborazziDebug --stacktrace
+
+      - name: (scratch) upload recorded goldens
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: roborazzi-goldens
+          path: app/src/test/screenshot/goldens/
+
       # integrationTest (AssemblyAiLiveStreamingTest) hits the real AssemblyAI
       # streaming endpoint (~$0.01/run) and needs ASSEMBLYAI_API_KEY, so it is
       # intentionally excluded from the default job above. To wire it up as a
