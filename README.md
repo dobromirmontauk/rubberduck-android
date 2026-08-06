@@ -41,6 +41,11 @@ table below for what each one covers.
 in the bottom nav. A picker lists the bundled fixtures; pick one and
 recording starts immediately, fed from that file instead of the mic.
 
+**Scripted, no Android Studio:** `scripts/emulator-smoke.sh` boots a
+headless emulator, drives exactly this fixture-picker flow, and asserts the
+finalized bundle against the ingest contract -- see
+`docs/emulator-harness.md`.
+
 | Fixture (picker label) | File | Duration | Topic ground truth |
 | --- | --- | --- | --- |
 | Kitchen remodel | `kitchen-remodel.wav` | ~26s | kitchen remodel |
