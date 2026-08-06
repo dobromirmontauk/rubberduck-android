@@ -58,8 +58,18 @@ class SummaryCoordinator(
      * transcript is still too short to be worth summarizing, or (bead
      * asn-evl failure-state note) a round ran and failed but was already
      * stale from a previous failure -- no repeat "still stale" noise.
+     *
+     * [onCallStarted] (bead asn-3sm) fires exactly once, right before the
+     * real [generator] call, on every round that actually reaches it --
+     * never on a tick this returns null for before that point (not due, no
+     * growth, too short). The caller is expected to flip its own "call in
+     * flight" signal ([com.montauk.voicecapture.service.SummaryCallStateHolder])
+     * true there and back false once [onTick] returns, regardless of
+     * outcome -- kept as a callback rather than this class touching that
+     * `StateFlow` directly so this stays the pure, Android-free class its
+     * own KDoc promises.
      */
-    suspend fun onTick(nowMs: Long, fullTranscript: String): SummaryRoundResult? {
+    suspend fun onTick(nowMs: Long, fullTranscript: String, onCallStarted: () -> Unit = {}): SummaryRoundResult? {
         val activeGenerator = generator ?: return null
         if (!isDue(nowMs)) return null
         if (fullTranscript.length <= lastAttemptTranscriptLength) return null
@@ -68,6 +78,7 @@ class SummaryCoordinator(
         lastAttemptAtMs = nowMs
         lastAttemptTranscriptLength = fullTranscript.length
 
+        onCallStarted()
         val proposed = runCatching { activeGenerator.generate(fullTranscript, bullets) }.getOrNull()
         return if (proposed == null) onFailedRound() else onSuccessfulRound(proposed)
     }

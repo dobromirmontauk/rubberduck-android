@@ -341,6 +341,7 @@ class RecordingService : LifecycleService() {
         TagRailStateHolder.reset()
         TagTreeStateHolder.reset()
         SummaryStateHolder.reset()
+        SummaryCallStateHolder.reset()
         silenceDetector.reset()
         modeStateMachine = RecordingModeStateMachine()
         sttEverConnected = false
@@ -917,7 +918,15 @@ class RecordingService : LifecycleService() {
         summaryPumpJob = lifecycleScope.launch(Dispatchers.IO) {
             for (atMs in channel) {
                 val fullTranscript = TranscriptStateHolder.state.value.finalLines.joinToString(" ") { it.text }
-                val result = runCatching { coordinator.onTick(atMs, fullTranscript) }.getOrNull() ?: continue
+                // Bead asn-3sm: flips the duck screen's THINK state on for
+                // exactly the span of a real round (see SummaryCallStateHolder's
+                // KDoc) -- unconditionally reset back off once onTick returns,
+                // whether or not it actually reached the generator call.
+                val result = runCatching {
+                    coordinator.onTick(atMs, fullTranscript, onCallStarted = { SummaryCallStateHolder.set(true) })
+                }.getOrNull()
+                SummaryCallStateHolder.set(false)
+                if (result == null) continue
                 SummaryStateHolder.update(
                     SummaryUiState(bullets = result.bullets, newestIndex = result.newestIndex, updatedAtMs = atMs, stale = result.stale),
                 )

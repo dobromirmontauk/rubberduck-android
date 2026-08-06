@@ -1,203 +1,118 @@
 package com.montauk.voicecapture.duck
 
 /**
- * Pure Kotlin frame-by-frame sequencer driving the duck's pose (bead
- * asn-3sm). No Compose/Android dependency -- the state->sequence mapping and
- * frame timing are unit-testable on the plain JVM, without Robolectric.
- * [DuckAnimator] drives this on a per-frame clock and renders whatever
- * [tick] returns.
+ * Pure Kotlin event-driven state machine behind the duck's single-frame pose
+ * (bead asn-3sm v3, superseding the earlier multi-frame-per-state loop
+ * engine per explicit user direction: "ONE static image per state, no
+ * loops -- the state machine is EVENT-DRIVEN"). No Compose/Android
+ * dependency -- unit-testable on the plain JVM.
  *
- * - **LISTENING**: plays the one-shot [LISTENING_INTRO_SEQUENCE] once on
- *   entry, then settles into a looping [IDLE_BREATHING_SEQUENCE], with two
- *   independent one-shot interruptions -- [BLINK_SEQUENCE] every
- *   [blinkEveryMs] and [NOD_SEQUENCE] every [nodEveryMs] (design board v2's
- *   vitality signal: "healthy pipeline = lively duck"). The two run on
- *   separate clocks that survive each other's interruptions -- a blink
- *   firing doesn't reset the nod countdown, and vice versa.
- * - **SLEEPY**: loops [SLEEPY_SEQUENCE] at the slower [sleepyFrameDurationMs]
- *   cadence (spec: "slow cadence") -- quiet, but still recording; eyes stay
- *   open/heavy-lidded.
- * - **THINKING**: loops [THINKING_SEQUENCE] ("taking notes") at the normal
- *   [frameDurationMs] cadence, for as long as [state] stays THINKING.
- * - **SLEEPING**: loops [SLEEPING_SEQUENCE] at the even slower
- *   [sleepingFrameDurationMs] cadence -- recording paused, either kind; eyes
- *   fully closed, deliberately deeper/stiller than SLEEPY. Replaces this
- *   bead's original "no duck frame, BRB card instead" treatment after a
- *   design-board revision dropped that prop from scope.
+ * [state] (set via [setState]) is a persistent base pose -- [DuckState.ATTENTIVE]/
+ * [DuckState.SLEEP]/[DuckState.THINK] -- that [tick] renders whenever no
+ * [DuckPulse] is currently playing. [triggerPulse] layers a brief
+ * ([pulseDurationMs]) one-shot pose on top without changing [state] itself;
+ * once it expires, [tick] reverts to whatever [state] is current at that
+ * moment (not necessarily what it was when the pulse started -- a pulse
+ * never rewinds a base-state change that happened underneath it).
  *
- * [triggerHappyBounce]/[triggerHandRaise] each layer a one-shot sequence on
- * top of whichever of the above is current -- "Got it!" (a tag approved /
- * summary bullet added) and "a new tag entered the cloud" respectively --
- * without changing [state] itself: [tick] checks for either pending overlay
- * before consulting [phase] at all ([triggerHappyBounce] takes priority if
- * both happen to be pending at once, though in practice the two triggering
- * events are unrelated enough that this is rare), and once an overlay's
- * frames are exhausted, resumes exactly where the underlying phase would
- * have been (recomputed fresh from [state]/[phase], not literally
- * paused-and-resumed -- for [IdlePhase] specifically this preserves the
- * pending blink/nod timers, but the overlay itself is not literally
- * paused-and-resumed either, since a bounce/hand-raise is expected to be
- * rare and brief enough that the tiny discontinuity this causes is not
- * visible in practice).
+ * **Queuing** (the bead's own spec: "event pulses queue politely -- don't
+ * interrupt mid-pulse, drop stale ones"): [triggerPulse] while one is
+ * already playing doesn't interrupt it -- it replaces whatever was
+ * previously queued (if anything) with the new request, so at most one
+ * pulse is ever waiting its turn, and only the *most recent* one actually
+ * plays next; anything queued-and-then-superseded is silently dropped.
  *
- * [isCrossfading] reports whether the most recent [setState] transition is
- * still inside its crossfade window ([DuckAnimator] uses `Crossfade` for the
- * actual pixel fade between poses) -- this just lets a plain-JVM test assert
- * that a state change was registered as a transition, without needing
- * Compose at all.
+ * [tick] is a pure function of "now" (like the previous engine), so a test
+ * can assert behavior by advancing a synthetic clock without any real
+ * `delay()`. [msUntilNextTransition] tells the caller exactly how long until
+ * the current pulse (if any) will expire, so [DuckAnimator] can schedule a
+ * single one-shot wake-up instead of polling on a continuous frame-tick
+ * loop -- deliberately: a perpetual `delay()`-driven poll running for the
+ * whole lifetime of the recording screen was exactly the kind of thing that
+ * left a stuck resource behind across `ComposeTestRule` test boundaries
+ * (see [ThoughtCloud]/[ZzTrail]'s own history with `rememberInfiniteTransition`
+ * for the sibling version of this same lesson) -- an event-driven engine
+ * with no base-state animation has no need for continuous polling at all.
  *
  * Not thread-safe -- same single-owner-coroutine expectation as
  * [com.montauk.voicecapture.tags.TagTracker].
  */
 class DuckAnimationEngine(
-    initialState: DuckState = DuckState.LISTENING,
-    private val frameDurationMs: Long = DEFAULT_FRAME_DURATION_MS,
-    private val sleepyFrameDurationMs: Long = DEFAULT_SLEEPY_FRAME_DURATION_MS,
-    private val sleepingFrameDurationMs: Long = DEFAULT_SLEEPING_FRAME_DURATION_MS,
-    private val blinkEveryMs: Long = DEFAULT_BLINK_EVERY_MS,
-    private val nodEveryMs: Long = DEFAULT_NOD_EVERY_MS,
-    private val handRaiseFrameDurationMs: Long = DEFAULT_HAND_RAISE_FRAME_DURATION_MS,
-    private val crossfadeMs: Long = DEFAULT_CROSSFADE_MS,
+    initialState: DuckState = DuckState.ATTENTIVE,
+    private val pulseDurationMs: Long = DEFAULT_PULSE_DURATION_MS,
 ) {
-    private sealed interface Phase {
-        val startedAtMs: Long
-    }
-    private data class ListeningIntroPhase(override val startedAtMs: Long) : Phase
-    private data class IdlePhase(override val startedAtMs: Long, val nextBlinkAtMs: Long, val nextNodAtMs: Long) : Phase
-    private data class BlinkPhase(override val startedAtMs: Long, val nextNodAtMs: Long) : Phase
-    private data class NodPhase(override val startedAtMs: Long, val nextBlinkAtMs: Long) : Phase
-    private data class SleepyPhase(override val startedAtMs: Long) : Phase
-    private data class ThinkingPhase(override val startedAtMs: Long) : Phase
-    private data class SleepingPhase(override val startedAtMs: Long) : Phase
-
-    private var happyBounceStartedAtMs: Long? = null
-    private var handRaiseStartedAtMs: Long? = null
-
     var state: DuckState = initialState
         private set
 
-    // Lazily established on the first setState/tick call using the CALLER's
-    // clock, not a baked-in 0L -- callers pass real values (System.currentTimeMillis()
-    // in production, small synthetic values in tests), and seeding startedAtMs
-    // from an arbitrary epoch would make frame-index math (elapsed-since-phase-start)
-    // nonsensical on the very first tick.
-    private var phase: Phase? = null
-    private var stateEnteredAtMs: Long = 0L
+    private var activePulse: DuckPulse? = null
+    private var pulseExpiresAtMs: Long = 0L
+    private var queuedPulse: DuckPulse? = null
 
-    /** Switches the target [DuckState] at [nowMs] -- a no-op if already in that state (and already initialized). */
-    fun setState(newState: DuckState, nowMs: Long) {
-        if (newState == state && phase != null) return
+    /** Switches the persistent base pose -- takes visual effect immediately unless a pulse is currently playing (see the class KDoc). */
+    fun setState(newState: DuckState) {
         state = newState
-        stateEnteredAtMs = nowMs
-        phase = initialPhaseFor(newState, nowMs)
     }
 
-    /** True while [nowMs] is still within [crossfadeMs] of the most recent [setState] transition. */
-    fun isCrossfading(nowMs: Long): Boolean {
-        if (phase == null) return false
-        return nowMs - stateEnteredAtMs < crossfadeMs
+    /**
+     * Plays [pulse] for [pulseDurationMs] over whatever is currently
+     * showing. If another pulse is already playing, [pulse] replaces
+     * whatever was queued (dropping it, if anything was) rather than
+     * interrupting the one in progress -- call [tick] afterward (or on the
+     * next frame) to pick up the change once the current pulse expires.
+     */
+    fun triggerPulse(pulse: DuckPulse, nowMs: Long) {
+        if (activePulse != null) {
+            queuedPulse = pulse
+            return
+        }
+        activePulse = pulse
+        pulseExpiresAtMs = nowMs + pulseDurationMs
     }
 
-    /** Layers a one-shot [HAPPY_BOUNCE_SEQUENCE] on top of whatever is currently playing -- see the class KDoc. */
-    fun triggerHappyBounce(nowMs: Long) {
-        happyBounceStartedAtMs = nowMs
-    }
-
-    /** Layers a one-shot [HAND_RAISE_SEQUENCE] on top of whatever is currently playing -- see the class KDoc. */
-    fun triggerHandRaise(nowMs: Long) {
-        handRaiseStartedAtMs = nowMs
-    }
-
-    /** Advances frame timing to [nowMs] and returns what [DuckAnimator] should render. */
+    /** Advances past an expired pulse (promoting whatever's queued, if anything) and returns what should render at [nowMs]. */
     fun tick(nowMs: Long): DuckVisual.Pose {
-        val bounceStart = happyBounceStartedAtMs
-        if (bounceStart != null) {
-            val idx = ((nowMs - bounceStart) / frameDurationMs).toInt()
-            if (idx >= HAPPY_BOUNCE_SEQUENCE.size) {
-                happyBounceStartedAtMs = null
-            } else {
-                return DuckVisual.Pose(HAPPY_BOUNCE_SEQUENCE[idx])
+        val pulse = activePulse
+        if (pulse != null && nowMs >= pulseExpiresAtMs) {
+            activePulse = null
+            val next = queuedPulse
+            queuedPulse = null
+            if (next != null) {
+                activePulse = next
+                pulseExpiresAtMs = nowMs + pulseDurationMs
             }
         }
-        val handRaiseStart = handRaiseStartedAtMs
-        if (handRaiseStart != null) {
-            val idx = ((nowMs - handRaiseStart) / handRaiseFrameDurationMs).toInt()
-            if (idx >= HAND_RAISE_SEQUENCE.size) {
-                handRaiseStartedAtMs = null
-            } else {
-                return DuckVisual.Pose(HAND_RAISE_SEQUENCE[idx])
-            }
-        }
-        if (phase == null) setState(state, nowMs)
-        return when (val p = phase!!) {
-            is SleepingPhase -> {
-                val idx = (((nowMs - p.startedAtMs) / sleepingFrameDurationMs) % SLEEPING_SEQUENCE.size).toInt()
-                DuckVisual.Pose(SLEEPING_SEQUENCE[idx])
-            }
-            is ThinkingPhase -> {
-                val idx = (((nowMs - p.startedAtMs) / frameDurationMs) % THINKING_SEQUENCE.size).toInt()
-                DuckVisual.Pose(THINKING_SEQUENCE[idx])
-            }
-            is ListeningIntroPhase -> {
-                val idx = ((nowMs - p.startedAtMs) / frameDurationMs).toInt()
-                if (idx >= LISTENING_INTRO_SEQUENCE.size) {
-                    phase = IdlePhase(nowMs, nextBlinkAtMs = nowMs + blinkEveryMs, nextNodAtMs = nowMs + nodEveryMs)
-                    tick(nowMs)
-                } else {
-                    DuckVisual.Pose(LISTENING_INTRO_SEQUENCE[idx])
-                }
-            }
-            is IdlePhase -> {
-                if (nowMs >= p.nextBlinkAtMs) {
-                    phase = BlinkPhase(nowMs, nextNodAtMs = p.nextNodAtMs)
-                    tick(nowMs)
-                } else if (nowMs >= p.nextNodAtMs) {
-                    phase = NodPhase(nowMs, nextBlinkAtMs = p.nextBlinkAtMs)
-                    tick(nowMs)
-                } else {
-                    val idx = (((nowMs - p.startedAtMs) / frameDurationMs) % IDLE_BREATHING_SEQUENCE.size).toInt()
-                    DuckVisual.Pose(IDLE_BREATHING_SEQUENCE[idx])
-                }
-            }
-            is BlinkPhase -> {
-                val idx = ((nowMs - p.startedAtMs) / frameDurationMs).toInt()
-                if (idx >= BLINK_SEQUENCE.size) {
-                    phase = IdlePhase(nowMs, nextBlinkAtMs = nowMs + blinkEveryMs, nextNodAtMs = p.nextNodAtMs)
-                    tick(nowMs)
-                } else {
-                    DuckVisual.Pose(BLINK_SEQUENCE[idx])
-                }
-            }
-            is NodPhase -> {
-                val idx = ((nowMs - p.startedAtMs) / frameDurationMs).toInt()
-                if (idx >= NOD_SEQUENCE.size) {
-                    phase = IdlePhase(nowMs, nextBlinkAtMs = p.nextBlinkAtMs, nextNodAtMs = nowMs + nodEveryMs)
-                    tick(nowMs)
-                } else {
-                    DuckVisual.Pose(NOD_SEQUENCE[idx])
-                }
-            }
-            is SleepyPhase -> {
-                val idx = (((nowMs - p.startedAtMs) / sleepyFrameDurationMs) % SLEEPY_SEQUENCE.size).toInt()
-                DuckVisual.Pose(SLEEPY_SEQUENCE[idx])
-            }
-        }
+        val frame = activePulse?.toFrame() ?: state.toFrame()
+        return DuckVisual.Pose(frame)
     }
 
-    private fun initialPhaseFor(state: DuckState, nowMs: Long): Phase = when (state) {
-        DuckState.LISTENING -> ListeningIntroPhase(nowMs)
-        DuckState.SLEEPY -> SleepyPhase(nowMs)
-        DuckState.THINKING -> ThinkingPhase(nowMs)
-        DuckState.SLEEPING -> SleepingPhase(nowMs)
+    /**
+     * ms from [nowMs] until the current pulse expires -- exactly how long
+     * [DuckAnimator] should sleep before calling [tick] again -- or `null`
+     * when nothing is scheduled (no pulse playing, so nothing will change
+     * until the next external [setState]/[triggerPulse] call). Reflects
+     * [tick]'s most recent resolution, so call [tick] first if a pulse may
+     * have just expired.
+     */
+    fun msUntilNextTransition(nowMs: Long): Long? {
+        if (activePulse == null) return null
+        return (pulseExpiresAtMs - nowMs).coerceAtLeast(0L)
     }
 
     companion object {
-        const val DEFAULT_FRAME_DURATION_MS = 180L
-        const val DEFAULT_SLEEPY_FRAME_DURATION_MS = 900L
-        const val DEFAULT_SLEEPING_FRAME_DURATION_MS = 1_200L
-        const val DEFAULT_BLINK_EVERY_MS = 4_000L
-        const val DEFAULT_NOD_EVERY_MS = 12_000L
-        const val DEFAULT_HAND_RAISE_FRAME_DURATION_MS = 400L
-        const val DEFAULT_CROSSFADE_MS = 260L
+        const val DEFAULT_PULSE_DURATION_MS = 700L
+        const val DEFAULT_CROSSFADE_MS = 200L
     }
+}
+
+private fun DuckState.toFrame(): DuckFrame = when (this) {
+    DuckState.ATTENTIVE -> DuckFrame.ATTENTIVE
+    DuckState.SLEEP -> DuckFrame.SLEEP
+    DuckState.THINK -> DuckFrame.THINK
+}
+
+private fun DuckPulse.toFrame(): DuckFrame = when (this) {
+    DuckPulse.BLINK -> DuckFrame.BLINK
+    DuckPulse.NOD -> DuckFrame.NOD
+    DuckPulse.RAISE_HAND -> DuckFrame.RAISE_HAND
+    DuckPulse.WRITE -> DuckFrame.WRITE
 }
