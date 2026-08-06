@@ -31,36 +31,6 @@ jobs:
       - name: Unit tests + screenshot verification
         run: ./gradlew test verifyRoborazziDebug --stacktrace
 
-  # TEMPORARY (asn-638): records Roborazzi goldens on Linux CI and uploads
-  # them as a build artifact, same throwaway-PR approach README's Roborazzi
-  # section describes for vn-edu.41/55/60/66. Gated to this one branch so it
-  # doesn't run on anyone else's concurrent PR; reverted in a follow-up
-  # commit before this branch lands on main.
-  record-goldens:
-    if: github.head_ref == 'agent/asn-638'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "21"
-          cache: gradle
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-
-      - name: Record Roborazzi goldens
-        run: ./gradlew recordRoborazziDebug --stacktrace
-
-      - name: Upload recorded goldens
-        uses: actions/upload-artifact@v4
-        with:
-          name: roborazzi-goldens-asn-638
-          path: app/src/test/screenshot/goldens/
-
       # integrationTest (AssemblyAiLiveStreamingTest) hits the real AssemblyAI
       # streaming endpoint (~$0.01/run) and needs ASSEMBLYAI_API_KEY, so it is
       # intentionally excluded from the default job above. To wire it up as a
