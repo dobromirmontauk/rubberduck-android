@@ -3,15 +3,21 @@ package com.montauk.voicecapture.ui
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -19,6 +25,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.montauk.voicecapture.VoiceCaptureApp
+import com.montauk.voicecapture.service.TooShortWarningStateHolder
 import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 
@@ -50,6 +57,32 @@ fun AppNavHost(
     // which recomposes this whole function, so the 4th tab's label picks it up for free.
     val isConnectedToGithub = app.secretsStore.isConnectedToGithub()
 
+    // Bead vn-edu.56: hosted at the Scaffold level (not inside RecordingScreen)
+    // so the "Session too short to save" snackbar survives the Stop->Sessions
+    // navigation that RecordingScreen's onStopRecording triggers immediately --
+    // by the time this would show, the user is usually already looking at the
+    // Sessions list, not the recording screen.
+    val snackbarHostState = remember { SnackbarHostState() }
+    val tooShortWarning by TooShortWarningStateHolder.state.collectAsStateWithLifecycle()
+    LaunchedEffect(tooShortWarning) {
+        if (tooShortWarning == null) return@LaunchedEffect
+        // SnackbarDuration.Indefinite deliberately: the real timeout lives in
+        // RecordingService/TooShortPolicy.WARNING_WINDOW_MS, not here. When
+        // that window elapses (or "Save anyway" already resolved the
+        // decision), tooShortWarning flips back to null, this LaunchedEffect
+        // relaunches with warning == null, and cancelling the coroutine that
+        // was suspended in showSnackbar() dismisses it automatically -- so
+        // this composable never needs its own duplicate timer.
+        val result = snackbarHostState.showSnackbar(
+            message = "Session too short to save",
+            actionLabel = "Save anyway",
+            duration = SnackbarDuration.Indefinite,
+        )
+        if (result == SnackbarResult.ActionPerformed) {
+            TooShortWarningStateHolder.saveAnyway()
+        }
+    }
+
     fun startNewSession(injectAssetFileName: String?) {
         // Permission-gated service start lives in MainActivity (it owns the
         // ActivityResult permission launcher); navigation lives here (this
@@ -68,6 +101,7 @@ fun AppNavHost(
     // Material3 baseline theme since they sit outside any screen's own wrap.
     VoiceCaptureTheme {
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             if (showBottomBar) {
                 BottomNavBar(

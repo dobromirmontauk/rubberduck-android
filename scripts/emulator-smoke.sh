@@ -45,7 +45,12 @@ UI_DUMP_RETRIES=15
 UI_DUMP_RETRY_DELAY_SECONDS=2
 
 FIXTURE_LABEL="Kitchen remodel"
-RECORD_SECONDS=8
+# Bead vn-edu.56: must stay comfortably above TooShortPolicy.TOO_SHORT_SECONDS
+# (10s) -- RecordingService now discards-by-default (no meta.json, no
+# upload) any session shorter than that, which would make this harness's own
+# "finalized bundle appears" assertions fail. 15s leaves margin for the
+# emulator/adb round-trip jitter around the actual STOP tap.
+RECORD_SECONDS=15
 KEEP_EMULATOR=0
 
 while [ "$#" -gt 0 ]; do

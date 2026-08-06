@@ -30,6 +30,7 @@ import com.montauk.voicecapture.session.SessionHandle
 import com.montauk.voicecapture.session.SessionModeEntry
 import com.montauk.voicecapture.session.UploadState
 import com.montauk.voicecapture.stt.StreamingSttClient
+import com.montauk.voicecapture.stt.SttConnectionState
 import com.montauk.voicecapture.tags.TagCoordinator
 import com.montauk.voicecapture.tags.TagsEventWriter
 import com.montauk.voicecapture.upload.UploadWorker
@@ -144,6 +145,17 @@ class RecordingService : LifecycleService() {
     /** Mode history for the session currently recording (or just finished) -- reset in [beginRecording]. */
     private var modeStateMachine = RecordingModeStateMachine()
 
+    /**
+     * Bead vn-edu.56: true once [SttConnectionState.CONNECTED] has been
+     * observed at least once during the current session -- NOT "is connected
+     * right now", so a session that connected then dropped mid-way still
+     * gets [TooShortPolicy]'s word-count check rather than being mistaken for
+     * an offline/keyless one. Reset in [beginRecording]; read (then left
+     * alone -- [endRecording] doesn't reset it, [beginRecording] does) in
+     * [endRecording] via the local `sttWasConnected` snapshot.
+     */
+    private var sttEverConnected = false
+
     /** Decides the "(silence)" hint independent of STT connection state -- see class KDoc there. */
     private val silenceDetector = SilenceDetector()
 
@@ -174,6 +186,7 @@ class RecordingService : LifecycleService() {
         TagsStateHolder.reset()
         silenceDetector.reset()
         modeStateMachine = RecordingModeStateMachine()
+        sttEverConnected = false
         // Bead vn-edu.2: a previous session's Bluetooth route/warning/loss
         // flags must never leak into this new one -- createAudioSource's
         // onRouteChanged callback only ever sets these forward, it never
@@ -285,6 +298,7 @@ class RecordingService : LifecycleService() {
         val app = application as VoiceCaptureApp
         val statusJob = lifecycleScope.launch {
             stt.connectionState().collect { state ->
+                if (state == SttConnectionState.CONNECTED) sttEverConnected = true
                 TranscriptStateHolder.update { it.copy(connectionState = state) }
             }
         }
@@ -424,6 +438,21 @@ class RecordingService : LifecycleService() {
         tagPumpJob = null
         tagCoordinator = null
 
+        // Bead vn-edu.56: snapshot the too-short inputs now, before anything
+        // async runs -- both are already fully known at the instant Stop was
+        // tapped (finalLines is whatever STT had finalized so far;
+        // sttEverConnected only ever flips true->never back to false mid-session).
+        val sttWasConnected = sttEverConnected
+        val finalWordCount = TranscriptWordCount.count(TranscriptStateHolder.state.value.finalLines)
+        val shouldWarn = TooShortPolicy.shouldDiscard(elapsedMs, sttWasConnected, finalWordCount)
+        // A non-warned session's signal is pre-completed so TooShortDecision.resolve's
+        // early `!shouldWarn` return path never touches TooShortWarningStateHolder at all.
+        val saveAnywaySignal = if (shouldWarn) {
+            TooShortWarningStateHolder.beginWarning(session.sessionId)
+        } else {
+            CompletableDeferred(true)
+        }
+
         lifecycleScope.launch {
             // Close the STT socket in parallel with the (independent) audio
             // finalize -- neither should wait on the other.
@@ -433,22 +462,42 @@ class RecordingService : LifecycleService() {
             // "never blocks" contract; this is just defense in depth.
             val tagPumpCloseJob = tagJobToJoin?.let { launch { withTimeoutOrNull(TAG_PUMP_SHUTDOWN_TIMEOUT_MS) { it.join() } } }
 
-            val finalizeSucceeded = runFinalizeWithWatchdog(app, session, elapsedMs)
-            // No GitHub token configured (bead vn-edu.29: recording is never gated on
-            // sign-in) means there's no uploader to hand this to -- runFinalizeWithWatchdog
-            // already left the session at its writeMeta default of LOCAL in that case, and
-            // it stays there until UploadWorker.enqueueBacklog drains it on a later sign-in.
-            if (finalizeSucceeded && app.isGithubTokenConfigured()) {
-                UploadWorker.enqueue(applicationContext, session.sessionId)
-            }
-            if (finalizeSucceeded) {
-                launchTitleGeneration(app, session.sessionId)
-            }
-            // A false/timed-out result deliberately leaves audio.wal in place
-            // with no meta.json written -- SessionStore.findUnfinalizedSessions()
-            // picks it up as an orphaned recording and VoiceCaptureApp retries
-            // the remux on next app launch. The session simply won't appear
-            // in the list until then, per docs/audio-wal.md's recovery model.
+            // Bead vn-edu.56: "Session too short to save" -- awaits up to
+            // TooShortPolicy.WARNING_WINDOW_MS for a "Save anyway" tap (routed
+            // in from the UI via TooShortWarningStateHolder.saveAnyway());
+            // times out to "discard" by default. No-op wait when !shouldWarn.
+            // finalize/discard below are mutually exclusive -- see TooShortOutcome's KDoc.
+            TooShortOutcome.resolveAndRoute(
+                shouldWarn = shouldWarn,
+                saveAnywaySignal = saveAnywaySignal,
+                warningWindowMs = TooShortPolicy.WARNING_WINDOW_MS,
+                onWarningResolved = { TooShortWarningStateHolder.clearWarning() },
+                finalize = {
+                    val finalizeSucceeded = runFinalizeWithWatchdog(app, session, elapsedMs)
+                    // No GitHub token configured (bead vn-edu.29: recording is never gated on
+                    // sign-in) means there's no uploader to hand this to -- runFinalizeWithWatchdog
+                    // already left the session at its writeMeta default of LOCAL in that case, and
+                    // it stays there until UploadWorker.enqueueBacklog drains it on a later sign-in.
+                    if (finalizeSucceeded && app.isGithubTokenConfigured()) {
+                        UploadWorker.enqueue(applicationContext, session.sessionId)
+                    }
+                    if (finalizeSucceeded) {
+                        launchTitleGeneration(app, session.sessionId)
+                    }
+                    // A false/timed-out result deliberately leaves audio.wal in place
+                    // with no meta.json written -- SessionStore.findUnfinalizedSessions()
+                    // picks it up as an orphaned recording and VoiceCaptureApp retries
+                    // the remux on next app launch. The session simply won't appear
+                    // in the list until then, per docs/audio-wal.md's recovery model.
+                },
+                discard = {
+                    // Discard by default (bead vn-edu.56): delete the whole session
+                    // directory -- audio.wal and any live-transcript.jsonl event
+                    // lines already written -- so nothing uploads and no row ever
+                    // appears (writeMeta/UploadWorker.enqueue are never reached).
+                    TooShortSessionDiscarder.discard(session.dir)
+                },
+            )
 
             sttCloseJob?.join()
             tagPumpCloseJob?.join()
