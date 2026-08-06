@@ -100,4 +100,74 @@ class TagsEventLineTest {
         assertEquals("t_kitchen", tagsArray[0].jsonObject["tag_id"]!!.jsonPrimitive.content)
         assertTrue("the second (free-form) entry must have no tag_id key", "tag_id" !in tagsArray[1].jsonObject)
     }
+
+    // --- Bead asn-45m: user-attributed edit lines ---
+
+    @Test
+    fun `encodeUserEditLine matches the event-line shape exactly for a pure add`() {
+        val encoded = TagsEventWriter.encodeUserEditLine(
+            4200L,
+            added = listOf(UserTagRef("kitchen-remodel", tagId = "t_01KZ8CKQ8Y60H8YQADG5RMNQ30")),
+            removed = emptyList(),
+        )
+
+        assertEquals(
+            """{"t_ms":4200,"event":"tags","source":"user","added":[{"tag":"kitchen-remodel","tag_id":"t_01KZ8CKQ8Y60H8YQADG5RMNQ30"}],"removed":[]}""",
+            encoded,
+        )
+    }
+
+    @Test
+    fun `encodeUserEditLine matches the event-line shape exactly for a pure remove`() {
+        val encoded = TagsEventWriter.encodeUserEditLine(4200L, added = emptyList(), removed = listOf(UserTagRef("gardening")))
+
+        assertEquals("""{"t_ms":4200,"event":"tags","source":"user","added":[],"removed":[{"tag":"gardening"}]}""", encoded)
+    }
+
+    @Test
+    fun `encodeUserEditLine for a swap carries both added and removed in one line`() {
+        val encoded = TagsEventWriter.encodeUserEditLine(
+            4200L,
+            added = listOf(UserTagRef("landscaping", tagId = "t_landscape")),
+            removed = listOf(UserTagRef("gardening", tagId = "t_garden")),
+        )
+
+        val root = Json.parseToJsonElement(encoded).jsonObject
+        assertEquals("user", root["source"]!!.jsonPrimitive.content)
+        assertEquals("landscaping", root["added"]!!.jsonArray[0].jsonObject["tag"]!!.jsonPrimitive.content)
+        assertEquals("gardening", root["removed"]!!.jsonArray[0].jsonObject["tag"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `encodeUserEditLine omits the tags key entirely -- the two variants never share a payload`() {
+        val encoded = TagsEventWriter.encodeUserEditLine(0L, added = listOf(UserTagRef("topic")), removed = emptyList())
+
+        assertTrue("a user-edit line must have no tags key", "\"tags\":" !in encoded)
+    }
+
+    @Test
+    fun `encodeLine (model snapshot) omits source, added, and removed entirely -- unchanged from before asn-45m`() {
+        val encoded = TagsEventWriter.encodeLine(1200L, listOf(tag("marathon training", 0.87, 1)))
+
+        assertEquals("""{"t_ms":1200,"event":"tags","tags":[{"tag":"marathon training","confidence":0.87,"rank":1}]}""", encoded)
+        assertTrue("source" !in encoded)
+        assertTrue("added" !in encoded)
+        assertTrue("removed" !in encoded)
+    }
+
+    @Test
+    fun `a user-edit line still decodes back into a TagsEventLine with tags null and source, added, removed populated`() {
+        val encoded = TagsEventWriter.encodeUserEditLine(
+            100L,
+            added = listOf(UserTagRef("kitchen-remodel", tagId = "t_kitchen")),
+            removed = listOf(UserTagRef("gardening")),
+        )
+
+        val decoded = Json.decodeFromString(TagsEventLine.serializer(), encoded)
+
+        assertEquals("user", decoded.source)
+        assertEquals(null, decoded.tags)
+        assertEquals(listOf(UserTagRef("kitchen-remodel", "t_kitchen")), decoded.added)
+        assertEquals(listOf(UserTagRef("gardening")), decoded.removed)
+    }
 }

@@ -34,8 +34,10 @@ import com.montauk.voicecapture.session.SessionModeEntry
 import com.montauk.voicecapture.session.UploadState
 import com.montauk.voicecapture.stt.StreamingSttClient
 import com.montauk.voicecapture.stt.SttConnectionState
+import com.montauk.voicecapture.tags.TagChipRail
 import com.montauk.voicecapture.tags.TagCoordinator
 import com.montauk.voicecapture.tags.TagsEventWriter
+import com.montauk.voicecapture.tags.UserTagRef
 import com.montauk.voicecapture.upload.UploadWorker
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -67,6 +69,18 @@ class RecordingService : LifecycleService() {
         const val ACTION_STOP = "com.montauk.voicecapture.action.STOP"
         const val ACTION_SET_MODE = "com.montauk.voicecapture.action.SET_MODE"
         const val EXTRA_MODE = "mode"
+
+        // Bead asn-45m: user edits on the recording screen's tag rail --
+        // add/remove/swap each land on their own action, same one-intent-
+        // per-action shape as ACTION_SET_MODE above. EXTRA_TAG_NAME/EXTRA_TAG_ID
+        // identify the tag being added or swapped-in; EXTRA_OLD_TAG_NAME is
+        // only read by ACTION_TAG_SWAP, to say which chip is being replaced.
+        const val ACTION_TAG_ADD = "com.montauk.voicecapture.action.TAG_ADD"
+        const val ACTION_TAG_REMOVE = "com.montauk.voicecapture.action.TAG_REMOVE"
+        const val ACTION_TAG_SWAP = "com.montauk.voicecapture.action.TAG_SWAP"
+        const val EXTRA_TAG_NAME = "tag_name"
+        const val EXTRA_TAG_ID = "tag_id"
+        const val EXTRA_OLD_TAG_NAME = "old_tag_name"
 
         /**
          * Debug-only (bead vn-edu.20): a value here on the [ACTION_START]
@@ -107,6 +121,20 @@ class RecordingService : LifecycleService() {
         fun stopIntent(context: Context): Intent = Intent(context, RecordingService::class.java).setAction(ACTION_STOP)
         fun setModeIntent(context: Context, mode: RecordingMode): Intent =
             Intent(context, RecordingService::class.java).setAction(ACTION_SET_MODE).putExtra(EXTRA_MODE, mode.wireValue)
+
+        /** Bead asn-45m: the user tapped the rail's trailing (+) chip and picked/typed [tag] (optionally tree-matched, [tagId]) from the picker. */
+        fun addTagIntent(context: Context, tag: String, tagId: String?): Intent =
+            Intent(context, RecordingService::class.java).setAction(ACTION_TAG_ADD)
+                .putExtra(EXTRA_TAG_NAME, tag).putExtra(EXTRA_TAG_ID, tagId)
+
+        /** Bead asn-45m: the user tapped a chip's ✕. */
+        fun removeTagIntent(context: Context, tag: String): Intent =
+            Intent(context, RecordingService::class.java).setAction(ACTION_TAG_REMOVE).putExtra(EXTRA_TAG_NAME, tag)
+
+        /** Bead asn-45m: the user tapped [oldTag]'s chip body and picked a replacement ([newTag]/[newTagId]) from the picker. */
+        fun swapTagIntent(context: Context, oldTag: String, newTag: String, newTagId: String?): Intent =
+            Intent(context, RecordingService::class.java).setAction(ACTION_TAG_SWAP)
+                .putExtra(EXTRA_OLD_TAG_NAME, oldTag).putExtra(EXTRA_TAG_NAME, newTag).putExtra(EXTRA_TAG_ID, newTagId)
     }
 
     private lateinit var audioEngine: AudioEngine
@@ -144,6 +172,18 @@ class RecordingService : LifecycleService() {
     private var tagPumpJob: Job? = null
     private var tagCoordinator: TagCoordinator? = null
 
+    /**
+     * Bead asn-45m: the recording screen's editable tag rail state machine
+     * -- owned here alongside [tagCoordinator] (same session-scoped
+     * lifetime: created in [beginRecording], cleared in [endRecording]).
+     * [startTagPipeline]'s pump feeds it every new suggested-tags set;
+     * [handleTagAdd]/[handleTagRemove]/[handleTagSwap] feed it the user's
+     * own edits. Either path republishes [TagChipRail.chips] to
+     * [TagRailStateHolder] and, for a user edit only, appends a
+     * user-attributed tags event line to `live-transcript.jsonl`.
+     */
+    private var tagChipRail: TagChipRail? = null
+
     /** Mode history for the session currently recording (or just finished) -- reset in [beginRecording]. */
     private var modeStateMachine = RecordingModeStateMachine()
 
@@ -173,6 +213,9 @@ class RecordingService : LifecycleService() {
             ACTION_START -> beginRecording(intent.getStringExtra(EXTRA_INJECT_AUDIO))
             ACTION_STOP -> endRecording()
             ACTION_SET_MODE -> setMode(intent)
+            ACTION_TAG_ADD -> handleTagAdd(intent)
+            ACTION_TAG_REMOVE -> handleTagRemove(intent)
+            ACTION_TAG_SWAP -> handleTagSwap(intent)
         }
         return START_NOT_STICKY
     }
@@ -186,6 +229,8 @@ class RecordingService : LifecycleService() {
 
         TranscriptStateHolder.reset()
         TagsStateHolder.reset()
+        TagRailStateHolder.reset()
+        TagTreeStateHolder.reset()
         silenceDetector.reset()
         modeStateMachine = RecordingModeStateMachine()
         sttEverConnected = false
@@ -309,6 +354,55 @@ class RecordingService : LifecycleService() {
         }
     }
 
+    /** Handles [ACTION_TAG_ADD]: the (+) chip's picker (or its free-form "Add" row) confirmed a new tag. */
+    private fun handleTagAdd(intent: Intent) {
+        val session = currentSession ?: return
+        val rail = tagChipRail ?: return
+        val tag = intent.getStringExtra(EXTRA_TAG_NAME)?.takeIf { it.isNotBlank() } ?: return
+        val tagId = intent.getStringExtra(EXTRA_TAG_ID)
+        if (!rail.onAdd(tag, tagId)) return
+        TagRailStateHolder.update(rail.chips())
+        writeUserTagEvent(session, added = listOf(UserTagRef(tag, tagId)), removed = emptyList())
+    }
+
+    /** Handles [ACTION_TAG_REMOVE]: the user tapped a chip's ✕. */
+    private fun handleTagRemove(intent: Intent) {
+        val session = currentSession ?: return
+        val rail = tagChipRail ?: return
+        val tag = intent.getStringExtra(EXTRA_TAG_NAME)?.takeIf { it.isNotBlank() } ?: return
+        if (!rail.onRemove(tag)) return
+        TagRailStateHolder.update(rail.chips())
+        writeUserTagEvent(session, added = emptyList(), removed = listOf(UserTagRef(tag)))
+    }
+
+    /** Handles [ACTION_TAG_SWAP]: the user tapped a chip's body and picked a replacement from the tree picker. */
+    private fun handleTagSwap(intent: Intent) {
+        val session = currentSession ?: return
+        val rail = tagChipRail ?: return
+        val oldTag = intent.getStringExtra(EXTRA_OLD_TAG_NAME)?.takeIf { it.isNotBlank() } ?: return
+        val newTag = intent.getStringExtra(EXTRA_TAG_NAME)?.takeIf { it.isNotBlank() } ?: return
+        val newTagId = intent.getStringExtra(EXTRA_TAG_ID)
+        if (!rail.onSwap(oldTag, newTag, newTagId)) return
+        TagRailStateHolder.update(rail.chips())
+        writeUserTagEvent(session, added = listOf(UserTagRef(newTag, newTagId)), removed = listOf(UserTagRef(oldTag)))
+    }
+
+    /**
+     * Appends a user-attributed tags event line (bead asn-45m) --
+     * [TagsEventWriter.encodeUserEditLine]'s two-array shape, timestamped the
+     * same way [setMode]/[writeModeEvent] timestamp a mode change: elapsed
+     * recording time at the moment the intent was handled, not whatever
+     * [event][TagPumpEvent]'s own `atMs` last was (a tag edit is a separate,
+     * user-driven event, not a re-run of the scorer pump).
+     */
+    private fun writeUserTagEvent(session: SessionHandle, added: List<UserTagRef>, removed: List<UserTagRef>) {
+        val app = application as VoiceCaptureApp
+        val elapsedMs = SystemClock.elapsedRealtime() - startElapsedRealtimeMs
+        lifecycleScope.launch(Dispatchers.IO) {
+            app.sessionStore.transcriptFile(session.dir).appendText(TagsEventWriter.encodeUserEditLine(elapsedMs, added, removed) + "\n")
+        }
+    }
+
     /** Connects the STT client and fans its output into the UI state + `live-transcript.jsonl`. */
     private fun startSttPipeline(stt: StreamingSttClient, session: SessionHandle) {
         val app = application as VoiceCaptureApp
@@ -411,6 +505,17 @@ class RecordingService : LifecycleService() {
         // real score call joins this exact same in-flight fetch rather than
         // starting a second one -- see TagCoordinator.prewarmTree/resolveTree.
         coordinator.prewarmTree(lifecycleScope)
+        // Bead asn-45m: fresh per session, same lifetime as coordinator --
+        // see tagChipRail's own KDoc.
+        val rail = TagChipRail()
+        tagChipRail = rail
+        // Bead asn-45m: resolves the same tree TagCoordinator's treeProvider
+        // does (TagTreeRepository's own cache makes calling this cheap even
+        // right after prewarmTree's own fetch above) and publishes it for
+        // RecordingScreen's filing-destination ribbon + tag picker -- see
+        // TagTreeStateHolder's KDoc for why the UI never calls
+        // app.currentTagTree() itself.
+        lifecycleScope.launch(Dispatchers.IO) { TagTreeStateHolder.update(app.currentTagTree()) }
         val channel = Channel<TagPumpEvent>(capacity = TAG_LINE_CHANNEL_CAPACITY, onBufferOverflow = BufferOverflow.DROP_OLDEST)
         tagLineChannel = channel
         tagPumpJob = lifecycleScope.launch(Dispatchers.IO) {
@@ -423,6 +528,11 @@ class RecordingService : LifecycleService() {
                 }.getOrNull() ?: continue
                 TagsStateHolder.update(changed)
                 app.sessionStore.transcriptFile(session.dir).appendText(TagsEventWriter.encodeLine(event.atMs, changed) + "\n")
+                // Feeds the rail's suggested side -- sticky-removed tags stay
+                // excluded from TagChipRail.chips() even though this always
+                // hands the tracker's raw output through unfiltered.
+                rail.onSuggested(changed)
+                TagRailStateHolder.update(rail.chips())
             }
         }
     }
@@ -485,6 +595,7 @@ class RecordingService : LifecycleService() {
         val tagJobToJoin = tagPumpJob
         tagPumpJob = null
         tagCoordinator = null
+        tagChipRail = null
 
         // Bead vn-edu.56: snapshot the too-short inputs now, before anything
         // async runs -- both are already fully known at the instant Stop was

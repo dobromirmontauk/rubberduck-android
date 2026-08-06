@@ -7,15 +7,15 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
+import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
-import com.montauk.voicecapture.service.TagsStateHolder
-import com.montauk.voicecapture.service.TranscriptStateHolder
+import com.montauk.voicecapture.service.TagRailStateHolder
+import com.montauk.voicecapture.service.TagTreeStateHolder
 import com.montauk.voicecapture.session.RecordingMode
-import com.montauk.voicecapture.tags.DisplayedTag
-import com.montauk.voicecapture.tags.TagTier
-import org.junit.Assert.assertTrue
+import com.montauk.voicecapture.tags.RailChipSource
+import com.montauk.voicecapture.tags.TagRailChip
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -24,16 +24,23 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Bead vn-edu.46 superseding decision (2026-08-05): keyless computes NO tags
- * at all -- the tags slot must show the exact register-key message, never
- * an empty row and never a heuristic guess, and tapping it must deep-link to
- * Settings' "Word cloud & titles" key row. Drives the real nav graph
- * ([AppNavHost]) rather than [RecordingScreen] in isolation so the deep
- * link's destination is actually verified, same pattern as
- * [AppNavHostInteractionTest].
+ * Bead vn-edu.46 superseding decision (2026-08-05), still in force after
+ * bead asn-45m replaced the read-only tags slot with the editable tag rail
+ * (see [RecordingScreenTagRailTest] for the rail/picker's own interaction
+ * coverage): keyless with nothing user-added yet must show the exact
+ * register-key message, never an empty row and never a heuristic guess, and
+ * tapping it must deep-link to Settings' "Word cloud & titles" key row.
+ * Drives the real nav graph ([AppNavHost]) rather than [RecordingScreen] in
+ * isolation so the deep link's destination is actually verified, same
+ * pattern as [AppNavHostInteractionTest].
+ *
+ * Pinned to [RobolectricDeviceQualifiers.Pixel7] -- see
+ * [RecordingScreenTranscriptSlotTest]'s KDoc for why the unqualified
+ * Robolectric default window is too small once the tag rail sits above the
+ * transcript pane.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], qualifiers = RobolectricDeviceQualifiers.Pixel7)
 class RecordingScreenTagsSlotTest {
 
     @get:Rule
@@ -45,11 +52,15 @@ class RecordingScreenTagsSlotTest {
     fun setUp() {
         app = ApplicationProvider.getApplicationContext()
         RecordingStateHolder.update { RecordingUiState() }
-        TranscriptStateHolder.reset()
-        TagsStateHolder.reset()
-        // Fresh Robolectric app: userAnthropicKey is null and there's no
-        // local.properties baked into this test JVM's BuildConfig, so the
-        // effective key is already blank -- explicit anyway for clarity/intent.
+        TagRailStateHolder.reset()
+        TagTreeStateHolder.reset()
+        // isSignedOut = true forces every effective*() getter (including
+        // effectiveAnthropicKey) to blank regardless of what BuildConfig was
+        // compiled with -- a machine whose local.properties carries a real
+        // anthropic.apiKey would otherwise make "keyless" tests here
+        // spuriously see a configured key. userAnthropicKey = null on top is
+        // redundant with isSignedOut alone but kept for clarity/intent.
+        app.secretsStore.isSignedOut = true
         app.secretsStore.userAnthropicKey = null
     }
 
@@ -63,23 +74,6 @@ class RecordingScreenTagsSlotTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("(register your API key to see the word cloud)").assertIsDisplayed()
-    }
-
-    @Test
-    fun `keyless with tags somehow present in state still shows the message, never the chips`() {
-        // Defensive: even if TagsStateHolder is stale/non-empty (shouldn't
-        // happen with NoOpTagScorer, but this proves the UI gate is on the
-        // key, not merely on "is the list empty").
-        RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
-        TagsStateHolder.update(listOf(DisplayedTag("stale tag", 0.9, rank = 1, tier = TagTier.PRIMARY)))
-
-        composeTestRule.setContent {
-            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
-        }
-        composeTestRule.waitForIdle()
-
-        composeTestRule.onNodeWithText("(register your API key to see the word cloud)").assertIsDisplayed()
-        composeTestRule.onNodeWithText("stale tag").assertDoesNotExist()
     }
 
     @Test
@@ -99,10 +93,11 @@ class RecordingScreenTagsSlotTest {
     }
 
     @Test
-    fun `a configured Anthropic key renders real tag chips, not the register-key message`() {
+    fun `a configured Anthropic key renders real tag rail chips, not the register-key message`() {
+        app.secretsStore.isSignedOut = false
         app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
-        TagsStateHolder.update(listOf(DisplayedTag("kitchen remodel", 0.9, rank = 1, tier = TagTier.PRIMARY)))
+        TagRailStateHolder.update(listOf(TagRailChip("kitchen remodel", source = RailChipSource.SUGGESTED)))
 
         composeTestRule.setContent {
             AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
@@ -114,7 +109,8 @@ class RecordingScreenTagsSlotTest {
     }
 
     @Test
-    fun `a configured Anthropic key with no tags yet shows neither chips nor the message`() {
+    fun `a configured Anthropic key with no tags yet shows neither the message nor a stray chip, and STOP still renders`() {
+        app.secretsStore.isSignedOut = false
         app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
 
@@ -124,52 +120,6 @@ class RecordingScreenTagsSlotTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("(register your API key to see the word cloud)").assertDoesNotExist()
-        assertTrue("STOP button should still render normally", true)
         composeTestRule.onNodeWithText("STOP").assertIsDisplayed()
-    }
-
-    // --- Bead vn-edu.47: tree-anchored tags render distinctly from proposals ---
-
-    @Test
-    fun `a tree-matched tag renders as a matched (non-dashed) chip`() {
-        app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
-        RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
-        TagsStateHolder.update(listOf(DisplayedTag("kitchen-remodel", 0.9, rank = 1, tier = TagTier.PRIMARY, tagId = "t_kitchen")))
-
-        composeTestRule.setContent {
-            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
-        }
-        composeTestRule.waitForIdle()
-
-        composeTestRule.onNodeWithTag(MATCHED_TAG_CHIP_TEST_TAG).assertIsDisplayed()
-    }
-
-    @Test
-    fun `a genuinely new proposal renders as the visually-subtle (dashed) proposal chip, not the matched chip`() {
-        app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
-        RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
-        TagsStateHolder.update(listOf(DisplayedTag("gardening", 0.6, rank = 1, tier = TagTier.SECONDARY, isProposal = true)))
-
-        composeTestRule.setContent {
-            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
-        }
-        composeTestRule.waitForIdle()
-
-        composeTestRule.onNodeWithTag(PROPOSAL_TAG_CHIP_TEST_TAG).assertIsDisplayed()
-        composeTestRule.onNodeWithText("gardening").assertIsDisplayed()
-    }
-
-    @Test
-    fun `a legacy free-form tag (no tree, no proposal flag) renders as the matched (non-dashed) chip, not the proposal chip`() {
-        app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
-        RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
-        TagsStateHolder.update(listOf(DisplayedTag("marathon training", 0.9, rank = 1, tier = TagTier.PRIMARY)))
-
-        composeTestRule.setContent {
-            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
-        }
-        composeTestRule.waitForIdle()
-
-        composeTestRule.onNodeWithTag(MATCHED_TAG_CHIP_TEST_TAG).assertIsDisplayed()
     }
 }
