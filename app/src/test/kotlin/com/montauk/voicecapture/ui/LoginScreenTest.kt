@@ -3,6 +3,7 @@ package com.montauk.voicecapture.ui
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
@@ -82,6 +83,23 @@ class LoginScreenTest {
         composeTestRule.waitUntil(timeoutMillis) { condition() }
     }
 
+    /**
+     * Polls the actual rendered semantics tree rather than a network-layer
+     * proxy like `server.requestCount`. `requestCount` increments the moment
+     * the server thread finishes reading a request -- before the client's
+     * coroutine has resumed on the Main dispatcher and written the resulting
+     * `uiState`, let alone before Compose has recomposed to reflect it. That
+     * gap is exactly wide enough to be invisible on a fast/idle machine and
+     * real on a loaded CI runner: `LoginScreenTest > an over-scoped but
+     * working token is not persisted until Use anyway is tapped` failed on
+     * CI (`AssertionError` at the "Use anyway" assertion) while passing
+     * repeatedly on a local Mac, which is this exact race, not a rendering
+     * difference -- the fix is to wait on the real signal, not a stand-in.
+     */
+    private fun waitUntilTextShown(text: String, timeoutMillis: Long = 5_000) {
+        waitUntilSettled(timeoutMillis) { composeTestRule.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+    }
+
     @Test
     fun `a token that can't reach the vault repo is never persisted, and onSignedIn never fires`() {
         server.enqueue(MockResponse().setResponseCode(200).setBody("""{"login":"dobromirmontauk","avatar_url":null}"""))
@@ -90,8 +108,7 @@ class LoginScreenTest {
 
         setContent(onSignedIn = { signedIn = true })
         openTokenEntryAndSubmit("scoped-elsewhere-token")
-        waitUntilSettled { server.requestCount >= 2 }
-        composeTestRule.waitForIdle()
+        waitUntilTextShown("That token can't reach dobromirmontauk/voice-vault")
 
         composeTestRule.onNodeWithText("That token can't reach dobromirmontauk/voice-vault").assertIsDisplayed()
         assertNull(app.secretsStore.userGithubToken)
@@ -125,8 +142,7 @@ class LoginScreenTest {
 
         setContent(onSignedIn = { signedIn = true })
         openTokenEntryAndSubmit("classic-token-with-repo-access")
-        waitUntilSettled { server.requestCount >= 2 }
-        composeTestRule.waitForIdle()
+        waitUntilTextShown("Use anyway")
 
         // Gated: the warning screen is up, nothing persisted yet.
         composeTestRule.onNodeWithText("Use anyway").assertIsDisplayed()

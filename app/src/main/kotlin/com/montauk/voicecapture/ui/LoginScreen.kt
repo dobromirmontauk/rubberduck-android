@@ -177,50 +177,57 @@ fun LoginScreen(onSignedIn: () -> Unit, accountClient: GitHubAccountClient = Git
                     color = MaterialTheme.colorScheme.onBackground,
                 )
                 Spacer(modifier = Modifier.height(40.dp))
-                // Bead vn-edu.30: bounded (weight(1f), not intrinsic) rather than
-                // just "however tall it wants to be" -- TokenEntryBlock's minting
-                // guidance made this slot tall enough to overflow a small/old
-                // device's screen, which (with no bound) silently collapsed the
-                // Continue/Cancel row to zero height instead of just scrolling.
-                // Every other state here is short enough that this box's
-                // Alignment.Center keeps it looking centered exactly as before.
-                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    when (val state = uiState) {
-                        LoginUiState.Initial -> InitialButtons(
-                            githubOAuthConfigured = app.isGithubOAuthConfigured(),
-                            onGithubTapped = ::startDeviceFlow,
-                            onTokenTapped = { uiState = LoginUiState.TokenEntry },
-                        )
-                        is LoginUiState.DeviceCode -> DeviceCodeBlock(
-                            userCode = state.userCode,
-                            verificationUri = state.verificationUri,
-                            onCancel = { uiState = LoginUiState.Initial },
-                        )
-                        is LoginUiState.DeviceError -> RetryableError(
-                            message = state.message,
-                            onRetry = ::startDeviceFlow,
-                            onCancel = { uiState = LoginUiState.Initial },
-                        )
-                        LoginUiState.TokenEntry -> TokenEntryBlock(
+                // Bead vn-edu.30 follow-up: only TokenEntry/TokenError get a
+                // bounded (weight(1f)) + scrollable slot -- TokenEntryBlock's
+                // minting guidance made that specific content tall enough to
+                // overflow a small/old device's screen, silently collapsing
+                // the Continue/Cancel row to zero height instead of just
+                // scrolling. Every other state stays an unweighted direct
+                // child exactly as before this bead: wrapping *all* states in
+                // a shared weight(1f) Box re-centered Initial's (and every
+                // other short state's) content within its own bounded slot
+                // instead of sitting flush below the title as it always had,
+                // which is what broke the `login` Roborazzi golden on CI --
+                // that state must render byte-identical to pre-vn-edu.30.
+                when (val state = uiState) {
+                    LoginUiState.Initial -> InitialButtons(
+                        githubOAuthConfigured = app.isGithubOAuthConfigured(),
+                        onGithubTapped = ::startDeviceFlow,
+                        onTokenTapped = { uiState = LoginUiState.TokenEntry },
+                    )
+                    is LoginUiState.DeviceCode -> DeviceCodeBlock(
+                        userCode = state.userCode,
+                        verificationUri = state.verificationUri,
+                        onCancel = { uiState = LoginUiState.Initial },
+                    )
+                    is LoginUiState.DeviceError -> RetryableError(
+                        message = state.message,
+                        onRetry = ::startDeviceFlow,
+                        onCancel = { uiState = LoginUiState.Initial },
+                    )
+                    LoginUiState.TokenEntry -> Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        TokenEntryBlock(
                             vaultOwner = vaultOwner,
                             vaultRepo = vaultRepo,
                             errorMessage = null,
                             onSubmit = ::submitToken,
                             onCancel = { uiState = LoginUiState.Initial },
                         )
-                        LoginUiState.TokenValidating -> CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                        is LoginUiState.TokenError -> TokenEntryBlock(
+                    }
+                    LoginUiState.TokenValidating -> CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    is LoginUiState.TokenError -> Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        TokenEntryBlock(
                             vaultOwner = vaultOwner,
                             vaultRepo = vaultRepo,
                             errorMessage = state.message,
                             onSubmit = ::submitToken,
                             onCancel = { uiState = LoginUiState.Initial },
                         )
-                        is LoginUiState.TokenOverScoped -> OverScopedWarningBlock(
-                            onUseAnyway = { completeSignIn(state.token, state.identity) },
-                            onEnterDifferentToken = { uiState = LoginUiState.TokenEntry },
-                        )
                     }
+                    is LoginUiState.TokenOverScoped -> OverScopedWarningBlock(
+                        onUseAnyway = { completeSignIn(state.token, state.identity) },
+                        onEnterDifferentToken = { uiState = LoginUiState.TokenEntry },
+                    )
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 Text(
