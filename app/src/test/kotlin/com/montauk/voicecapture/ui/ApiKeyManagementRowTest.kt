@@ -22,6 +22,13 @@ import org.robolectric.annotation.Config
  * [com.montauk.voicecapture.stt.AssemblyAiKeyValidator]/
  * [com.montauk.voicecapture.llm.AnthropicKeyValidator] in production, which
  * this test deliberately does not exercise.
+ *
+ * Bead vn-edu.52 (user-ratified invariant, 2026-08): baked-in dev
+ * credentials are staying by design, so "Not configured" must never render
+ * while a credential -- runtime or BuildConfig/`local.properties` dev
+ * fallback -- is actually in effect. The `devFallbackActive` tests below
+ * assert that string's *absence*, not just the dev-state label's presence,
+ * so a regression that rendered both at once would still fail.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
