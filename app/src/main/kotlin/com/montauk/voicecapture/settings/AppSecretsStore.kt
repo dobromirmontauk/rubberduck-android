@@ -77,6 +77,16 @@ class AppSecretsStore(context: Context) {
         get() = prefs.getBoolean(KEY_SETUP_WIZARD_COMPLETED, false)
         set(value) = prefs.edit().putBoolean(KEY_SETUP_WIZARD_COMPLETED, value).apply()
 
+    /** Bead asn-r60: auto-pause (VAD-driven, soft) is on by default -- see [RecordingService]'s pause-handling KDoc. */
+    var autoPauseEnabled: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_PAUSE_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_PAUSE_ENABLED, value).apply()
+
+    /** Bead asn-r60: how long a continuous quiet span must run before auto-pause fires; settings-tunable, defaults to 30s. */
+    var autoPauseSilenceThresholdMs: Long
+        get() = prefs.getLong(KEY_AUTO_PAUSE_THRESHOLD_MS, DEFAULT_AUTO_PAUSE_THRESHOLD_MS)
+        set(value) = prefs.edit().putLong(KEY_AUTO_PAUSE_THRESHOLD_MS, value).apply()
+
     fun effectiveGithubToken(buildConfigToken: String): String {
         if (isSignedOut) return ""
         return userGithubToken?.takeIf { it.isNotBlank() } ?: buildConfigToken
@@ -122,5 +132,8 @@ class AppSecretsStore(context: Context) {
         private const val KEY_SELECTED_VAULT_OWNER = "selected_vault_owner"
         private const val KEY_SELECTED_VAULT_REPO = "selected_vault_repo"
         private const val KEY_SETUP_WIZARD_COMPLETED = "setup_wizard_completed"
+        private const val KEY_AUTO_PAUSE_ENABLED = "auto_pause_enabled"
+        private const val KEY_AUTO_PAUSE_THRESHOLD_MS = "auto_pause_threshold_ms"
+        const val DEFAULT_AUTO_PAUSE_THRESHOLD_MS = 30_000L
     }
 }

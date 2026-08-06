@@ -31,6 +31,19 @@ data class TranscriptUiState(
     /** True when [com.montauk.voicecapture.service.SilenceDetector] says to show the "(silence)" hint. */
     val silenceHintVisible: Boolean = false,
     /**
+     * Bead asn-r60: [com.montauk.voicecapture.audio.VoiceActivityDetector.continuousQuietMs],
+     * mirrored here so the recording screen's auto-pause banner ("Auto-paused
+     * (quiet 0:32)...") can render a live-ticking duration without its own
+     * StateFlow -- updated from the same mic-level-meter callback that
+     * already writes [micLevel]/[silenceHintVisible], so all three stay
+     * consistent under the same CAS-safe [TranscriptStateHolder.update].
+     * Keeps growing through [com.montauk.voicecapture.service.RecordingActivityState.AUTO_PAUSED]
+     * (that's the point -- the banner's counter doesn't freeze when the
+     * pause it's counting toward actually fires) and resets to 0 the moment
+     * VAD reads speech again.
+     */
+    val quietDurationMs: Long = 0L,
+    /**
      * [com.montauk.voicecapture.audio.AudioSource.deviceLabel] for the session
      * currently recording -- null before a session starts. RecordingScreen's
      * source chip shows "FILE" verbatim when this is "FILE" (debug-only audio

@@ -16,14 +16,17 @@ import androidx.lifecycle.lifecycleScope
 import com.montauk.voicecapture.BuildConfig
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.audio.AudioEngine
+import com.montauk.voicecapture.audio.AudioPauseMode
 import com.montauk.voicecapture.audio.AudioSource
 import com.montauk.voicecapture.audio.FileAudioSource
 import com.montauk.voicecapture.audio.MicAudioSource
 import com.montauk.voicecapture.audio.MicLevelMeter
+import com.montauk.voicecapture.audio.VoiceActivityDetector
 import com.montauk.voicecapture.session.LiveTranscriptLine
 import com.montauk.voicecapture.session.LiveTranscriptWriter
 import com.montauk.voicecapture.session.ModeChange
 import com.montauk.voicecapture.session.ModeEventWriter
+import com.montauk.voicecapture.session.PauseEventWriter
 import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.session.RecordingModeStateMachine
 import com.montauk.voicecapture.session.SessionHandle
@@ -31,6 +34,7 @@ import com.montauk.voicecapture.session.SessionModeEntry
 import com.montauk.voicecapture.session.UploadState
 import com.montauk.voicecapture.stt.StreamingSttClient
 import com.montauk.voicecapture.stt.SttConnectionState
+import com.montauk.voicecapture.stt.SttTimelineTracker
 import com.montauk.voicecapture.tags.TagCoordinator
 import com.montauk.voicecapture.tags.TagsEventWriter
 import com.montauk.voicecapture.upload.UploadWorker
@@ -66,6 +70,18 @@ class RecordingService : LifecycleService() {
         const val ACTION_SET_MODE = "com.montauk.voicecapture.action.SET_MODE"
         const val EXTRA_MODE = "mode"
 
+        /** Bead asn-r60: the manual (hard) pause button next to Stop. */
+        const val ACTION_PAUSE = "com.montauk.voicecapture.action.PAUSE"
+
+        /**
+         * Bead asn-r60: an explicit resume tap -- either the pause button
+         * while paused, or the auto-pause banner's own "tap to resume". VAD
+         * can also resume a soft/auto pause on its own without this action
+         * ever firing; see [resumeTapped]'s KDoc for how both paths land in
+         * the same place.
+         */
+        const val ACTION_RESUME = "com.montauk.voicecapture.action.RESUME"
+
         /**
          * Debug-only (bead vn-edu.20): a value here on the [ACTION_START]
          * intent swaps [MicAudioSource] for a [FileAudioSource] reading the
@@ -98,6 +114,9 @@ class RecordingService : LifecycleService() {
         // event line before this gives up waiting on it.
         private const val TAG_PUMP_SHUTDOWN_TIMEOUT_MS = 20_000L
 
+        /** Bead asn-r60: the two [RecordingActivityState] values in which live PCM should still be fed to STT. */
+        private val STT_ACTIVE_STATES = setOf(RecordingActivityState.SPEAKING, RecordingActivityState.QUIET)
+
         fun startIntent(context: Context, injectAudio: String? = null): Intent =
             Intent(context, RecordingService::class.java).setAction(ACTION_START).apply {
                 if (injectAudio != null) putExtra(EXTRA_INJECT_AUDIO, injectAudio)
@@ -105,6 +124,8 @@ class RecordingService : LifecycleService() {
         fun stopIntent(context: Context): Intent = Intent(context, RecordingService::class.java).setAction(ACTION_STOP)
         fun setModeIntent(context: Context, mode: RecordingMode): Intent =
             Intent(context, RecordingService::class.java).setAction(ACTION_SET_MODE).putExtra(EXTRA_MODE, mode.wireValue)
+        fun pauseIntent(context: Context): Intent = Intent(context, RecordingService::class.java).setAction(ACTION_PAUSE)
+        fun resumeIntent(context: Context): Intent = Intent(context, RecordingService::class.java).setAction(ACTION_RESUME)
     }
 
     private lateinit var audioEngine: AudioEngine
@@ -159,6 +180,48 @@ class RecordingService : LifecycleService() {
     /** Decides the "(silence)" hint independent of STT connection state -- see class KDoc there. */
     private val silenceDetector = SilenceDetector()
 
+    /**
+     * Bead asn-r60: VAD-driven SPEAKING/QUIET classification, fed one RMS
+     * window at a time from the [MicLevelMeter] set up in [beginRecording]
+     * -- this is what [RecordingActivityStateHolder] and
+     * the auto-pause countdown are both driven from, and it runs continuously
+     * whether or not any pause is active (see [RecordingActivityState]'s
+     * KDoc for why "VAD-driven even outside pause" matters to the
+     * duck-animation consumer).
+     */
+    private val voiceActivityDetector = VoiceActivityDetector()
+
+    /**
+     * Bead asn-r60: keeps `live-transcript.jsonl` segment timestamps
+     * monotonic across the deliberate STT reconnect a manual-pause resume
+     * causes -- see its own KDoc for why only that reconnect (not
+     * [com.montauk.voicecapture.stt.AssemblyAiStreamingSttClient]'s
+     * pre-existing drop/retry reconnect) is in scope here.
+     */
+    private val sttTimelineTracker = SttTimelineTracker()
+
+    /**
+     * Bead asn-r60: the on-screen big timer + foreground notification's
+     * elapsed-time basis -- paused only across [RecordingActivityState.USER_PAUSED]
+     * spans (auto-pause deliberately leaves this running; see
+     * [PausableElapsedClock]'s KDoc for the full rationale). Driven from
+     * [startTicker].
+     */
+    private val visibleClock = PausableElapsedClock()
+
+    /**
+     * Bead asn-r60: the trimmed-audio-timeline basis for `live-transcript.jsonl`'s
+     * `mode`/`pause`/`resume` event `t_ms` values and for `meta.json`'s new
+     * `recorded_ms` field -- paused across BOTH [RecordingActivityState.USER_PAUSED]
+     * and [RecordingActivityState.AUTO_PAUSED] spans, matching exactly what
+     * [audioEngine] actually persists to `audio.ogg` (see [AudioEngine]'s
+     * cumulative-fed-bytes presentation timestamps). Deliberately NOT applied
+     * to the pre-existing `tags` event line's own tick timestamp -- bead
+     * asn-k7i owns that timing surface concurrently; see this service's
+     * `startTicker` KDoc.
+     */
+    private val audioTimelineClock = PausableElapsedClock()
+
     override fun onCreate() {
         super.onCreate()
         audioEngine = AudioEngine()
@@ -171,6 +234,8 @@ class RecordingService : LifecycleService() {
             ACTION_START -> beginRecording(intent.getStringExtra(EXTRA_INJECT_AUDIO))
             ACTION_STOP -> endRecording()
             ACTION_SET_MODE -> setMode(intent)
+            ACTION_PAUSE -> pauseManually()
+            ACTION_RESUME -> resumeTapped()
         }
         return START_NOT_STICKY
     }
@@ -187,6 +252,13 @@ class RecordingService : LifecycleService() {
         silenceDetector.reset()
         modeStateMachine = RecordingModeStateMachine()
         sttEverConnected = false
+        // Bead asn-r60: same "never leak a previous session's state"
+        // discipline as the Bluetooth-route reset below.
+        voiceActivityDetector.reset()
+        sttTimelineTracker.reset()
+        visibleClock.reset()
+        audioTimelineClock.reset()
+        RecordingActivityStateHolder.reset()
         // Bead vn-edu.2: a previous session's Bluetooth route/warning/loss
         // flags must never leak into this new one -- createAudioSource's
         // onRouteChanged callback only ever sets these forward, it never
@@ -208,14 +280,45 @@ class RecordingService : LifecycleService() {
         val micLevelMeter = MicLevelMeter(sampleRateHz = AudioEngine.DEFAULT_SAMPLE_RATE_HZ) { level ->
             val now = SystemClock.elapsedRealtime()
             val silent = silenceDetector.isSilent(nowMs = now, recordingStartMs = startElapsedRealtimeMs, currentRms = level)
-            TranscriptStateHolder.update { it.copy(micLevel = level, silenceHintVisible = silent) }
+            // Bead asn-r60: VAD runs off this same ~100ms RMS window
+            // regardless of pause state (see AudioEngine.onPcmFrame's own
+            // "always fires" contract) -- this is what lets SPEAKING/QUIET
+            // stay genuinely live, decides when to fire auto-pause, and
+            // detects an auto-resume. Updated before the TranscriptStateHolder
+            // write below so quietDurationMs reflects this window already.
+            voiceActivityDetector.onWindow(level, MicLevelMeter.DEFAULT_WINDOW_MS.toLong())
+            TranscriptStateHolder.update {
+                it.copy(micLevel = level, silenceHintVisible = silent, quietDurationMs = voiceActivityDetector.continuousQuietMs)
+            }
+            onVadWindow()
         }
         // Tee raw PCM to STT and the mic-level meter alongside (never instead
         // of) the WAL write below -- both are cheap/non-blocking, so a slow or
-        // dead STT connection can never stall or lose audio capture.
+        // dead STT connection can never stall or lose audio capture. Bead
+        // asn-r60: reads the `sttClient` field fresh on every frame (not a
+        // captured local) so a manual-pause resume's brand-new client is
+        // picked up automatically, and gates the send on the *current*
+        // activity state -- AUTO_PAUSED/USER_PAUSED both mean "don't feed STT
+        // live", matching the bead's "stop STT streaming" requirement for
+        // either kind of pause. AudioEngine's own pause gate independently
+        // handles what happens to the *persisted* audio; this only concerns
+        // the STT tee.
         audioEngine.onPcmFrame = { pcm, length ->
-            stt.sendPcm(pcm, 0, length)
             micLevelMeter.onPcmFrame(pcm, length)
+            if (RecordingActivityStateHolder.state.value in STT_ACTIVE_STATES) {
+                sttClient?.sendPcm(pcm, 0, length)
+            }
+        }
+        // Bead asn-r60: on an auto-resume, AudioEngine replays the buffered
+        // ring audio right here -- mirror-feed the exact same chunks to STT
+        // so the transcript keeps the onset of speech the buffer exists to
+        // protect (the encoder/WAL side of this same flush is AudioEngine's
+        // own responsibility, not this callback's).
+        audioEngine.onRingBufferFlush = { chunks ->
+            val liveStt = sttClient
+            if (liveStt != null) {
+                chunks.forEach { chunk -> liveStt.sendPcm(chunk, 0, chunk.size) }
+            }
         }
 
         val audioSource = createAudioSource(injectAudioSpec)
@@ -280,8 +383,7 @@ class RecordingService : LifecycleService() {
         val session = currentSession ?: return
         val wireValue = intent.getStringExtra(EXTRA_MODE) ?: return
         val mode = RecordingMode.fromWireValue(wireValue) ?: return
-        val elapsedMs = SystemClock.elapsedRealtime() - startElapsedRealtimeMs
-        val change = modeStateMachine.select(mode, atMs = elapsedMs) ?: return
+        val change = modeStateMachine.select(mode, atMs = audioTimelineElapsedMs()) ?: return
         RecordingStateHolder.update { it.copy(mode = change.mode) }
         writeModeEvent(session, change)
     }
@@ -290,6 +392,148 @@ class RecordingService : LifecycleService() {
         val app = application as VoiceCaptureApp
         lifecycleScope.launch(Dispatchers.IO) {
             app.sessionStore.transcriptFile(session.dir).appendText(ModeEventWriter.encodeLine(change) + "\n")
+        }
+    }
+
+    /** [audioTimelineClock]'s current reading -- see that field's KDoc for exactly what it excludes. */
+    private fun audioTimelineElapsedMs(): Long {
+        val now = SystemClock.elapsedRealtime()
+        return audioTimelineClock.elapsedMs(now, now - startElapsedRealtimeMs)
+    }
+
+    /**
+     * Bead asn-r60: VAD-driven activity-state machine, called from every RMS
+     * window regardless of pause state (see [MicLevelMeter]'s callback in
+     * [beginRecording], which updates [voiceActivityDetector] itself just
+     * before calling this). Three cases:
+     *  - [RecordingActivityState.USER_PAUSED]: VAD never auto-transitions out
+     *    of a manual pause -- only an explicit resume tap does.
+     *  - [RecordingActivityState.AUTO_PAUSED]: the moment VAD reads speech,
+     *    auto-resume.
+     *  - [RecordingActivityState.SPEAKING]/[RecordingActivityState.QUIET]:
+     *    publish whichever VAD currently says, and fire auto-pause once
+     *    [VoiceActivityDetector.continuousQuietMs] clears the (settings-tunable,
+     *    default-on) threshold.
+     */
+    private fun onVadWindow() {
+        val session = currentSession ?: return
+        when (RecordingActivityStateHolder.state.value) {
+            RecordingActivityState.USER_PAUSED -> Unit
+            RecordingActivityState.AUTO_PAUSED -> {
+                if (voiceActivityDetector.isSpeaking) resumeFromAutoPause(session)
+            }
+            RecordingActivityState.SPEAKING, RecordingActivityState.QUIET -> {
+                val speaking = voiceActivityDetector.isSpeaking
+                RecordingActivityStateHolder.set(if (speaking) RecordingActivityState.SPEAKING else RecordingActivityState.QUIET)
+                val app = application as VoiceCaptureApp
+                if (!speaking &&
+                    app.secretsStore.autoPauseEnabled &&
+                    voiceActivityDetector.continuousQuietMs >= app.secretsStore.autoPauseSilenceThresholdMs
+                ) {
+                    enterAutoPause(session)
+                }
+            }
+        }
+    }
+
+    /** Soft pause (bead asn-r60): mic stays open, [audioEngine] starts ring-buffering instead of persisting. */
+    private fun enterAutoPause(session: SessionHandle) {
+        RecordingActivityStateHolder.set(RecordingActivityState.AUTO_PAUSED)
+        audioEngine.setPauseMode(AudioPauseMode.SOFT)
+        audioTimelineClock.pause(SystemClock.elapsedRealtime())
+        writePauseEvent(session, event = "pause", reason = "auto")
+    }
+
+    /**
+     * VAD detected speech during an auto-pause: [AudioEngine.setPauseMode]'s
+     * ACTIVE transition synchronously flushes the ring buffer (see its own
+     * KDoc) -- both persisting that buffered audio and, via
+     * [AudioEngine.onRingBufferFlush], mirror-feeding it to STT -- before
+     * this returns.
+     */
+    private fun resumeFromAutoPause(session: SessionHandle) {
+        audioTimelineClock.resume(SystemClock.elapsedRealtime())
+        audioEngine.setPauseMode(AudioPauseMode.ACTIVE)
+        RecordingActivityStateHolder.set(RecordingActivityState.SPEAKING)
+        writePauseEvent(session, event = "resume", reason = "auto")
+    }
+
+    /**
+     * Handles [ACTION_PAUSE]: hard mute (bead asn-r60) -- stop persisting,
+     * retain no buffer, and actually close the STT stream rather than merely
+     * muting it (frees the connection while paused, matches the bead's
+     * literal "close/stop the AssemblyAI stream" wording). Reachable from
+     * [RecordingActivityState.AUTO_PAUSED] too (escalating a soft pause to a
+     * hard one): [AudioPauseMode]'s SOFT->HARD transition discards the
+     * tentative ring buffer rather than persisting it -- see
+     * [com.montauk.voicecapture.audio.CapturePauseGate]'s KDoc.
+     */
+    private fun pauseManually() {
+        val session = currentSession ?: return
+        if (RecordingActivityStateHolder.state.value == RecordingActivityState.USER_PAUSED) return
+        val now = SystemClock.elapsedRealtime()
+        RecordingActivityStateHolder.set(RecordingActivityState.USER_PAUSED)
+        audioEngine.setPauseMode(AudioPauseMode.HARD)
+        visibleClock.pause(now)
+        audioTimelineClock.pause(now)
+
+        val oldStt = sttClient
+        sttClient = null
+        val oldJobs = sttJobs
+        sttJobs = emptyList()
+        lifecycleScope.launch {
+            oldJobs.forEach { it.cancel() }
+            runCatching { oldStt?.close() }
+        }
+
+        writePauseEvent(session, event = "pause", reason = "user")
+    }
+
+    /**
+     * Handles [ACTION_RESUME]: a single explicit "resume" tap (the pause
+     * button while paused, or the auto-pause banner's own "tap to resume"
+     * affordance -- bead asn-r60's spec offers both) routed to whichever kind
+     * of pause is actually active. A no-op while not paused at all.
+     */
+    private fun resumeTapped() {
+        val session = currentSession ?: return
+        when (RecordingActivityStateHolder.state.value) {
+            RecordingActivityState.USER_PAUSED -> resumeManually(session)
+            RecordingActivityState.AUTO_PAUSED -> resumeFromAutoPause(session)
+            RecordingActivityState.SPEAKING, RecordingActivityState.QUIET -> Unit
+        }
+    }
+
+    /**
+     * The manual-pause half of [resumeTapped]. Opens a brand-new STT
+     * connection (the old one was closed on pause) and folds its
+     * reset-to-zero clock into [sttTimelineTracker] so
+     * `live-transcript.jsonl` timestamps stay monotonic across the gap -- see
+     * that class's KDoc.
+     */
+    private fun resumeManually(session: SessionHandle) {
+        val now = SystemClock.elapsedRealtime()
+        audioEngine.setPauseMode(AudioPauseMode.ACTIVE)
+        visibleClock.resume(now)
+        audioTimelineClock.resume(now)
+        sttTimelineTracker.onReconnect()
+
+        val app = application as VoiceCaptureApp
+        val stt = app.newSttClient()
+        sttClient = stt
+        startSttPipeline(stt, session)
+
+        // Conservative default until the next VAD window re-evaluates it --
+        // there's no fresh RMS reading yet at the exact instant of resume.
+        RecordingActivityStateHolder.set(RecordingActivityState.QUIET)
+        writePauseEvent(session, event = "resume", reason = "user")
+    }
+
+    private fun writePauseEvent(session: SessionHandle, event: String, reason: String) {
+        val app = application as VoiceCaptureApp
+        val tMs = audioTimelineElapsedMs()
+        lifecycleScope.launch(Dispatchers.IO) {
+            app.sessionStore.transcriptFile(session.dir).appendText(PauseEventWriter.encodeLine(tMs, event, reason) + "\n")
         }
     }
 
@@ -310,11 +554,20 @@ class RecordingService : LifecycleService() {
                 if (partial.text.isNotBlank()) {
                     silenceDetector.onTranscriptActivity(SystemClock.elapsedRealtime())
                 }
+                // Bead asn-r60: fold in sttTimelineTracker's accumulated
+                // offset before this timestamp reaches the UI or disk -- see
+                // its KDoc for why a manual-pause resume's brand-new STT
+                // connection needs this to keep live-transcript.jsonl
+                // monotonic. recordRawEndMs must see the connection-relative
+                // (pre-offset) value, so it's captured before adjusting.
+                sttTimelineTracker.recordRawEndMs(partial.endMs)
+                val startMs = sttTimelineTracker.toSessionMs(partial.startMs)
+                val endMs = sttTimelineTracker.toSessionMs(partial.endMs)
                 TranscriptStateHolder.update { ui ->
                     val cleared = if (partial.text.isNotBlank()) ui.copy(silenceHintVisible = false) else ui
                     if (partial.isFinal) {
                         cleared.copy(
-                            finalLines = cleared.finalLines + TranscriptLine(partial.text, partial.startMs, partial.endMs),
+                            finalLines = cleared.finalLines + TranscriptLine(partial.text, startMs, endMs),
                             currentPartial = "",
                             partialStableText = "",
                             partialUnstableTail = "",
@@ -334,7 +587,7 @@ class RecordingService : LifecycleService() {
                 // (isFinal) segments -- partials are UI-only, never written to disk.
                 if (partial.isFinal && partial.text.isNotBlank()) {
                     withContext(Dispatchers.IO) {
-                        val line = LiveTranscriptLine(partial.startMs, partial.endMs, partial.text, final = true)
+                        val line = LiveTranscriptLine(startMs, endMs, partial.text, final = true)
                         app.sessionStore.transcriptFile(session.dir).appendText(LiveTranscriptWriter.encodeLine(line) + "\n")
                     }
                     // Non-blocking hand-off (bead vn-edu.38) -- see tagLineChannel's
@@ -354,6 +607,20 @@ class RecordingService : LifecycleService() {
                     // event triggered it is exactly what let final lines rarely
                     // satisfy the gate, or stamp it with a value already behind
                     // where the ticker's own clock was.
+                    //
+                    // Bead asn-r60: deliberately NOT `endMs` (the
+                    // sttTimelineTracker-adjusted value a few lines up) --
+                    // these are two independent clock domains that happen to
+                    // both derive from `partial`. `endMs` exists only to keep
+                    // the transcript pane / live-transcript.jsonl segment
+                    // lines monotonic across a pause-triggered STT reconnect;
+                    // the tag pump's cadence gate wants ONE shared
+                    // recording-elapsed clock across every event (Tick and
+                    // FinalLine alike), which raw wall-clock time already is
+                    // -- monotonic (in fact strictly increasing) regardless of
+                    // any pause, since it never freezes and is never
+                    // STT-connection-relative. Do not "simplify" these back
+                    // into one variable.
                     val recordingElapsedMs = SystemClock.elapsedRealtime() - startElapsedRealtimeMs
                     tagLineChannel?.trySend(TagPumpEvent.FinalLine(partial.text, recordingElapsedMs))
                 }
@@ -422,14 +689,22 @@ class RecordingService : LifecycleService() {
      * partial text through a separate field -- that's already the single
      * source of truth [RecordingScreen][com.montauk.voicecapture.ui.RecordingScreen]
      * itself renders from.
+     *
+     * Bead asn-r60: the big timer / notification text is [visibleClock]'s
+     * reading (frozen across a manual pause -- see that field's KDoc), NOT
+     * the raw wall-clock [elapsed] below. [TagPumpEvent.Tick] deliberately
+     * keeps using raw [elapsed] unchanged -- that timestamp is bead asn-k7i's
+     * concurrently-owned tag-pump timing surface, out of scope here.
      */
     private fun startTicker() {
         lifecycleScope.launch {
             while (isActive && currentSession != null) {
-                val elapsed = SystemClock.elapsedRealtime() - startElapsedRealtimeMs
-                RecordingStateHolder.update { it.copy(elapsedMs = elapsed) }
+                val now = SystemClock.elapsedRealtime()
+                val elapsed = now - startElapsedRealtimeMs
+                val visibleElapsed = visibleClock.elapsedMs(now, elapsed)
+                RecordingStateHolder.update { it.copy(elapsedMs = visibleElapsed) }
                 getSystemService(NotificationManager::class.java)
-                    ?.notify(NOTIFICATION_ID, buildNotification(elapsed))
+                    ?.notify(NOTIFICATION_ID, buildNotification(visibleElapsed))
                 tagLineChannel?.trySend(TagPumpEvent.Tick(TranscriptStateHolder.state.value.currentPartial, elapsed))
                 delay(TICK_INTERVAL_MS)
             }
@@ -438,7 +713,13 @@ class RecordingService : LifecycleService() {
 
     private fun endRecording() {
         val session = currentSession ?: return
-        val elapsedMs = SystemClock.elapsedRealtime() - startElapsedRealtimeMs
+        val now = SystemClock.elapsedRealtime()
+        val elapsedMs = now - startElapsedRealtimeMs
+        // Bead asn-r60: audioTimelineClock's reading at this instant is
+        // exactly "how much audio was actually persisted" -- see its KDoc --
+        // which doubles as meta.json's new recorded_ms field with no separate
+        // accumulator needed.
+        val recordedMs = audioTimelineClock.elapsedMs(now, elapsedMs)
         currentSession = null
 
         audioEngine.stop()
@@ -495,7 +776,7 @@ class RecordingService : LifecycleService() {
                 warningWindowMs = TooShortPolicy.WARNING_WINDOW_MS,
                 onWarningResolved = { TooShortWarningStateHolder.clearWarning() },
                 finalize = {
-                    val finalizeSucceeded = runFinalizeWithWatchdog(app, session, elapsedMs)
+                    val finalizeSucceeded = runFinalizeWithWatchdog(app, session, elapsedMs, recordedMs)
                     // No GitHub token configured (bead vn-edu.29: recording is never gated on
                     // sign-in) means there's no uploader to hand this to -- runFinalizeWithWatchdog
                     // already left the session at its writeMeta default of LOCAL in that case, and
@@ -546,7 +827,7 @@ class RecordingService : LifecycleService() {
      * hanging forever -- see the incident this guards against in the
      * `AudioEngine.probeOpusCodecConfig` fix.
      */
-    private suspend fun runFinalizeWithWatchdog(app: VoiceCaptureApp, session: SessionHandle, elapsedMs: Long): Boolean {
+    private suspend fun runFinalizeWithWatchdog(app: VoiceCaptureApp, session: SessionHandle, elapsedMs: Long, recordedMs: Long): Boolean {
         val outcome = CompletableDeferred<Boolean>()
         thread(name = "finalize-${session.sessionId}") {
             val result = runCatching {
@@ -560,6 +841,13 @@ class RecordingService : LifecycleService() {
                     deviceModel = Build.MODEL,
                     appVersion = app.appVersionName(),
                     modes = modeStateMachine.history.map { SessionModeEntry(it.tMs, it.mode.wireValue) },
+                    // Bead asn-r60: only worth recording when this session
+                    // actually trimmed something -- an untouched session
+                    // (no pause ever happened) leaves this null, same as a
+                    // pre-asn-r60 build would, rather than writing a
+                    // recorded_ms that's identical to duration_ms on every
+                    // single session going forward.
+                    recordedMs = recordedMs.takeIf { it != elapsedMs },
                 )
                 // writeMeta already defaulted this to LOCAL; only promote to QUEUED when
                 // there's an actual GitHub token to upload against (see the comment at the

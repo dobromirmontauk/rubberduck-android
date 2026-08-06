@@ -46,6 +46,7 @@ fun AppNavHost(
     onNewSessionTapped: (injectAssetFileName: String?) -> Unit,
     onStopRecording: () -> Unit,
     onSetMode: (RecordingMode) -> Unit = {},
+    onSetPaused: (Boolean) -> Unit = {},
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
@@ -174,6 +175,7 @@ fun AppNavHost(
             composable(Routes.RECORDING) {
                 RecordingScreen(
                     onSetMode = onSetMode,
+                    onSetPaused = onSetPaused,
                     onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                     onStopRecording = {
                         onStopRecording()

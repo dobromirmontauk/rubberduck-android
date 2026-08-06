@@ -6,6 +6,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.montauk.voicecapture.VoiceCaptureApp
+import com.montauk.voicecapture.service.RecordingActivityState
+import com.montauk.voicecapture.service.RecordingActivityStateHolder
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
 import com.montauk.voicecapture.service.TagsStateHolder
@@ -91,6 +93,10 @@ class KeyScreensScreenshotTest {
         // than relying on Robolectric's per-test static sandboxing, same
         // belt-and-suspenders as SessionSwipeInteractionTest.
         PendingRemovalHolder.flushAll()
+        // Bead asn-r60: a global singleton, same reset discipline as the
+        // three holders above -- a previous test's paused state must never
+        // leak into this one.
+        RecordingActivityStateHolder.reset()
         // See the class doc -- neutralizes AppSecretsStore's BuildConfig fallbacks
         // so goldens don't encode whichever machine happens to run this test.
         app.secretsStore.isSignedOut = true
@@ -223,6 +229,48 @@ class KeyScreensScreenshotTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "recording_full_stack.png")
+    }
+
+    /**
+     * Bead asn-r60: the auto-pause banner ("Auto-paused (quiet 0:32) -- just
+     * start talking, or tap to resume") over the same fixture transcript/tags
+     * state as [recordingFullStack], plus the bottom row's Pause/Resume
+     * button now sitting next to STOP. Distinct golden from
+     * `recording_full_stack.png` rather than a variant of it -- this is the
+     * one new visual state the bead's spec calls out by name ("Roborazzi
+     * golden for the paused state").
+     */
+    @Test
+    fun recordingAutoPaused() {
+        RecordingStateHolder.update {
+            it.copy(isRecording = true, sessionId = "2026-08-01_1200_gh78", elapsedMs = 125_000L, mode = RecordingMode.LISTEN)
+        }
+        TranscriptStateHolder.update {
+            TranscriptUiState(
+                connectionState = SttConnectionState.CONNECTED,
+                finalLines = listOf(
+                    TranscriptLine("So the budget for the kitchen remodel is around twelve thousand.", 0L, 4_000L),
+                ),
+                micLevel = 0f,
+                silenceHintVisible = false,
+                sourceLabel = "FILE",
+                quietDurationMs = 32_000L,
+            )
+        }
+        TagsStateHolder.update(
+            listOf(
+                DisplayedTag("kitchen remodel", 0.92, rank = 1, tier = TagTier.PRIMARY),
+                DisplayedTag("budget", 0.7, rank = 2, tier = TagTier.SECONDARY),
+            ),
+        )
+        RecordingActivityStateHolder.set(RecordingActivityState.AUTO_PAUSED)
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "recording_auto_paused.png")
     }
 
     @Test

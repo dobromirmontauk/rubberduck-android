@@ -42,6 +42,7 @@ class MainActivity : ComponentActivity() {
                 onNewSessionTapped = ::onRecordTapped,
                 onStopRecording = ::stopRecordingService,
                 onSetMode = ::setRecordingMode,
+                onSetPaused = ::setRecordingPaused,
             )
         }
     }
@@ -86,5 +87,11 @@ class MainActivity : ComponentActivity() {
 
     private fun setRecordingMode(mode: RecordingMode) {
         ContextCompat.startForegroundService(this, RecordingService.setModeIntent(this, mode))
+    }
+
+    /** Bead asn-r60: the manual (hard) pause button next to Stop -- [paused] true pauses, false resumes. */
+    private fun setRecordingPaused(paused: Boolean) {
+        val intent = if (paused) RecordingService.pauseIntent(this) else RecordingService.resumeIntent(this)
+        ContextCompat.startForegroundService(this, intent)
     }
 }
