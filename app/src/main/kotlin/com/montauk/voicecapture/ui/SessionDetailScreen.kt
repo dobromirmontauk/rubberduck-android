@@ -168,6 +168,7 @@ fun SessionDetailScreen(sessionId: String, onBack: () -> Unit) {
                 DetailHeader(title = displayTitle, uploadState = uploadState, onBack = onBack)
                 Spacer(modifier = Modifier.height(16.dp))
                 AudioPlaybackRow(oggFile = oggFile)
+                RecordingSummaryRow(meta = meta)
                 Spacer(modifier = Modifier.height(20.dp))
                 TabRow(selectedTabIndex = selectedTab.ordinal) {
                     DetailTab.entries.forEach { tab ->
@@ -275,6 +276,32 @@ private fun AudioPlaybackRow(oggFile: File) {
         )
     }
 }
+
+/**
+ * Bead asn-r60: "X min recorded · Y min of quiet trimmed" -- only rendered
+ * when [SessionMeta.recordedMs] is non-null, i.e. this session actually
+ * trimmed something (a session with no pause activity, or one recorded
+ * before this bead existed, leaves this null -- see [SessionMeta]'s KDoc --
+ * and this row renders nothing at all rather than a trivially "0 min
+ * trimmed" line for every session going forward). Trimmed duration is
+ * derived (`duration_ms - recorded_ms`) rather than stored separately -- see
+ * [com.montauk.voicecapture.service.RecordingService]'s `audioTimelineClock`
+ * KDoc for why `recorded_ms` alone is sufficient.
+ */
+@Composable
+private fun RecordingSummaryRow(meta: SessionMeta?) {
+    val recordedMs = meta?.recordedMs ?: return
+    val trimmedMs = (meta.durationMs - recordedMs).coerceAtLeast(0L)
+    Text(
+        text = "${formatMinutes(recordedMs)} min recorded · ${formatMinutes(trimmedMs)} min of quiet trimmed",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 6.dp),
+    )
+}
+
+/** Whole minutes, rounded to the nearest -- distinct from [formatMillis]'s mm:ss player-position format. */
+private fun formatMinutes(ms: Long): Long = (ms + 30_000L) / 60_000L
 
 @Composable
 private fun TranscriptTab(lines: List<LiveTranscriptLine>) {

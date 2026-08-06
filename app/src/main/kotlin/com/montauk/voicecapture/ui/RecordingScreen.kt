@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -69,6 +70,8 @@ import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.audio.AudioRouteType
 import com.montauk.voicecapture.audio.LoudnessVisualizer
 import com.montauk.voicecapture.session.RecordingMode
+import com.montauk.voicecapture.service.RecordingActivityState
+import com.montauk.voicecapture.service.RecordingActivityStateHolder
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
 import com.montauk.voicecapture.service.TagRailStateHolder
@@ -110,12 +113,14 @@ fun RecordingScreen(
     onRemoveTag: (tag: String) -> Unit = {},
     onSwapTag: (oldTag: String, newTag: String, newTagId: String?) -> Unit = { _, _, _ -> },
     onApproveTag: (tag: String) -> Unit = {},
+    onSetPaused: (Boolean) -> Unit = {},
     onOpenSettings: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as VoiceCaptureApp
     val recordingState by RecordingStateHolder.state.collectAsStateWithLifecycle()
     val transcript by TranscriptStateHolder.state.collectAsStateWithLifecycle()
+    val activityState by RecordingActivityStateHolder.state.collectAsStateWithLifecycle()
     val hasBluetoothMic = remember { hasBluetoothInputDevice(context) }
     val rail by TagRailStateHolder.state.collectAsStateWithLifecycle()
     // Bead asn-45m: read-only here -- RecordingService is the only thing
@@ -143,6 +148,14 @@ fun RecordingScreen(
                     Spacer(modifier = Modifier.height(16.dp))
                     ChipsRow(transcript = transcript, hasBluetoothMic = hasBluetoothMic, recordingState = recordingState)
                     Spacer(modifier = Modifier.height(10.dp))
+                    // Bead asn-r60: shown in place of nothing when SPEAKING/QUIET
+                    // (renders null), so it never shifts the layout below it when
+                    // there's nothing to say.
+                    PauseBanner(
+                        activityState = activityState,
+                        quietDurationMs = transcript.quietDurationMs,
+                        onResumeTapped = { onSetPaused(false) },
+                    )
                     LoudnessMeterBar(level = transcript.micLevel, sessionId = recordingState.sessionId)
                     Spacer(modifier = Modifier.height(16.dp))
                     ModeSwitcher(currentMode = recordingState.mode, onSelect = onSetMode)
@@ -172,7 +185,12 @@ fun RecordingScreen(
                     // button reads as floating above content, not touching it.
                     Spacer(modifier = Modifier.height(24.dp))
                 }
-                StopBar(modifier = Modifier.weight(1f), onClick = onStopRecording)
+                BottomActionsBar(
+                    modifier = Modifier.weight(1f),
+                    activityState = activityState,
+                    onPauseToggle = { onSetPaused(activityState != RecordingActivityState.USER_PAUSED) },
+                    onStop = onStopRecording,
+                )
             }
         }
 
@@ -196,6 +214,69 @@ fun RecordingScreen(
 private sealed interface TagPickerRequest {
     object Add : TagPickerRequest
     data class Swap(val oldTag: String) : TagPickerRequest
+}
+
+/**
+ * Bead asn-r60's spec, verbatim: 'Auto-paused (quiet 0:32) -- just start
+ * talking, or tap to resume' for the soft/VAD-driven pause; a plainer
+ * "Paused" indicator for the hard/manual one (the spec's "timer freezes with
+ * explicit paused indicator" -- [BigTimer] above already freezes via
+ * [RecordingUiState.elapsedMs]; this is the "indicator" half). Renders
+ * nothing at all -- not even a zero-height placeholder -- for
+ * [RecordingActivityState.SPEAKING]/[RecordingActivityState.QUIET], so the
+ * layout doesn't reserve dead space while recording normally.
+ */
+@Composable
+private fun PauseBanner(activityState: RecordingActivityState, quietDurationMs: Long, onResumeTapped: () -> Unit) {
+    when (activityState) {
+        RecordingActivityState.AUTO_PAUSED -> {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 10.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable(onClick = onResumeTapped)
+                    .testTag(AUTO_PAUSE_BANNER_TEST_TAG),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+            ) {
+                Text(
+                    text = "Auto-paused (quiet ${formatMinutesSeconds(quietDurationMs)}) -- just start talking, or tap to resume",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+            }
+        }
+        RecordingActivityState.USER_PAUSED -> {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 10.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .testTag(USER_PAUSE_BANNER_TEST_TAG),
+                color = MaterialTheme.colorScheme.errorContainer,
+            ) {
+                Text(
+                    text = "Paused -- tap Resume to keep recording",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+            }
+        }
+        RecordingActivityState.SPEAKING, RecordingActivityState.QUIET -> Unit
+    }
+}
+
+/** Test-only anchors for [PauseBanner] (bead asn-r60). */
+const val AUTO_PAUSE_BANNER_TEST_TAG = "recording_auto_pause_banner"
+const val USER_PAUSE_BANNER_TEST_TAG = "recording_user_pause_banner"
+
+private fun formatMinutesSeconds(ms: Long): String {
+    val totalSeconds = ms / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return String.format("%d:%02d", minutes, seconds)
 }
 
 /**
@@ -838,15 +919,26 @@ private fun FilingDestinationRibbon(destination: String) {
 }
 
 /**
- * Large, deep-red STOP control rendered as an inset rounded button rather
- * than a full-bleed slab (bead vn-edu.32): [STOP_BUTTON_HORIZONTAL_MARGIN]
- * side margins and [navigationBarsPadding] plus a small bottom margin keep
- * it clear of the gesture-nav inset, so it reads as a button floating above
- * content rather than a bar replacing the (hidden) bottom nav. Still very
- * large -- full-width-minus-margins, at least [STOP_BUTTON_MIN_HEIGHT] tall.
+ * Bead asn-r60: the large, deep-red STOP control (bead vn-edu.32's inset
+ * rounded button, unchanged in size/color/position) now shares its row with
+ * a smaller Pause/Resume button "next to Stop" per the bead's spec.
+ * [STOP_BUTTON_HORIZONTAL_MARGIN] side margins and [navigationBarsPadding]
+ * plus a small bottom margin keep the whole row clear of the gesture-nav
+ * inset, same as the old single-button [STOP_BUTTON_MIN_HEIGHT]-tall bar.
+ * The Pause button's label flips to "RESUME" while
+ * [RecordingActivityState.USER_PAUSED] -- see [RecordingScreen]'s
+ * `onPauseToggle` for why that's the only state this label depends on
+ * (tapping while auto-paused escalates to a hard pause, so it still reads
+ * "PAUSE" there, not "RESUME").
  */
 @Composable
-private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun BottomActionsBar(
+    modifier: Modifier = Modifier,
+    activityState: RecordingActivityState,
+    onPauseToggle: () -> Unit,
+    onStop: () -> Unit,
+) {
+    val isUserPaused = activityState == RecordingActivityState.USER_PAUSED
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -854,20 +946,41 @@ private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit) {
             .navigationBarsPadding(),
         contentAlignment = Alignment.Center,
     ) {
-        Button(
-            onClick = onClick,
-            modifier = Modifier.fillMaxSize().heightIn(min = STOP_BUTTON_MIN_HEIGHT),
-            shape = RoundedCornerShape(STOP_BUTTON_CORNER_RADIUS),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-        ) {
-            Text(
-                text = "STOP",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onError,
-            )
+        Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(
+                onClick = onPauseToggle,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .heightIn(min = STOP_BUTTON_MIN_HEIGHT)
+                    .testTag(PAUSE_RESUME_BUTTON_TEST_TAG),
+                shape = RoundedCornerShape(STOP_BUTTON_CORNER_RADIUS),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+            ) {
+                Text(
+                    text = if (isUserPaused) "RESUME" else "PAUSE",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+            Button(
+                onClick = onStop,
+                modifier = Modifier.weight(2f).fillMaxHeight().heightIn(min = STOP_BUTTON_MIN_HEIGHT),
+                shape = RoundedCornerShape(STOP_BUTTON_CORNER_RADIUS),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+            ) {
+                Text(
+                    text = "STOP",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onError,
+                )
+            }
         }
     }
 }
+
+/** Test-only anchor for [BottomActionsBar]'s Pause/Resume button (bead asn-r60). */
+const val PAUSE_RESUME_BUTTON_TEST_TAG = "recording_pause_resume_button"
 
 private val STOP_BUTTON_HORIZONTAL_MARGIN = 16.dp
 private val STOP_BUTTON_CORNER_RADIUS = 20.dp
@@ -923,11 +1036,11 @@ private fun syntheticRailChips(): List<TagRailChip> = listOf(
 
 /**
  * Preview-only: the bottom of [RecordingScreen] -- the tag rail + filing
- * ribbon, the air gap below them, and the STOP control -- rendered
- * standalone at phone-bottom proportions (bead vn-edu.32) so the
- * inset-rounded-button treatment (margins, corner radius, clearance from the
- * gesture-nav inset) can be inspected without needing the full recording
- * state or a device.
+ * ribbon, the air gap below them, and the Pause + STOP row -- rendered
+ * standalone at phone-bottom proportions (bead vn-edu.32's inset-rounded-button
+ * treatment, extended by bead asn-r60's Pause button) so margins/corner
+ * radius/gesture-nav clearance can be inspected without needing the full
+ * recording state or a device.
  */
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 280)
 @Composable
@@ -941,7 +1054,12 @@ private fun StopBarPreview() {
                 TagRailSection(rail = syntheticRailChips(), anthropicKeyConfigured = true, destination = "notes/budget.md")
                 Spacer(modifier = Modifier.height(24.dp))
             }
-            StopBar(modifier = Modifier.weight(1f), onClick = {})
+            BottomActionsBar(
+                modifier = Modifier.weight(1f),
+                activityState = RecordingActivityState.SPEAKING,
+                onPauseToggle = {},
+                onStop = {},
+            )
         }
     }
 }

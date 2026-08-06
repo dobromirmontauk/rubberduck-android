@@ -86,6 +86,8 @@ class SessionStore(private val baseDir: File) {
         appVersion: String,
         modes: List<SessionModeEntry> = listOf(SessionModeEntry(0L, RecordingMode.DEFAULT.wireValue)),
         title: String? = null,
+        /** Bead asn-r60: actual persisted-audio duration, trimmed of every hard/soft-paused span -- see [SessionMeta]'s KDoc. Null for a session with no pause activity to report (or recorded before this bead). */
+        recordedMs: Long? = null,
     ) {
         val meta = SessionMeta(
             sessionId = handle.sessionId,
@@ -96,6 +98,7 @@ class SessionStore(private val baseDir: File) {
             stt = null,
             modes = modes,
             title = title,
+            recordedMs = recordedMs,
             schemaVersion = 1,
         )
         metaFile(handle.dir).writeText(json.encodeToString(meta))
