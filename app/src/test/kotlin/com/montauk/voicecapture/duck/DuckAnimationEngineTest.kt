@@ -13,6 +13,8 @@ class DuckAnimationEngineTest {
         sleepyFrameDurationMs: Long = 500L,
         sleepingFrameDurationMs: Long = 700L,
         blinkEveryMs: Long = 1_000L,
+        nodEveryMs: Long = 5_000L,
+        handRaiseFrameDurationMs: Long = 150L,
         crossfadeMs: Long = 200L,
     ) = DuckAnimationEngine(
         initialState = initialState,
@@ -20,6 +22,8 @@ class DuckAnimationEngineTest {
         sleepyFrameDurationMs = sleepyFrameDurationMs,
         sleepingFrameDurationMs = sleepingFrameDurationMs,
         blinkEveryMs = blinkEveryMs,
+        nodEveryMs = nodEveryMs,
+        handRaiseFrameDurationMs = handRaiseFrameDurationMs,
         crossfadeMs = crossfadeMs,
     )
 
@@ -67,6 +71,63 @@ class DuckAnimationEngineTest {
         assertEquals(DuckVisual.Pose(DuckFrame.BLINK_3), e.tick(1_500L))
         // Blink sequence (3 frames) finishes at 1_300 + 300 = 1_600; back to idle frame 1.
         assertEquals(DuckVisual.Pose(DuckFrame.IDLE_BREATHING_1), e.tick(1_600L))
+    }
+
+    @Test
+    fun `idle-breathing is interrupted by a nod every nodEveryMs then resumes idle`() {
+        val e = engine(initialState = DuckState.LISTENING, blinkEveryMs = 10_000L, nodEveryMs = 2_000L)
+        e.tick(0L)
+        e.tick(300L) // enters idle at t=300
+
+        // Nod fires 2000ms after idle was entered, i.e. at t=2300.
+        assertEquals(DuckVisual.Pose(DuckFrame.HEAD_TURN_1), e.tick(2_300L))
+        assertEquals(DuckVisual.Pose(DuckFrame.HEAD_TURN_2), e.tick(2_400L))
+        assertEquals(DuckVisual.Pose(DuckFrame.HEAD_TURN_3), e.tick(2_500L))
+        assertEquals(DuckVisual.Pose(DuckFrame.HEAD_TURN_4), e.tick(2_600L))
+        // 4 frames * 100ms = 400ms; past that, back to idle frame 1.
+        assertEquals(DuckVisual.Pose(DuckFrame.IDLE_BREATHING_1), e.tick(2_700L))
+    }
+
+    @Test
+    fun `blink and nod run on independent clocks -- one firing does not reset the other's countdown`() {
+        val e = engine(initialState = DuckState.LISTENING, blinkEveryMs = 1_000L, nodEveryMs = 2_000L)
+        e.tick(0L)
+        e.tick(300L) // idle entered at t=300; blink due at 1300, nod due at 2300
+
+        // Blink fires and finishes (300ms) well before the nod is due.
+        assertEquals(DuckVisual.Pose(DuckFrame.BLINK_1), e.tick(1_300L))
+        e.tick(1_600L) // blink sequence exhausted, back to idle
+
+        // The nod still fires at its ORIGINAL due time (2300), not reset by the blink.
+        assertEquals(DuckVisual.Pose(DuckFrame.HEAD_TURN_1), e.tick(2_300L))
+    }
+
+    // --- hand-raise (a one-shot overlay, not a DuckState) ---
+
+    @Test
+    fun `triggerHandRaise plays its 2 frames once, then resumes the underlying state`() {
+        val e = engine(initialState = DuckState.LISTENING, handRaiseFrameDurationMs = 150L, blinkEveryMs = 10_000L, nodEveryMs = 10_000L)
+        e.tick(0L)
+        e.tick(300L) // idle
+        e.triggerHandRaise(1_000L)
+
+        assertEquals(DuckVisual.Pose(DuckFrame.HAND_RAISE_1), e.tick(1_000L))
+        assertEquals(DuckVisual.Pose(DuckFrame.HAND_RAISE_2), e.tick(1_150L))
+        // 2 frames * 150ms = 300ms; past that, back to idle-breathing -- the
+        // underlying IdlePhase's own clock (started at t=300) never paused
+        // during the overlay, so at t=1300 it's mid-cycle (elapsed 1000ms /
+        // 100ms = index 10 % 4 = index 2 -> frame 3), not restarted at
+        // frame 1 -- see the class KDoc's "not literally paused-and-resumed" note.
+        assertEquals(DuckVisual.Pose(DuckFrame.IDLE_BREATHING_3), e.tick(1_300L))
+    }
+
+    @Test
+    fun `triggerHappyBounce takes priority over a pending triggerHandRaise`() {
+        val e = engine(initialState = DuckState.LISTENING)
+        e.tick(0L)
+        e.triggerHandRaise(1_000L)
+        e.triggerHappyBounce(1_000L)
+        assertEquals(DuckVisual.Pose(DuckFrame.HAPPY_BOUNCE_1), e.tick(1_000L))
     }
 
     @Test

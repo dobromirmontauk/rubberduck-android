@@ -39,7 +39,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -221,6 +223,12 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
                             onLatencyBadgeTap = {}, // asn-55q's L2 HUD opens here once that bead lands
                             happyBounceTrigger = happyBounceTrigger,
                             modifier = Modifier.fillMaxSize(),
+                            // Design-board addendum: controls float ON the duck in this
+                            // view (z-order above him, overlapping his lower body) --
+                            // DuckStage places this slot itself. The debug view below
+                            // renders the identical StopBar as a normal, non-overlapping
+                            // bottom row instead (there's no duck to float over there).
+                            controls = { StopBar(onClick = onStopRecording, floating = true) },
                         )
                     }
                 }
@@ -239,7 +247,9 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
                             .testTag(REGISTER_KEY_MESSAGE_TEST_TAG),
                     )
                 }
-                StopBar(modifier = Modifier.height(STOP_BAR_HEIGHT), onClick = onStopRecording)
+                if (showDebugView) {
+                    StopBar(modifier = Modifier.height(STOP_BAR_HEIGHT), onClick = onStopRecording, floating = false)
+                }
             }
         }
     }
@@ -709,15 +719,35 @@ internal fun partialAnnotatedString(
 const val REGISTER_KEY_MESSAGE_TEST_TAG = "recording_register_key_message"
 
 /**
- * Large, deep-red STOP control rendered as an inset rounded button rather
- * than a full-bleed slab (bead vn-edu.32): [STOP_BUTTON_HORIZONTAL_MARGIN]
- * side margins and [navigationBarsPadding] plus a small bottom margin keep
- * it clear of the gesture-nav inset, so it reads as a button floating above
- * content rather than a bar replacing the (hidden) bottom nav. Still very
- * large -- full-width-minus-margins, at least [STOP_BUTTON_MIN_HEIGHT] tall.
+ * The STOP control, in two treatments (bead vn-edu.32 original + asn-3sm's
+ * design-board addendum):
+ *  - [floating] = false (debug view, no duck to float over): the original
+ *    large full-bleed-minus-margins button, [STOP_BUTTON_HORIZONTAL_MARGIN]
+ *    side margins + [navigationBarsPadding], at least [STOP_BUTTON_MIN_HEIGHT]
+ *    tall.
+ *  - [floating] = true (duck view): a small pill (matches the design
+ *    board's `.btn-stop`), still >= 48dp touch target, with an explicit
+ *    [FLOATING_BUTTON_ELEVATION] drop shadow so it reads as floating above
+ *    the duck's yellow rather than blending into him -- [DuckStage] is what
+ *    positions this pill so it overlaps his lower body/feet; this
+ *    composable only owns the button's own look.
  */
 @Composable
-private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit, floating: Boolean = false) {
+    if (floating) {
+        Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Button(
+                onClick = onClick,
+                modifier = Modifier.heightIn(min = FLOATING_BUTTON_MIN_HEIGHT).shadow(FLOATING_BUTTON_ELEVATION, RoundedCornerShape(999.dp)),
+                shape = RoundedCornerShape(999.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                contentPadding = PaddingValues(horizontal = 28.dp, vertical = 10.dp),
+            ) {
+                Text(text = "STOP", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onError, fontWeight = FontWeight.Bold)
+            }
+        }
+        return
+    }
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -739,6 +769,9 @@ private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit) {
         }
     }
 }
+
+private val FLOATING_BUTTON_MIN_HEIGHT = 48.dp
+private val FLOATING_BUTTON_ELEVATION = 10.dp
 
 private val STOP_BUTTON_HORIZONTAL_MARGIN = 16.dp
 private val STOP_BUTTON_CORNER_RADIUS = 20.dp

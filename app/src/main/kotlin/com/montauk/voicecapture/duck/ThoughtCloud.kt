@@ -54,14 +54,21 @@ fun ThoughtCloud(
     reducedMotion: Boolean,
     onApprove: (ThoughtCloudWord) -> Unit,
     modifier: Modifier = Modifier,
+    dimFactor: Float = 1f,
 ) {
     val view = LocalView.current
     BoxWithConstraints(modifier = modifier.testTag(THOUGHT_CLOUD_TEST_TAG).fillMaxSize()) {
         val stageHeightPx = with(androidx.compose.ui.platform.LocalDensity.current) { maxHeight.toPx() }
         val stageWidthPx = with(androidx.compose.ui.platform.LocalDensity.current) { maxWidth.toPx() }
 
-        val topWords = words.filter { it.status != TagWordStatus.CANDIDATE }.take(ThoughtCloudWords.MAX_TOP)
-        val candidateWords = words.filter { it.status == TagWordStatus.CANDIDATE }.take(ThoughtCloudWords.MAX_CANDIDATES)
+        // Confidence < ~0.3 fades a word out entirely rather than just
+        // shrinking it further (design board v2: "shrinking below ~0.3
+        // fades a word out of the cloud entirely; it can return") -- only
+        // words that clear this bar are laid out at all, so a word that
+        // fades out this round and comes back later re-enters cleanly.
+        val visibleWords = words.filter { it.confidence >= CONFIDENCE_FADE_THRESHOLD || it.status != TagWordStatus.CANDIDATE }
+        val topWords = visibleWords.filter { it.status != TagWordStatus.CANDIDATE }.take(ThoughtCloudWords.MAX_TOP)
+        val candidateWords = visibleWords.filter { it.status == TagWordStatus.CANDIDATE }.take(ThoughtCloudWords.MAX_CANDIDATES)
 
         topWords.forEachIndexed { index, word ->
             val slot = TOP_SLOTS.getOrElse(index) { TOP_SLOTS.last() }
@@ -71,6 +78,7 @@ fun ThoughtCloud(
                 reducedMotion = reducedMotion,
                 stageWidthPx = stageWidthPx,
                 stageHeightPx = stageHeightPx,
+                dimFactor = dimFactor,
                 onTap = {
                     if (word.status == TagWordStatus.PROPOSED) {
                         view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
@@ -87,11 +95,15 @@ fun ThoughtCloud(
                 reducedMotion = reducedMotion,
                 stageWidthPx = stageWidthPx,
                 stageHeightPx = stageHeightPx,
+                dimFactor = dimFactor,
                 onTap = {},
             )
         }
     }
 }
+
+/** Design board v2: "shrinking below ~0.3 fades a word out of the cloud entirely; it can return." */
+private const val CONFIDENCE_FADE_THRESHOLD = 0.3
 
 /** One word's fixed scatter position + size range -- see [TOP_SLOTS]/[CANDIDATE_SLOTS]. */
 private data class CloudSlot(
@@ -122,6 +134,7 @@ private fun ThoughtCloudWordView(
     reducedMotion: Boolean,
     stageWidthPx: Float,
     stageHeightPx: Float,
+    dimFactor: Float,
     onTap: () -> Unit,
 ) {
     val color = when (word.status) {
@@ -130,10 +143,14 @@ private fun ThoughtCloudWordView(
         TagWordStatus.APPROVED -> TAG_COLOR_GREEN
         TagWordStatus.CANDIDATE -> TAG_COLOR_CANDIDATE
     }
+    // Design board v2: "every word's size tracks its live confidence,
+    // animating smoothly (300ms ease per rescore, ~5s cadence)".
     val fontSize by animateFloatAsState(
         targetValue = lerp(slot.minFontSp, slot.maxFontSp, word.confidence.toFloat().coerceIn(0f, 1f)),
+        animationSpec = tween(CONFIDENCE_RESIZE_MS, easing = FastOutSlowInEasing),
         label = "thought-word-size-${word.text}",
     )
+    val dimAlpha by animateFloatAsState(targetValue = dimFactor, label = "thought-word-dim-${word.text}")
     val baseRotation = stableRotationDegrees(word.text)
     val motion = rememberWordMotion(seed = word.text, reducedMotion = reducedMotion)
 
@@ -147,7 +164,7 @@ private fun ThoughtCloudWordView(
                 translationX = startPx ?: (stageWidthPx - (endPx ?: 0f) - size.width)
                 translationY = topPx + motion.driftYPx
                 rotationZ = baseRotation + motion.driftRotationDeg
-                alpha = motion.shimmerAlpha
+                alpha = motion.shimmerAlpha * dimAlpha
             }
             .let { base -> if (word.status == TagWordStatus.PROPOSED) base.clickable(onClick = onTap) else base }
             .testTag(testTagFor(word.status) + word.text)
@@ -237,6 +254,7 @@ private const val SHIMMER_PERIOD_STEP_MS = 350
 private const val DRIFT_TRANSLATE_Y_PX = 18f
 private const val DRIFT_ROTATE_DEG = 3f
 private const val SHIMMER_MIN_ALPHA = 0.72f
+private const val CONFIDENCE_RESIZE_MS = 300
 
 @Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 300)
 @Composable

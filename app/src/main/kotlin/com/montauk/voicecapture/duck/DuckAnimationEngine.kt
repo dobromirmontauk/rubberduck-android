@@ -8,8 +8,12 @@ package com.montauk.voicecapture.duck
  * [tick] returns.
  *
  * - **LISTENING**: plays the one-shot [LISTENING_INTRO_SEQUENCE] once on
- *   entry, then settles into a looping [IDLE_BREATHING_SEQUENCE], briefly
- *   interrupted by a one-shot [BLINK_SEQUENCE] every [blinkEveryMs].
+ *   entry, then settles into a looping [IDLE_BREATHING_SEQUENCE], with two
+ *   independent one-shot interruptions -- [BLINK_SEQUENCE] every
+ *   [blinkEveryMs] and [NOD_SEQUENCE] every [nodEveryMs] (design board v2's
+ *   vitality signal: "healthy pipeline = lively duck"). The two run on
+ *   separate clocks that survive each other's interruptions -- a blink
+ *   firing doesn't reset the nod countdown, and vice versa.
  * - **SLEEPY**: loops [SLEEPY_SEQUENCE] at the slower [sleepyFrameDurationMs]
  *   cadence (spec: "slow cadence") -- quiet, but still recording; eyes stay
  *   open/heavy-lidded.
@@ -21,16 +25,20 @@ package com.montauk.voicecapture.duck
  *   bead's original "no duck frame, BRB card instead" treatment after a
  *   design-board revision dropped that prop from scope.
  *
- * [triggerHappyBounce] layers a one-shot [HAPPY_BOUNCE_SEQUENCE] on top of
- * whichever of the above is current -- design-board section 1's "Got it!"
- * beat (a new tag approved / summary bullet added) -- without changing
- * [state] itself: [tick] checks for a pending bounce before consulting
- * [phase] at all, and once the bounce's frames are exhausted, resumes
- * exactly where the underlying phase would have been (recomputed fresh from
- * [state], not literally paused-and-resumed, since a bounce is expected to
- * be rare and brief enough that the tiny discontinuity this causes -- e.g.
- * IDLE_BREATHING restarting its cycle rather than resuming mid-cycle -- is
- * not visible in practice).
+ * [triggerHappyBounce]/[triggerHandRaise] each layer a one-shot sequence on
+ * top of whichever of the above is current -- "Got it!" (a tag approved /
+ * summary bullet added) and "a new tag entered the cloud" respectively --
+ * without changing [state] itself: [tick] checks for either pending overlay
+ * before consulting [phase] at all ([triggerHappyBounce] takes priority if
+ * both happen to be pending at once, though in practice the two triggering
+ * events are unrelated enough that this is rare), and once an overlay's
+ * frames are exhausted, resumes exactly where the underlying phase would
+ * have been (recomputed fresh from [state]/[phase], not literally
+ * paused-and-resumed -- for [IdlePhase] specifically this preserves the
+ * pending blink/nod timers, but the overlay itself is not literally
+ * paused-and-resumed either, since a bounce/hand-raise is expected to be
+ * rare and brief enough that the tiny discontinuity this causes is not
+ * visible in practice).
  *
  * [isCrossfading] reports whether the most recent [setState] transition is
  * still inside its crossfade window ([DuckAnimator] uses `Crossfade` for the
@@ -47,19 +55,23 @@ class DuckAnimationEngine(
     private val sleepyFrameDurationMs: Long = DEFAULT_SLEEPY_FRAME_DURATION_MS,
     private val sleepingFrameDurationMs: Long = DEFAULT_SLEEPING_FRAME_DURATION_MS,
     private val blinkEveryMs: Long = DEFAULT_BLINK_EVERY_MS,
+    private val nodEveryMs: Long = DEFAULT_NOD_EVERY_MS,
+    private val handRaiseFrameDurationMs: Long = DEFAULT_HAND_RAISE_FRAME_DURATION_MS,
     private val crossfadeMs: Long = DEFAULT_CROSSFADE_MS,
 ) {
     private sealed interface Phase {
         val startedAtMs: Long
     }
     private data class ListeningIntroPhase(override val startedAtMs: Long) : Phase
-    private data class IdlePhase(override val startedAtMs: Long) : Phase
-    private data class BlinkPhase(override val startedAtMs: Long) : Phase
+    private data class IdlePhase(override val startedAtMs: Long, val nextBlinkAtMs: Long, val nextNodAtMs: Long) : Phase
+    private data class BlinkPhase(override val startedAtMs: Long, val nextNodAtMs: Long) : Phase
+    private data class NodPhase(override val startedAtMs: Long, val nextBlinkAtMs: Long) : Phase
     private data class SleepyPhase(override val startedAtMs: Long) : Phase
     private data class ThinkingPhase(override val startedAtMs: Long) : Phase
     private data class SleepingPhase(override val startedAtMs: Long) : Phase
 
     private var happyBounceStartedAtMs: Long? = null
+    private var handRaiseStartedAtMs: Long? = null
 
     var state: DuckState = initialState
         private set
@@ -91,6 +103,11 @@ class DuckAnimationEngine(
         happyBounceStartedAtMs = nowMs
     }
 
+    /** Layers a one-shot [HAND_RAISE_SEQUENCE] on top of whatever is currently playing -- see the class KDoc. */
+    fun triggerHandRaise(nowMs: Long) {
+        handRaiseStartedAtMs = nowMs
+    }
+
     /** Advances frame timing to [nowMs] and returns what [DuckAnimator] should render. */
     fun tick(nowMs: Long): DuckVisual.Pose {
         val bounceStart = happyBounceStartedAtMs
@@ -100,6 +117,15 @@ class DuckAnimationEngine(
                 happyBounceStartedAtMs = null
             } else {
                 return DuckVisual.Pose(HAPPY_BOUNCE_SEQUENCE[idx])
+            }
+        }
+        val handRaiseStart = handRaiseStartedAtMs
+        if (handRaiseStart != null) {
+            val idx = ((nowMs - handRaiseStart) / handRaiseFrameDurationMs).toInt()
+            if (idx >= HAND_RAISE_SEQUENCE.size) {
+                handRaiseStartedAtMs = null
+            } else {
+                return DuckVisual.Pose(HAND_RAISE_SEQUENCE[idx])
             }
         }
         if (phase == null) setState(state, nowMs)
@@ -115,29 +141,40 @@ class DuckAnimationEngine(
             is ListeningIntroPhase -> {
                 val idx = ((nowMs - p.startedAtMs) / frameDurationMs).toInt()
                 if (idx >= LISTENING_INTRO_SEQUENCE.size) {
-                    phase = IdlePhase(nowMs)
+                    phase = IdlePhase(nowMs, nextBlinkAtMs = nowMs + blinkEveryMs, nextNodAtMs = nowMs + nodEveryMs)
                     tick(nowMs)
                 } else {
                     DuckVisual.Pose(LISTENING_INTRO_SEQUENCE[idx])
                 }
             }
             is IdlePhase -> {
-                val elapsed = nowMs - p.startedAtMs
-                if (elapsed >= blinkEveryMs) {
-                    phase = BlinkPhase(nowMs)
+                if (nowMs >= p.nextBlinkAtMs) {
+                    phase = BlinkPhase(nowMs, nextNodAtMs = p.nextNodAtMs)
+                    tick(nowMs)
+                } else if (nowMs >= p.nextNodAtMs) {
+                    phase = NodPhase(nowMs, nextBlinkAtMs = p.nextBlinkAtMs)
                     tick(nowMs)
                 } else {
-                    val idx = ((elapsed / frameDurationMs) % IDLE_BREATHING_SEQUENCE.size).toInt()
+                    val idx = (((nowMs - p.startedAtMs) / frameDurationMs) % IDLE_BREATHING_SEQUENCE.size).toInt()
                     DuckVisual.Pose(IDLE_BREATHING_SEQUENCE[idx])
                 }
             }
             is BlinkPhase -> {
                 val idx = ((nowMs - p.startedAtMs) / frameDurationMs).toInt()
                 if (idx >= BLINK_SEQUENCE.size) {
-                    phase = IdlePhase(nowMs)
+                    phase = IdlePhase(nowMs, nextBlinkAtMs = nowMs + blinkEveryMs, nextNodAtMs = p.nextNodAtMs)
                     tick(nowMs)
                 } else {
                     DuckVisual.Pose(BLINK_SEQUENCE[idx])
+                }
+            }
+            is NodPhase -> {
+                val idx = ((nowMs - p.startedAtMs) / frameDurationMs).toInt()
+                if (idx >= NOD_SEQUENCE.size) {
+                    phase = IdlePhase(nowMs, nextBlinkAtMs = p.nextBlinkAtMs, nextNodAtMs = nowMs + nodEveryMs)
+                    tick(nowMs)
+                } else {
+                    DuckVisual.Pose(NOD_SEQUENCE[idx])
                 }
             }
             is SleepyPhase -> {
@@ -159,6 +196,8 @@ class DuckAnimationEngine(
         const val DEFAULT_SLEEPY_FRAME_DURATION_MS = 900L
         const val DEFAULT_SLEEPING_FRAME_DURATION_MS = 1_200L
         const val DEFAULT_BLINK_EVERY_MS = 4_000L
+        const val DEFAULT_NOD_EVERY_MS = 12_000L
+        const val DEFAULT_HAND_RAISE_FRAME_DURATION_MS = 400L
         const val DEFAULT_CROSSFADE_MS = 260L
     }
 }

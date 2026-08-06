@@ -27,6 +27,12 @@ enum class DuckFrame {
     HAPPY_BOUNCE_3,
     SLEEPING_1,
     SLEEPING_2,
+    HEAD_TURN_1,
+    HEAD_TURN_2,
+    HEAD_TURN_3,
+    HEAD_TURN_4,
+    HAND_RAISE_1,
+    HAND_RAISE_2,
 }
 
 /** Resting/default loop (bead asn-3sm) -- MANIFEST.md sequence 1, frames 01-04. */
@@ -75,3 +81,20 @@ internal val HAPPY_BOUNCE_SEQUENCE = listOf(DuckFrame.HAPPY_BOUNCE_1, DuckFrame.
  * nodding off in place.
  */
 internal val SLEEPING_SEQUENCE = listOf(DuckFrame.SLEEPING_1, DuckFrame.SLEEPING_2)
+
+/**
+ * One-shot "nod" -- design board v2's vitality signal ("healthy pipeline =
+ * lively duck": blinks every 3-5s, nods every ~10-15s while LISTENING).
+ * Reuses the head-turn sweep (MANIFEST.md sequence 5, frames 15-18) as a
+ * stand-in per the spec's own note ("use head-turn or idle frames for the
+ * nod until a dedicated pose exists").
+ */
+internal val NOD_SEQUENCE = listOf(DuckFrame.HEAD_TURN_1, DuckFrame.HEAD_TURN_2, DuckFrame.HEAD_TURN_3, DuckFrame.HEAD_TURN_4)
+
+/**
+ * One-shot eager hand-raise (design board v2: a new tag enters the cloud)
+ * that can interrupt any other state for its duration, same pattern as
+ * [HAPPY_BOUNCE_SEQUENCE] -- MANIFEST.md sequence 17 (hand-raise-eager,
+ * frames 46-47, bead asn-ek1).
+ */
+internal val HAND_RAISE_SEQUENCE = listOf(DuckFrame.HAND_RAISE_1, DuckFrame.HAND_RAISE_2)
