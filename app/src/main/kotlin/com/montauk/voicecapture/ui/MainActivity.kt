@@ -42,6 +42,9 @@ class MainActivity : ComponentActivity() {
                 onNewSessionTapped = ::onRecordTapped,
                 onStopRecording = ::stopRecordingService,
                 onSetMode = ::setRecordingMode,
+                onAddTag = ::addRecordingTag,
+                onRemoveTag = ::removeRecordingTag,
+                onSwapTag = ::swapRecordingTag,
             )
         }
     }
@@ -86,5 +89,20 @@ class MainActivity : ComponentActivity() {
 
     private fun setRecordingMode(mode: RecordingMode) {
         ContextCompat.startForegroundService(this, RecordingService.setModeIntent(this, mode))
+    }
+
+    /** Bead asn-45m: the recording screen's (+) chip (or the picker's free-form "Add" row) confirmed a new tag. */
+    private fun addRecordingTag(tag: String, tagId: String?) {
+        ContextCompat.startForegroundService(this, RecordingService.addTagIntent(this, tag, tagId))
+    }
+
+    /** Bead asn-45m: the recording screen's ✕ affordance on a chip. */
+    private fun removeRecordingTag(tag: String) {
+        ContextCompat.startForegroundService(this, RecordingService.removeTagIntent(this, tag))
+    }
+
+    /** Bead asn-45m: the recording screen's picker confirmed a replacement for an existing chip. */
+    private fun swapRecordingTag(oldTag: String, newTag: String, newTagId: String?) {
+        ContextCompat.startForegroundService(this, RecordingService.swapTagIntent(this, oldTag, newTag, newTagId))
     }
 }

@@ -1,17 +1,12 @@
 package com.montauk.voicecapture.ui
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,10 +20,12 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -47,9 +44,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -74,13 +68,15 @@ import com.montauk.voicecapture.audio.LoudnessVisualizer
 import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
-import com.montauk.voicecapture.service.TagsStateHolder
+import com.montauk.voicecapture.service.TagRailStateHolder
+import com.montauk.voicecapture.service.TagTreeStateHolder
 import com.montauk.voicecapture.service.TranscriptLine
 import com.montauk.voicecapture.service.TranscriptStateHolder
 import com.montauk.voicecapture.service.TranscriptUiState
 import com.montauk.voicecapture.stt.SttConnectionState
-import com.montauk.voicecapture.tags.DisplayedTag
-import com.montauk.voicecapture.tags.TagTier
+import com.montauk.voicecapture.tags.RailChipSource
+import com.montauk.voicecapture.tags.TagFilingDestination
+import com.montauk.voicecapture.tags.TagRailChip
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -103,15 +99,29 @@ import kotlin.math.roundToInt
  * rather than opening any dialog on this glance-mode screen.
  */
 @Composable
-fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> Unit = {}, onOpenSettings: () -> Unit = {}) {
+fun RecordingScreen(
+    onStopRecording: () -> Unit,
+    onSetMode: (RecordingMode) -> Unit = {},
+    onAddTag: (tag: String, tagId: String?) -> Unit = { _, _ -> },
+    onRemoveTag: (tag: String) -> Unit = {},
+    onSwapTag: (oldTag: String, newTag: String, newTagId: String?) -> Unit = { _, _, _ -> },
+    onOpenSettings: () -> Unit = {},
+) {
     val context = LocalContext.current
     val app = context.applicationContext as VoiceCaptureApp
     val recordingState by RecordingStateHolder.state.collectAsStateWithLifecycle()
     val transcript by TranscriptStateHolder.state.collectAsStateWithLifecycle()
     val hasBluetoothMic = remember { hasBluetoothInputDevice(context) }
-    val tags by TagsStateHolder.state.collectAsStateWithLifecycle()
+    val rail by TagRailStateHolder.state.collectAsStateWithLifecycle()
+    // Bead asn-45m: read-only here -- RecordingService is the only thing
+    // that ever calls VoiceCaptureApp.currentTagTree() (a real,
+    // network-capable call); this screen just reads whatever it last
+    // resolved, defaulting to TagTree.EMPTY (free-form fallback) until then.
+    // See TagTreeStateHolder's KDoc for why that split matters for tests.
+    val tagTree by TagTreeStateHolder.state.collectAsStateWithLifecycle()
     val anthropicKeyConfigured = app.isAnthropicKeyConfigured()
     val assemblyKeyConfigured = app.isAssemblyKeyConfigured()
+    var pickerRequest by remember { mutableStateOf<TagPickerRequest?>(null) }
 
     VoiceCaptureTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -132,22 +142,54 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
                     Spacer(modifier = Modifier.height(16.dp))
                     ModeSwitcher(currentMode = recordingState.mode, onSelect = onSetMode)
                     Spacer(modifier = Modifier.height(16.dp))
+                    // Bead asn-45m: the editable tag rail + filing-destination
+                    // ribbon now live ABOVE the transcript pane (superseding the
+                    // old read-only TagChipsRow that used to sit below it) --
+                    // per the bead spec, "pinned above the live transcript."
+                    TagRailSection(
+                        rail = rail,
+                        anthropicKeyConfigured = anthropicKeyConfigured,
+                        destination = TagFilingDestination.destinationFor(rail.firstOrNull(), tagTree),
+                        onRegisterKeyTapped = onOpenSettings,
+                        onRemove = onRemoveTag,
+                        onRequestAdd = { pickerRequest = TagPickerRequest.Add },
+                        onRequestSwap = { oldTag -> pickerRequest = TagPickerRequest.Swap(oldTag) },
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
                     LiveTranscriptPane(
                         transcript = transcript,
                         assemblyKeyConfigured = assemblyKeyConfigured,
                         onOpenSettings = onOpenSettings,
                         modifier = Modifier.weight(1f),
                     )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    TagChipsRow(tags = tags, anthropicKeyConfigured = anthropicKeyConfigured, onRegisterKeyTapped = onOpenSettings)
-                    // Extra air below the chips row (bead vn-edu.32) so the inset STOP
-                    // button reads as floating above content, not touching the chips.
+                    // Extra air below the transcript pane (bead vn-edu.32) so the inset STOP
+                    // button reads as floating above content, not touching it.
                     Spacer(modifier = Modifier.height(24.dp))
                 }
                 StopBar(modifier = Modifier.weight(1f), onClick = onStopRecording)
             }
         }
+
+        pickerRequest?.let { request ->
+            TagPickerSheet(
+                tree = tagTree,
+                onPick = { tag, tagId ->
+                    when (request) {
+                        is TagPickerRequest.Add -> onAddTag(tag, tagId)
+                        is TagPickerRequest.Swap -> onSwapTag(request.oldTag, tag, tagId)
+                    }
+                    pickerRequest = null
+                },
+                onDismiss = { pickerRequest = null },
+            )
+        }
     }
+}
+
+/** Which affordance opened [TagPickerSheet] -- decides whether a pick becomes an add or a swap of a specific existing chip. */
+private sealed interface TagPickerRequest {
+    object Add : TagPickerRequest
+    data class Swap(val oldTag: String) : TagPickerRequest
 }
 
 /**
@@ -444,7 +486,7 @@ private fun LazyListLayoutInfo.isScrolledToNewest(): Boolean {
  * so [transcript] never gains a final line, partial, or even a silence hint
  * from a live STT session) and this slot instead shows the exact string
  * "(no transcription key)", dimmed and tappable via [onOpenSettings] --
- * mirrors the tags-slot keyless message ([TagChipsRow]) so the reader
+ * mirrors the tags-slot keyless message ([TagRailSection]) so the reader
  * understands *why* nothing is transcribing, distinct from "recording, key
  * present, just no speech yet" (which still renders the normal
  * "Listening…"/"(silence)" rows below via the unchanged keyed path).
@@ -574,37 +616,40 @@ internal fun partialAnnotatedString(
 }
 
 /**
- * Up to 3 confidence-ranked MAJOR-topic chips (bead vn-edu.38, supersedes
- * the v1 frequency-chip cloud) -- [tags] is [TagsStateHolder]'s current
- * displayed set, already ranked and size-classed by
- * [com.montauk.voicecapture.tags.TagTracker].
+ * Bead asn-45m: the editable tag rail (chips, each with a ✕ remove and a
+ * trailing (+) add chip) plus the "Filing to: ..." ribbon underneath it,
+ * pinned above the transcript pane -- supersedes the old read-only,
+ * confidence-tiered TagChipsRow this replaced (see git history for
+ * bead vn-edu.38/vn-edu.46/vn-edu.47's version of this slot): [rail] chips
+ * carry no confidence/tier/proposal styling of their own anymore, only
+ * [TagRailChip.source] (outlined [RailChipSource.SUGGESTED] vs. filled
+ * [RailChipSource.USER]) -- the bead's whole point is that this slot is now
+ * something the user edits, not just a live readout.
  *
- * Each of the 3 rank slots is its own [AnimatedContent] keyed on *what
- * currently occupies that slot* rather than on tag identity: a rank change
- * (a stronger candidate displacing a weaker one, or a tag simply climbing
- * from rank 2 to rank 1) reads as that slot's chip shrinking/fading out and
- * the new one growing/fading in, which is the "shrink away, replaced by a
- * stronger candidate" motion the spec asks for -- without needing a full
- * move-animation API for what is only ever a 3-item list. [Modifier.animateContentSize]
- * on the row absorbs the width change as chips of different size classes
- * enter/exit. Durations are short (160-220ms) and opacity/scale-only --
- * deliberately subtle rather than a bouncy/springy default, per the
- * reduced-motion guidance.
- *
- * Bead vn-edu.46 superseding decision (2026-08-05): when
- * [anthropicKeyConfigured] is false, no chips render at all -- not even an
- * empty row -- because [com.montauk.voicecapture.tags.NoOpTagScorer] never
- * computes any tags in that state (no heuristic guess). Instead this slot
- * shows the exact string "(register your API key to see the word cloud)",
- * dimmed and tappable, invoking [onRegisterKeyTapped] (deep-links to
- * Settings' "Word cloud & titles" key row) -- so a user always understands
- * *why* there's nothing here, distinct from "no topic has scored high
- * enough yet" (which, when keyed, still renders this same empty row via the
- * early return below).
+ * Bead vn-edu.46's superseding decision -- keyless shows the exact
+ * register-key message instead of guessing tags, never a stray chip from a
+ * misbehaving scorer -- still holds for [RailChipSource.SUGGESTED] chips
+ * specifically: [visibleRail] drops them entirely while
+ * [anthropicKeyConfigured] is false, same defensive guarantee as before this
+ * bead (a keyless [com.montauk.voicecapture.tags.NoOpTagScorer] should never
+ * suggest anything anyway, but this doesn't trust that alone). What's new is
+ * that a [RailChipSource.USER] chip -- added manually via the (+) chip's
+ * picker, which never touches the scorer -- always shows regardless of key
+ * state, so the message now only appears when there's truly nothing to show:
+ * no suggestions possible (keyless) *and* no user tag added yet either.
  */
 @Composable
-private fun TagChipsRow(tags: List<DisplayedTag>, anthropicKeyConfigured: Boolean, onRegisterKeyTapped: () -> Unit = {}) {
-    if (!anthropicKeyConfigured) {
+private fun TagRailSection(
+    rail: List<TagRailChip>,
+    anthropicKeyConfigured: Boolean,
+    destination: String,
+    onRegisterKeyTapped: () -> Unit = {},
+    onRemove: (String) -> Unit = {},
+    onRequestAdd: () -> Unit = {},
+    onRequestSwap: (String) -> Unit = {},
+) {
+    val visibleRail = if (anthropicKeyConfigured) rail else rail.filter { it.source == RailChipSource.USER }
+    if (!anthropicKeyConfigured && visibleRail.isEmpty()) {
         Text(
             text = "(register your API key to see the word cloud)",
             style = MaterialTheme.typography.bodyMedium,
@@ -616,84 +661,122 @@ private fun TagChipsRow(tags: List<DisplayedTag>, anthropicKeyConfigured: Boolea
         )
         return
     }
-    if (tags.isEmpty()) return
-    Row(
-        modifier = Modifier.fillMaxWidth().animateContentSize(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        for (slot in 0 until MAX_DISPLAYED_TAG_SLOTS) {
-            key(slot) {
-                AnimatedContent(
-                    targetState = tags.getOrNull(slot),
-                    transitionSpec = {
-                        (fadeIn(tween(TAG_CHIP_ENTER_MS)) + scaleIn(initialScale = TAG_CHIP_SCALE_FROM, animationSpec = tween(TAG_CHIP_ENTER_MS)))
-                            .togetherWith(fadeOut(tween(TAG_CHIP_EXIT_MS)) + scaleOut(targetScale = TAG_CHIP_SCALE_FROM, animationSpec = tween(TAG_CHIP_EXIT_MS)))
-                    },
-                    label = "tag-slot-$slot",
-                ) { tag ->
-                    if (tag != null) TagChip(tag)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .testTag(TAG_RAIL_TEST_TAG),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            visibleRail.forEach { chip ->
+                key(chip.tag) {
+                    TagRailChipView(chip = chip, onRemove = { onRemove(chip.tag) }, onTapBody = { onRequestSwap(chip.tag) })
                 }
             }
+            AddTagChip(onClick = onRequestAdd)
         }
+        Spacer(modifier = Modifier.height(6.dp))
+        FilingDestinationRibbon(destination = destination)
     }
 }
 
 /** Test-only anchor for the keyless tags-slot message (bead vn-edu.46). */
 const val REGISTER_KEY_MESSAGE_TEST_TAG = "recording_register_key_message"
 
-private const val MAX_DISPLAYED_TAG_SLOTS = 3
-private const val TAG_CHIP_ENTER_MS = 220
-private const val TAG_CHIP_EXIT_MS = 160
-private const val TAG_CHIP_SCALE_FROM = 0.85f
+/** Test-only anchors for the tag rail's parts (bead asn-45m). */
+const val TAG_RAIL_TEST_TAG = "recording_tag_rail"
+const val TAG_RAIL_CHIP_SUGGESTED_TEST_TAG = "recording_tag_rail_chip_suggested"
+const val TAG_RAIL_CHIP_USER_TEST_TAG = "recording_tag_rail_chip_user"
+const val TAG_RAIL_ADD_CHIP_TEST_TAG = "recording_tag_rail_add_chip"
+const val FILING_DESTINATION_RIBBON_TEST_TAG = "recording_filing_destination_ribbon"
 
 /**
- * Bead vn-edu.47: a tree-anchored scorer's rare new-topic proposal
- * ([DisplayedTag.isProposal]) renders visually subtle -- a dashed border
- * rather than [TagChip]'s normal solid-fill chip -- so it reads as "not
- * confirmed yet" without the STOP-adjacent glance screen needing any extra
- * text to explain why. A tree-matched or legacy free-form tag (the vast
- * majority) is unaffected. [PROPOSAL_TAG_CHIP_TEST_TAG]/[MATCHED_TAG_CHIP_TEST_TAG]
- * let a Robolectric test assert on this distinction without needing pixel
- * comparison of the dashed stroke itself.
+ * One rendered rail chip: outlined for [RailChipSource.SUGGESTED], filled
+ * (tinted background, bold text) for [RailChipSource.USER] -- the bead's
+ * exact two-state spec. Tapping the tag text requests a swap ([onTapBody]);
+ * tapping the ✕ removes the chip ([onRemove]).
+ *
+ * [onTapBody]'s `clickable` and [onRemove]'s `clickable` are **siblings**
+ * inside a plain (non-clickable) outer [Row] -- deliberately NOT one nested
+ * inside the other. Nesting two `clickable`s (the outer wrapping the whole
+ * chip body, the inner just the ✕) looked equivalent on paper -- the ✕'s
+ * bounds don't geometrically overlap the tag text's -- but empirically broke
+ * the outer tap entirely: any tap inside a chip with a nested clickable
+ * descendant got swallowed by the inner one's gesture arbitration regardless
+ * of where it actually landed (confirmed via [RecordingScreenTagRailTest]
+ * while chasing that exact failure). Two sibling `clickable`s under a
+ * shared plain container is the same shape Material3's own chip components
+ * (`InputChip`'s trailing icon, etc.) use for this identical "tap body vs.
+ * tap the small trailing icon" pattern, and it doesn't have this problem.
  */
 @Composable
-private fun TagChip(tag: DisplayedTag) {
-    val (fontSize, verticalPadding) = when (tag.tier) {
-        TagTier.PRIMARY -> 18.sp to 10.dp
-        TagTier.SECONDARY -> 15.sp to 8.dp
-        TagTier.TERTIARY -> 13.sp to 6.dp
-    }
+private fun TagRailChipView(chip: TagRailChip, onRemove: () -> Unit, onTapBody: () -> Unit) {
     val shape = RoundedCornerShape(999.dp)
-    val proposalBorderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-    val proposalBorder = Modifier.drawWithContent {
-        drawContent()
-        drawRoundRect(
-            color = proposalBorderColor,
-            cornerRadius = CornerRadius(size.minDimension / 2f),
-            style = Stroke(width = PROPOSAL_BORDER_WIDTH_DP.dp.toPx(), pathEffect = PathEffect.dashPathEffect(PROPOSAL_DASH_PATTERN)),
-        )
-    }
-    Box(
+    val filled = chip.source == RailChipSource.USER
+    val borderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+    val backgroundColor = if (filled) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color.Transparent
+    val contentColor = if (filled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .background(MaterialTheme.colorScheme.surfaceVariant, shape)
-            .then(if (tag.isProposal) proposalBorder else Modifier)
-            .testTag(if (tag.isProposal) PROPOSAL_TAG_CHIP_TEST_TAG else MATCHED_TAG_CHIP_TEST_TAG)
-            .padding(horizontal = 14.dp, vertical = verticalPadding),
+            .background(backgroundColor, shape)
+            .border(1.dp, borderColor, shape)
+            .testTag(if (filled) TAG_RAIL_CHIP_USER_TEST_TAG else TAG_RAIL_CHIP_SUGGESTED_TEST_TAG)
+            .padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 6.dp),
     ) {
         Text(
-            text = tag.tag,
-            fontSize = fontSize,
-            fontWeight = FontWeight.Medium,
+            text = chip.tag,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (filled) FontWeight.Bold else FontWeight.Medium,
+            color = contentColor,
+            modifier = Modifier.clickable(onClick = onTapBody),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Box(
+            modifier = Modifier
+                .clickable(onClick = onRemove)
+                .semantics { contentDescription = "Remove ${chip.tag}" }
+                .padding(4.dp),
+        ) {
+            Text(text = "✕", style = MaterialTheme.typography.labelLarge, color = contentColor)
+        }
+    }
+}
+
+/** The rail's trailing (+) chip -- opens the tag-tree picker in "add" mode. */
+@Composable
+private fun AddTagChip(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .border(1.dp, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .testTag(TAG_RAIL_ADD_CHIP_TEST_TAG)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Text(
+            text = "+",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
 
-/** Test-only anchors for [TagChip]'s proposal-vs-matched styling (bead vn-edu.47). */
-const val PROPOSAL_TAG_CHIP_TEST_TAG = "recording_tag_chip_proposal"
-const val MATCHED_TAG_CHIP_TEST_TAG = "recording_tag_chip_matched"
-private const val PROPOSAL_BORDER_WIDTH_DP = 1.5f
-private val PROPOSAL_DASH_PATTERN = floatArrayOf(9f, 6f)
+/**
+ * "Filing to: <destination>" (bead asn-45m) -- [destination] is already
+ * fully resolved by the caller ([TagFilingDestination.destinationFor]); this
+ * composable only renders it.
+ */
+@Composable
+private fun FilingDestinationRibbon(destination: String) {
+    Text(
+        text = "Filing to: $destination",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+        modifier = Modifier.fillMaxWidth().testTag(FILING_DESTINATION_RIBBON_TEST_TAG),
+    )
+}
 
 /**
  * Large, deep-red STOP control rendered as an inset rounded button rather
@@ -773,19 +856,19 @@ private fun LoudnessMeterBarPreviewLoud() {
     }
 }
 
-/** Synthetic tag chips, most confident first, for the bottom-of-screen preview below. */
-private fun syntheticTags(): List<DisplayedTag> = listOf(
-    DisplayedTag("budget", 0.9, rank = 1, tier = TagTier.PRIMARY),
-    DisplayedTag("timeline", 0.65, rank = 2, tier = TagTier.SECONDARY),
-    DisplayedTag("vendor", 0.55, rank = 3, tier = TagTier.SECONDARY),
+/** Synthetic rail chips -- one suggested, one user-confirmed -- for the previews below (bead asn-45m). */
+private fun syntheticRailChips(): List<TagRailChip> = listOf(
+    TagRailChip("budget", tagId = null, source = RailChipSource.USER),
+    TagRailChip("timeline", tagId = null, source = RailChipSource.SUGGESTED),
 )
 
 /**
- * Preview-only: the bottom of [RecordingScreen] -- topic chips, the air gap
- * below them, and the STOP control -- rendered standalone at phone-bottom
- * proportions (bead vn-edu.32) so the inset-rounded-button treatment (margins,
- * corner radius, clearance from the gesture-nav inset) can be inspected
- * without needing the full recording state or a device.
+ * Preview-only: the bottom of [RecordingScreen] -- the tag rail + filing
+ * ribbon, the air gap below them, and the STOP control -- rendered
+ * standalone at phone-bottom proportions (bead vn-edu.32) so the
+ * inset-rounded-button treatment (margins, corner radius, clearance from the
+ * gesture-nav inset) can be inspected without needing the full recording
+ * state or a device.
  */
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 280)
 @Composable
@@ -796,7 +879,7 @@ private fun StopBarPreview() {
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
                 verticalArrangement = Arrangement.Bottom,
             ) {
-                TagChipsRow(tags = syntheticTags(), anthropicKeyConfigured = true)
+                TagRailSection(rail = syntheticRailChips(), anthropicKeyConfigured = true, destination = "notes/budget.md")
                 Spacer(modifier = Modifier.height(24.dp))
             }
             StopBar(modifier = Modifier.weight(1f), onClick = {})
@@ -847,7 +930,7 @@ private fun LiveTranscriptPaneOverlongPreview() {
             Spacer(modifier = Modifier.height(16.dp))
             LiveTranscriptPane(transcript = transcript, assemblyKeyConfigured = true, modifier = Modifier.weight(1f))
             Spacer(modifier = Modifier.height(16.dp))
-            TagChipsRow(tags = syntheticTags(), anthropicKeyConfigured = true)
+            TagRailSection(rail = syntheticRailChips(), anthropicKeyConfigured = true, destination = "notes/budget.md")
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
@@ -887,7 +970,7 @@ private fun LiveTranscriptPaneGiantPartialPreview() {
             Spacer(modifier = Modifier.height(16.dp))
             LiveTranscriptPane(transcript = transcript, assemblyKeyConfigured = true, modifier = Modifier.weight(1f))
             Spacer(modifier = Modifier.height(16.dp))
-            TagChipsRow(tags = syntheticTags(), anthropicKeyConfigured = true)
+            TagRailSection(rail = syntheticRailChips(), anthropicKeyConfigured = true, destination = "notes/budget.md")
             Spacer(modifier = Modifier.height(24.dp))
         }
     }

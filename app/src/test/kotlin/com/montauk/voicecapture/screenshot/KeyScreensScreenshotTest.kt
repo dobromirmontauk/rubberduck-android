@@ -8,7 +8,8 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
-import com.montauk.voicecapture.service.TagsStateHolder
+import com.montauk.voicecapture.service.TagRailStateHolder
+import com.montauk.voicecapture.service.TagTreeStateHolder
 import com.montauk.voicecapture.service.TranscriptLine
 import com.montauk.voicecapture.service.TranscriptStateHolder
 import com.montauk.voicecapture.service.TranscriptUiState
@@ -18,8 +19,8 @@ import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.session.RemovalAction
 import com.montauk.voicecapture.session.UploadState
 import com.montauk.voicecapture.stt.SttConnectionState
-import com.montauk.voicecapture.tags.DisplayedTag
-import com.montauk.voicecapture.tags.TagTier
+import com.montauk.voicecapture.tags.RailChipSource
+import com.montauk.voicecapture.tags.TagRailChip
 import com.montauk.voicecapture.testutil.SessionFixtures
 import com.montauk.voicecapture.ui.AppNavHost
 import com.montauk.voicecapture.ui.Routes
@@ -86,7 +87,8 @@ class KeyScreensScreenshotTest {
         app = ApplicationProvider.getApplicationContext()
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
-        TagsStateHolder.reset()
+        TagRailStateHolder.reset()
+        TagTreeStateHolder.reset()
         // Process-global singleton (bead asn-638) -- reset explicitly rather
         // than relying on Robolectric's per-test static sandboxing, same
         // belt-and-suspenders as SessionSwipeInteractionTest.
@@ -206,14 +208,19 @@ class KeyScreensScreenshotTest {
         }
         // Bead vn-edu.38: tag chips no longer derive synchronously from
         // TranscriptStateHolder inside the composable (the way the old
-        // TopicCloud-based chips did) -- they come from TagsStateHolder,
-        // which only RecordingService's TagCoordinator pipeline populates.
+        // TopicCloud-based chips did) -- they come from a StateHolder only
+        // RecordingService's TagCoordinator/TagChipRail pipeline populates.
         // No such pipeline runs in this Robolectric render, so this golden
-        // seeds fixed tags directly, matching the transcript fixture above.
-        TagsStateHolder.update(
+        // seeds the rail directly, matching the transcript fixture above.
+        // Bead asn-45m: one USER (filled) chip and one SUGGESTED (outlined)
+        // chip -- shows both rail states, plus the ribbon underneath deriving
+        // from the USER chip (the rail's primary) since it's a free-form tag
+        // (no tagId, no vault configured in this golden -- see setUp's
+        // isSignedOut = true) it slugifies straight to "notes/kitchen-remodel.md".
+        TagRailStateHolder.update(
             listOf(
-                DisplayedTag("kitchen remodel", 0.92, rank = 1, tier = TagTier.PRIMARY),
-                DisplayedTag("budget", 0.7, rank = 2, tier = TagTier.SECONDARY),
+                TagRailChip("kitchen remodel", source = RailChipSource.USER),
+                TagRailChip("budget", source = RailChipSource.SUGGESTED),
             ),
         )
 

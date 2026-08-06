@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
+import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
@@ -32,9 +33,16 @@ import org.robolectric.annotation.Config
  * instead of the Anthropic key. Drives the real nav graph ([AppNavHost])
  * rather than [RecordingScreen] in isolation so the deep link's destination
  * is actually verified.
+ *
+ * Bead asn-45m: pinned to [RobolectricDeviceQualifiers.Pixel7] (matching
+ * [LiveTranscriptPaneWordFinalityTest]/[LiveTranscriptPaneOverlongPartialTest],
+ * which exercise this same pane) rather than Robolectric's unqualified
+ * default window -- the new tag rail + filing ribbon above the transcript
+ * pane push its `weight(1f)` allotment to zero height on that tiny default,
+ * which no real device this app ships on is anywhere close to.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], qualifiers = RobolectricDeviceQualifiers.Pixel7)
 class RecordingScreenTranscriptSlotTest {
 
     @get:Rule
@@ -48,9 +56,13 @@ class RecordingScreenTranscriptSlotTest {
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
         TagsStateHolder.reset()
-        // Fresh Robolectric app: userAssemblyAiKey is null and there's no
-        // local.properties baked into this test JVM's BuildConfig, so the
-        // effective key is already blank -- explicit anyway for clarity/intent.
+        // isSignedOut = true forces every effective*() getter (including
+        // effectiveAssemblyKey) to blank regardless of what BuildConfig was
+        // compiled with -- a machine whose local.properties carries a real
+        // assemblyai.apiKey would otherwise make "keyless" tests here
+        // spuriously see a configured key. userAssemblyAiKey = null on top
+        // is redundant with isSignedOut alone but kept for clarity/intent.
+        app.secretsStore.isSignedOut = true
         app.secretsStore.userAssemblyAiKey = null
     }
 
@@ -108,6 +120,7 @@ class RecordingScreenTranscriptSlotTest {
 
     @Test
     fun `a configured AssemblyAI key shows the normal Listening placeholder, not the keyless message`() {
+        app.secretsStore.isSignedOut = false
         app.secretsStore.userAssemblyAiKey = "assemblyai-configured-test-key"
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
 
@@ -122,6 +135,7 @@ class RecordingScreenTranscriptSlotTest {
 
     @Test
     fun `a configured AssemblyAI key with a real final line renders it, not the keyless message`() {
+        app.secretsStore.isSignedOut = false
         app.secretsStore.userAssemblyAiKey = "assemblyai-configured-test-key"
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
         TranscriptStateHolder.update {
