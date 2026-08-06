@@ -1,16 +1,20 @@
 # Clay Duck Animation Pose Library — Manifest
 
-46 poses of the rubberduck mascot in the chosen "Style B" soft 3D / clay-render
+49 poses of the rubberduck mascot in the chosen "Style B" soft 3D / clay-render
 look (`design/duck-sheet-b-clay-3d.png`), organized as animation SEQUENCES
 rather than unrelated poses. Each sequence is a short loop or transition
 meant to be played back frame-by-frame in the app; deltas between consecutive
 frames within a sequence are intentionally SMALL (limb/eye/wing motion only —
 no camera changes, no palette changes, no proportion changes).
 
-Poses 01-40 were generated for vn-edu.65 (see below); poses 41-46 were added
-for asn-ek1 to fill three gaps identified on the behavior-map design board:
-writing on a notepad, cupping an ear to indicate "didn't catch that," and a
-standalone BRB sign prop.
+Poses 01-40 were generated for vn-edu.65 (see below); poses 41-49 were added
+for asn-ek1 to fill gaps identified on the behavior-map design board: writing
+on a notepad, cupping an ear to indicate "didn't catch that," an eager
+one-wing-raised "hand raise" pose, and a fully-asleep pause-state pose. An
+initial standalone BRB sign prop (41-46 numbering at the time) was generated
+and briefly landed on main, then dropped after a design-board revision
+removed it from scope — see the notes-scribble/ear-cup/hand-raise-eager/
+sleeping sequences below for what actually shipped.
 
 ## Shared character lock (repeat in every generation prompt)
 
@@ -40,7 +44,7 @@ with transparent corner pixels before landing (`scripts/verify_alpha.py`).
 
 ## File naming
 
-`NN-<sequence-slug>-<frame>.png` — `NN` is the running index (01-40, matches
+`NN-<sequence-slug>-<frame>.png` — `NN` is the running index (01-49, matches
 generation order); `<frame>` is zero-padded within its sequence.
 
 ## Sequences
@@ -142,19 +146,31 @@ and from thinking (wing rests at the beak, not the side of the head).
 - `44-ear-cup-01.png` — wing cupped to the side of the head, leaning in slightly, uncertain expression.
 - `45-ear-cup-02.png` — same pose held a beat longer, with a small "?" question-mark accent floating beside the head to clarify the "didn't catch that" read.
 
-### 16. BRB sign (1 frame) — standalone prop, no duck in frame
-A free-standing placard-on-a-stand prop in the same clay-render material and
-coral-orange accent color as the duck's beak/scarf, for use as a "be right
-back" state indicator without needing the character itself in frame.
+### 16. Hand raise eager (2 frames) — one-shot, eager "pick me" beat
+One wing shot straight up overhead, stiff and eager, like an excited student
+desperate to answer. Distinct silhouette from wing-flap (both wings, symmetric
+arc) and from wave (one wing beside the head, tipping side to side) — here a
+single wing goes straight up above the head and stays there.
 
-- `46-brb-sign-01.png` — small clay sign on a short stand, facing camera, bold rounded claymation-style "BRB" lettering, no duck or other character in frame.
+- `46-hand-raise-eager-01.png` — one wing shooting straight up overhead, big open-mouthed excited smile, eyes wide and bright, body leaning slightly forward and up with eagerness.
+- `47-hand-raise-eager-02.png` — same pose held at its peak, biggest happiest smile, character stays firmly grounded (no floating/jump, no sparkles — that look is reserved for the happy-bounce sequence).
+
+### 17. Sleeping (2 frames) — pause-state, fully-asleep hold
+The fully-committed "paused for a while" state. Both eyes are drawn fully
+CLOSED (simple curved eyelid lines, no pupils, no eye-white at all) — this is
+the key differentiator from the sleepy sequence (38-39), whose eyes stay
+open/heavy-lidded rather than shut. The body posture is also a distinctly
+lopsided slump (head resting against a raised wing, then sagging further),
+unlike sleepy's upright symmetric droop, so the two sequences read as clearly
+different states at a glance.
+
+- `48-sleeping-01.png` — head tipped to one side, resting against its own raised wing like a pillow, body leaning the same direction, eyes fully closed, beak soft and relaxed.
+- `49-sleeping-02.png` — one step deeper: the raised wing has gone limp and slipped down, head sagged further and lower with the chin near the chest, both wings now down at the sides, eyes still fully closed — a visibly deeper, more limp stage of sleep than frame 1.
 
 ## Generation + verification notes
 
 - Every call passes `design/duck-sheet-b-clay-3d.png` as `--ref` plus the shared
-  character-lock text above, so the character stays on-model across all poses
-  (the BRB sign prop, having no duck, uses a parallel prop-only lock instead of
-  the character lock — see `41-46` generation notes below).
+  character-lock text above, so the character stays on-model across all poses.
 - Frame-to-frame deltas are deliberately described as small motion increments
   within each sequence (not scene changes), per the animation-frame requirement.
 - After generation, `scripts/strip_bg.py` removes the white `#FFFFFF` backdrop
@@ -163,9 +179,26 @@ back" state indicator without needing the character itself in frame.
   transparent corner pixels before landing.
 - If a frame drifts off-model (wrong palette, wrong proportions, extra
   limbs/props), it is regenerated individually rather than accepted — this is
-  logged in the commit message / report, not silently shipped. (Frame
-  `43-notes-scribble-03.png` was regenerated once for asn-ek1: the first pass
-  moved the wing/pencil up toward the chin and widened the eyes, breaking
-  continuity with frames 41-42; the second pass added the frame-42 output
-  itself as an extra `--ref` alongside the duck-sheet reference to lock the
-  pose, which fixed it.)
+  logged in the commit message / report, not silently shipped. Regenerations
+  during asn-ek1:
+  - `43-notes-scribble-03.png` — the first pass moved the wing/pencil up
+    toward the chin and widened the eyes, breaking continuity with frames
+    41-42; regenerated with the frame-42 output added as an extra `--ref`
+    alongside the duck-sheet reference to lock the pose, which fixed it.
+  - `47-hand-raise-eager-02.png` — the first pass drifted into a full
+    airborne jump with sparkle accents, overlapping visually with the
+    happy-bounce sequence; regenerated with an explicit "stay grounded, no
+    sparkles" instruction.
+  - `48-49-sleeping-*.png` — the first pass used heavy-lidded-but-open eyes
+    (too close to the existing sleepy sequence) and, for frame 2, a floating
+    coral "zzz" accent; the eyes were fixed by explicitly requiring fully
+    closed curved-eyelid-only eyes with no pupils, and the zzz accent was
+    dropped after `scripts/strip_bg.py`'s rembg pass proved unreliable on
+    small disconnected floating props (it silently dropped or ghosted the
+    letters even at high contrast) — frame 2's differentiation instead comes
+    from the raised wing going limp and the head sagging further, a change
+    within the main connected body silhouette that mattes cleanly. A
+    standalone BRB sign prop (previously `46-brb-sign-01.png`) was generated,
+    verified, and landed in an earlier asn-ek1 commit, then removed after a
+    design-board scope revision dropped it — see git history for that asset
+    if it's ever needed again.
