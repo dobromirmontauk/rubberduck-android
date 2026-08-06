@@ -256,7 +256,7 @@ internal fun AutoPauseSection(
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).testTag(AUTO_PAUSE_TOGGLE_TEST_TAG),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -271,6 +271,7 @@ internal fun AutoPauseSection(
                     isEnabled = it
                     onEnabledChange(it)
                 },
+                modifier = Modifier.testTag(AUTO_PAUSE_TOGGLE_TEST_TAG),
             )
         }
         if (isEnabled) {
