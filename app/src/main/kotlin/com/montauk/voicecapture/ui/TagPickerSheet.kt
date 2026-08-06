@@ -24,7 +24,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.montauk.voicecapture.tags.TagTree
-import com.montauk.voicecapture.tags.TagTreeNode
 
 /**
  * Searchable tag-tree picker bottom sheet (bead asn-45m) shared by the
@@ -109,12 +108,3 @@ const val TAG_PICKER_SHEET_TEST_TAG = "tag_picker_sheet"
 const val TAG_PICKER_SEARCH_FIELD_TEST_TAG = "tag_picker_search_field"
 const val TAG_PICKER_RESULT_ROW_TEST_TAG = "tag_picker_result_row"
 const val TAG_PICKER_ADD_FREEFORM_TEST_TAG = "tag_picker_add_freeform_row"
-
-/** Exposed for previews/tests that want a small fixed tree without hitting [TagTree.EMPTY]'s no-results path. */
-internal fun previewTagTree(): TagTree = TagTree(
-    listOf(
-        TagTreeNode(id = "t_work", name = "work", parentId = null, description = "Professional life."),
-        TagTreeNode(id = "t_mashgin", name = "mashgin", parentId = "t_work", description = "Mashgin-specific work."),
-        TagTreeNode(id = "t_home", name = "home", parentId = null, description = "House projects."),
-    ),
-)
