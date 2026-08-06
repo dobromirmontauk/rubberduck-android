@@ -154,9 +154,8 @@ class VoiceCaptureApp : Application() {
 
     /**
      * Decoded text of a vault artifact under `sessions/<sessionId>/<filename>`
-     * (e.g. `organization.md`), disk-cached by [vaultSessionReader]. Unused
-     * by this bead's UI; left in place for vn-edu.57's Canonical/Filed-to
-     * tabs.
+     * (e.g. `organization.md`), disk-cached by [vaultSessionReader]. Backs
+     * bead vn-edu.57's Filed-under tab.
      */
     suspend fun fetchVaultSessionArtifact(sessionId: String, filename: String): String? = vaultSessionReader.fetchSessionArtifact(
         token = secretsStore.effectiveGithubToken(BuildConfig.GITHUB_TOKEN),

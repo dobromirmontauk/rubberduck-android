@@ -10,9 +10,9 @@ import com.montauk.voicecapture.vault.VaultSessionSource
  * [integratedSessionIds] defaults to empty (nothing integrated); pass a
  * non-empty set to simulate a vault listing hit for those ids.
  *
- * [artifacts] (bead vn-edu.57, Canonical/Filed-to tabs) is a
+ * [artifacts] (bead vn-edu.57, Filed-under tab) is a
  * `"<sessionId>/<filename>"`-keyed map of fake artifact bytes -- e.g.
- * `"2026-08-05_0005_guem/transcript.json" to fixtureBytes`. A lookup miss
+ * `"2026-08-05_0005_guem/organization.json" to fixtureBytes`. A lookup miss
  * returns null, same as [com.montauk.voicecapture.vault.GitHubVaultSessionSource]'s
  * "doesn't exist or fetch failed" contract.
  */

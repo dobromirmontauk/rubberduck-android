@@ -57,8 +57,6 @@ import com.montauk.voicecapture.session.SessionStatusResolver
 import com.montauk.voicecapture.session.UploadState
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 import com.montauk.voicecapture.upload.UploadWorker
-import com.montauk.voicecapture.vault.CanonicalTranscript
-import com.montauk.voicecapture.vault.CanonicalTranscriptParser
 import com.montauk.voicecapture.vault.FiledToRenderModel
 import com.montauk.voicecapture.vault.OrganizationDocument
 import com.montauk.voicecapture.vault.OrganizationDocumentParser
@@ -68,18 +66,20 @@ import com.montauk.voicecapture.vault.OrganizationUnassignedSpan
 import java.io.File
 
 private enum class DetailTab(val label: String) {
-    LIVE_TEXT("Live text"),
-    CANONICAL("Canonical"),
-    FILED_TO("Filed to"),
+    TRANSCRIPT("Transcript"),
+    FILED_TO("Filed under…"),
 }
 
 /**
- * Session detail: header, audio playback, a Live text / Canonical / Filed to
- * tab set, and Re-upload / Share audio actions. Canonical (`transcript.json`)
- * and Filed to (`organization.json`/`organization.md`) are fed lazily from
- * the vault on first tab open (bead vn-edu.57) -- see [CanonicalTab] and
- * [FiledToTab] for the placeholder/loading/loaded state machine, keyed off
- * [SessionStatus] from [SessionStatusResolver].
+ * Session detail: header, audio playback, a Transcript / Filed under… tab
+ * set, and Re-upload / Share audio actions. Transcript is this app's own
+ * live-recorded transcript -- always available locally, no vault fetch --
+ * and is the canonical transcript product-wide as of bead vn-edu.60 (the
+ * pass-2 server-side `transcript.json` pipeline it used to sit alongside,
+ * behind the old "Canonical" tab, is retired). Filed under… is fed lazily
+ * from the vault on first tab open (bead vn-edu.57; processing_summary added
+ * vn-edu.60) -- see [FiledToTab] for the placeholder/loading/loaded state
+ * machine, keyed off [SessionStatus] from [SessionStatusResolver].
  */
 @Composable
 fun SessionDetailScreen(sessionId: String, onBack: () -> Unit) {
@@ -89,7 +89,7 @@ fun SessionDetailScreen(sessionId: String, onBack: () -> Unit) {
     var meta by remember { mutableStateOf<SessionMeta?>(null) }
     var transcriptLines by remember { mutableStateOf<List<LiveTranscriptLine>>(emptyList()) }
     var uploadState by remember { mutableStateOf(UploadState.LOCAL) }
-    var selectedTab by remember { mutableStateOf(DetailTab.LIVE_TEXT) }
+    var selectedTab by remember { mutableStateOf(DetailTab.TRANSCRIPT) }
     // Bead vn-edu.55: "Delete from phone" confirm state -- see ActionsRow.
     var showDeleteDialog by remember { mutableStateOf(false) }
 
@@ -98,8 +98,6 @@ fun SessionDetailScreen(sessionId: String, onBack: () -> Unit) {
     // resolution lands (rare, but possible on a slow vault fetch) shows a
     // loading indicator rather than briefly flashing a wrong placeholder.
     var sessionStatus by remember { mutableStateOf<SessionStatus?>(null) }
-    var canonicalTranscript by remember { mutableStateOf<CanonicalTranscript?>(null) }
-    var canonicalLoadFailed by remember { mutableStateOf(false) }
     var filedToModel by remember { mutableStateOf<FiledToRenderModel?>(null) }
 
     LaunchedEffect(sessionId) {
@@ -129,25 +127,16 @@ fun SessionDetailScreen(sessionId: String, onBack: () -> Unit) {
         }
     }
 
-    // Bead vn-edu.57: lazy-fetch the Canonical/Filed-to artifacts on first
-    // open of that tab, keyed on [sessionStatus] too so a tab tapped before
-    // the effect above resolves it re-fires once the real status lands.
-    // Each artifact is fetched at most once per screen visit -- the null/
-    // failure guards below skip a re-fetch on every later tab revisit.
+    // Bead vn-edu.57: lazy-fetch the Filed-under artifacts on first open of
+    // that tab, keyed on [sessionStatus] too so a tab tapped before the
+    // effect above resolves it re-fires once the real status lands. Fetched
+    // at most once per screen visit -- the null guard below skips a re-fetch
+    // on every later tab revisit. Transcript needs no fetch at all -- it's
+    // this app's own already-local transcript (bead vn-edu.60).
     LaunchedEffect(selectedTab, sessionId, sessionStatus) {
         val status = sessionStatus ?: return@LaunchedEffect
         if (status != SessionStatus.INTEGRATED) return@LaunchedEffect
         when (selectedTab) {
-            DetailTab.CANONICAL -> {
-                if (canonicalTranscript == null && !canonicalLoadFailed) {
-                    val text = app.fetchVaultSessionArtifact(sessionId, "transcript.json")
-                    if (text != null) {
-                        canonicalTranscript = CanonicalTranscriptParser.parse(text)
-                    } else {
-                        canonicalLoadFailed = true
-                    }
-                }
-            }
             DetailTab.FILED_TO -> {
                 if (filedToModel == null) {
                     val jsonText = app.fetchVaultSessionArtifact(sessionId, "organization.json")
@@ -162,7 +151,7 @@ fun SessionDetailScreen(sessionId: String, onBack: () -> Unit) {
                     filedToModel = FiledToRenderModel.from(jsonText, mdText)
                 }
             }
-            DetailTab.LIVE_TEXT -> Unit
+            DetailTab.TRANSCRIPT -> Unit
         }
     }
 
@@ -192,8 +181,7 @@ fun SessionDetailScreen(sessionId: String, onBack: () -> Unit) {
                 Spacer(modifier = Modifier.height(12.dp))
                 Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     when (selectedTab) {
-                        DetailTab.LIVE_TEXT -> LiveTextTab(transcriptLines)
-                        DetailTab.CANONICAL -> CanonicalTab(sessionStatus, canonicalTranscript, canonicalLoadFailed)
+                        DetailTab.TRANSCRIPT -> TranscriptTab(transcriptLines)
                         DetailTab.FILED_TO -> FiledToTab(sessionStatus, filedToModel)
                     }
                 }
@@ -289,7 +277,7 @@ private fun AudioPlaybackRow(oggFile: File) {
 }
 
 @Composable
-private fun LiveTextTab(lines: List<LiveTranscriptLine>) {
+private fun TranscriptTab(lines: List<LiveTranscriptLine>) {
     if (lines.isEmpty()) {
         Text(
             text = "No live transcript",
@@ -334,57 +322,13 @@ private fun LoadingTab() {
 }
 
 /**
- * Canonical tab (bead vn-edu.57): [status] null means "not yet resolved"
+ * Filed-under tab (bead vn-edu.57): [status] null means "not yet resolved"
  * (show a spinner); a non-null [DetailTabPlaceholder.forStatus] result means
  * the session isn't INTEGRATED yet (show that truthful placeholder);
- * otherwise this is INTEGRATED and either mid-fetch ([transcript] still
- * null), failed ([loadFailed]), or ready to render.
- */
-@Composable
-private fun CanonicalTab(status: SessionStatus?, transcript: CanonicalTranscript?, loadFailed: Boolean) {
-    val placeholder = status?.let { DetailTabPlaceholder.forStatus(it) }
-    when {
-        status == null -> LoadingTab()
-        placeholder != null -> StubTab(placeholder)
-        loadFailed -> StubTab(DetailTabPlaceholder.LOAD_FAILED)
-        transcript == null -> LoadingTab()
-        transcript.utterances.isEmpty() -> StubTab("No transcript content")
-        else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(transcript.utterances) { utterance ->
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (!utterance.speaker.isNullOrBlank()) {
-                            Text(
-                                text = "Speaker ${utterance.speaker}",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                        }
-                        Text(
-                            text = formatTranscriptTimestamp(utterance.t0Ms),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = utterance.text,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * Filed-to tab (bead vn-edu.57): same not-yet-resolved / placeholder /
- * loading contract as [CanonicalTab], then dispatches on [FiledToRenderModel]
- * -- structured fragment cards for a post-schema session, raw markdown for a
- * pre-schema (legacy) one, or a load-failed message when neither artifact
- * came back.
+ * otherwise this dispatches on [FiledToRenderModel] -- a processing-summary
+ * lead-in plus structured fragment cards for a post-schema session (bead
+ * vn-edu.60), raw markdown for a pre-schema (legacy) one, or a load-failed
+ * message when neither artifact came back.
  */
 @Composable
 private fun FiledToTab(status: SessionStatus?, model: FiledToRenderModel?) {
@@ -427,8 +371,33 @@ private fun StructuredFiledToTab(document: OrganizationDocument) {
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        ProcessingSummarySection(document.processingSummary)
         document.fragments.forEach { fragment -> FragmentCard(fragment) }
         FiledToFooter(document.unassignedSpans, document.totals)
+    }
+}
+
+/**
+ * Leads the Filed-under tab (bead vn-edu.60): the organize pipeline's own
+ * few-sentence account of how it processed the session, or -- for any
+ * session organized before `processing_summary` existed -- a subtle caption
+ * making that absence explicit rather than silently skipping straight to
+ * the destination detail below.
+ */
+@Composable
+private fun ProcessingSummarySection(summary: String?) {
+    if (!summary.isNullOrBlank()) {
+        Text(
+            text = summary,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+    } else {
+        Text(
+            text = "No summary recorded",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

@@ -14,9 +14,9 @@ data class CachedVaultSessions(val sessionIds: Set<String>, val fetchedAtMs: Lon
  * knows how.
  *
  * Also caches individual vault artifact bytes fetched via
- * [VaultSessionSource.fetchArtifact] (left in place for vn-edu.57's
- * Canonical/Filed-to tabs), keyed by session id + filename under a separate
- * `artifacts/` subdirectory so they don't collide with the ids listing.
+ * [VaultSessionSource.fetchArtifact] (bead vn-edu.57's Filed-under tab),
+ * keyed by session id + filename under a separate `artifacts/` subdirectory
+ * so they don't collide with the ids listing.
  */
 class VaultSessionCache(private val cacheDir: File) {
     private val idsFile = File(cacheDir, "vault-sessions.ids")

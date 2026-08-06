@@ -33,7 +33,7 @@ data class VaultSessionSnapshot(
  * throttle here), and a session graduating to INTEGRATED is exactly the
  * kind of change a user re-opening the screen wants to see promptly.
  * [fetchSessionArtifact] is unused by this bead's UI but exposed now for
- * vn-edu.57's Canonical/Filed-to tabs to build on.
+ * vn-edu.57's Filed-under tab to build on.
  */
 class VaultSessionReader(
     private val cache: VaultSessionCache,
@@ -67,8 +67,7 @@ class VaultSessionReader(
     /**
      * Decoded text of a vault artifact at `sessions/<sessionId>/<filename>`
      * (e.g. `organization.md`), disk-cached by [VaultSessionCache] so a
-     * repeat or offline view doesn't need the network. Left for vn-edu.57;
-     * unused by this bead's UI.
+     * repeat or offline view doesn't need the network.
      */
     suspend fun fetchSessionArtifact(token: String, owner: String, repo: String, sessionId: String, filename: String): String? {
         if (token.isNotBlank()) {

@@ -1,8 +1,9 @@
 package com.montauk.voicecapture.session
 
 /**
- * Truthful placeholder copy for the Canonical/Filed-to tabs (bead vn-edu.57),
- * derived purely from a session's [SessionStatus] -- no I/O, no Compose.
+ * Truthful placeholder copy for the Filed-under tab (bead vn-edu.57; the
+ * Canonical tab this used to also cover was removed in vn-edu.60), derived
+ * purely from a session's [SessionStatus] -- no I/O, no Compose.
  * Keyless/signed-out never resolves to [SessionStatus.INTEGRATED] (see
  * [com.montauk.voicecapture.vault.VaultSessionReader.refresh]'s keyless-EMPTY
  * contract, threaded through [SessionStatusResolver]), so it falls out of

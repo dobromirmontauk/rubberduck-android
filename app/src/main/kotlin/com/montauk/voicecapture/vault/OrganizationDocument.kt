@@ -58,11 +58,19 @@ data class OrganizationTotals(
  * Decoded `sessions/<id>/organization.json` (bead vn-edu.57), per the schema
  * at `voice-vault/docs/organization-json.md` (vn-vlt.2). `restructure_candidates`
  * is intentionally not modelled -- it's provenance for a future human-driven
- * branch+PR, nothing the Filed-to tab renders.
+ * branch+PR, nothing the Filed-under tab renders.
+ *
+ * [processingSummary] (bead vn-edu.60) is a new optional top-level field --
+ * a few sentences the organize pipeline writes about how it processed the
+ * session. Absent on any session organized before this field existed, which
+ * is a normal, non-error case: [OrganizationDocumentParser.parse] normalizes
+ * a present-but-blank value to null too, so callers only ever have to handle
+ * "there's a summary" vs. "there isn't."
  */
 @Serializable
 data class OrganizationDocument(
     @SerialName("session_id") val sessionId: String = "",
+    @SerialName("processing_summary") val processingSummary: String? = null,
     val fragments: List<OrganizationFragment> = emptyList(),
     @SerialName("unassigned_spans") val unassignedSpans: List<OrganizationUnassignedSpan> = emptyList(),
     val totals: OrganizationTotals? = null,
@@ -80,6 +88,10 @@ object OrganizationDocumentParser {
 
     fun parse(raw: String?): OrganizationDocument? {
         if (raw.isNullOrBlank()) return null
-        return runCatching { json.decodeFromString<OrganizationDocument>(raw) }.getOrNull()
+        val decoded = runCatching { json.decodeFromString<OrganizationDocument>(raw) }.getOrNull() ?: return null
+        // A present-but-empty "processing_summary" is invalid, not a real
+        // (if terse) summary -- treat it exactly like the field being absent
+        // rather than rendering a blank line above the destination detail.
+        return if (decoded.processingSummary.isNullOrBlank()) decoded.copy(processingSummary = null) else decoded
     }
 }

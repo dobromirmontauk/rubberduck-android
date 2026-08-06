@@ -166,4 +166,46 @@ class OrganizationDocumentParserTest {
         // restructure_candidates isn't modelled -- parsing succeeding at all is the assertion.
         assertEquals(3, document.fragments.size)
     }
+
+    @Test
+    fun `a present processing_summary parses through verbatim`() {
+        val raw = """
+            {
+              "processing_summary": "Filed one Austin customer-visit fragment under work notes; the rest was unassigned chatter.",
+              "fragments": []
+            }
+        """.trimIndent()
+
+        val document = OrganizationDocumentParser.parse(raw)
+
+        requireNotNull(document)
+        assertEquals(
+            "Filed one Austin customer-visit fragment under work notes; the rest was unassigned chatter.",
+            document.processingSummary,
+        )
+    }
+
+    @Test
+    fun `an absent processing_summary parses to null`() {
+        val document = OrganizationDocumentParser.parse("""{"fragments": []}""")
+
+        requireNotNull(document)
+        assertNull(document.processingSummary)
+    }
+
+    @Test
+    fun `an empty-string processing_summary is invalid and normalizes to null`() {
+        val document = OrganizationDocumentParser.parse("""{"processing_summary": "", "fragments": []}""")
+
+        requireNotNull(document)
+        assertNull(document.processingSummary)
+    }
+
+    @Test
+    fun `a blank processing_summary normalizes to null the same as empty`() {
+        val document = OrganizationDocumentParser.parse("""{"processing_summary": "   ", "fragments": []}""")
+
+        requireNotNull(document)
+        assertNull(document.processingSummary)
+    }
 }
