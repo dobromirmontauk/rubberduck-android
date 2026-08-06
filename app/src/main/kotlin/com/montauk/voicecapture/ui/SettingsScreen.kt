@@ -49,6 +49,9 @@ import kotlinx.coroutines.launch
 /** Stable content-description/test-tag anchors so a deep link (e.g. the recording screen's keyless tags message, bead vn-edu.46) can be asserted against. */
 const val ANTHROPIC_KEY_ROW_TEST_TAG = "settings_anthropic_key_row"
 
+/** Same purpose as [ANTHROPIC_KEY_ROW_TEST_TAG], for the recording screen's keyless transcript-pane message (bead vn-edu.66). */
+const val ASSEMBLYAI_KEY_ROW_TEST_TAG = "settings_assemblyai_key_row"
+
 @Composable
 fun SettingsScreen(onRunSetupAgain: () -> Unit, onConnectGithub: () -> Unit) {
     val context = LocalContext.current
@@ -114,6 +117,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit, onConnectGithub: () -> Unit) {
                             if (e is AssemblyAiKeyError.Invalid) "That key didn't work" else "Couldn't reach AssemblyAI"
                         },
                         onSave = { key -> app.secretsStore.userAssemblyAiKey = key },
+                        modifier = Modifier.testTag(ASSEMBLYAI_KEY_ROW_TEST_TAG),
                         devFallbackActive = assemblyKeyState == CredentialDisplayState.DEV_FALLBACK,
                     )
                     Spacer(modifier = Modifier.height(12.dp))

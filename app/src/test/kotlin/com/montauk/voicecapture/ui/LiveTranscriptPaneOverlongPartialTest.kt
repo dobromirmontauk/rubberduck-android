@@ -5,7 +5,9 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
+import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
+import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
 import com.montauk.voicecapture.service.TranscriptStateHolder
@@ -63,6 +65,12 @@ class LiveTranscriptPaneOverlongPartialTest {
     fun setUp() {
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
+        // Bead vn-edu.66: the pane now gates on the effective AssemblyAI key
+        // -- this test's fixture implies a real CONNECTED session (it seeds
+        // currentPartial directly), so it needs a configured key or it would
+        // hit the new keyless message instead of the pane under test here.
+        val app: VoiceCaptureApp = ApplicationProvider.getApplicationContext()
+        app.secretsStore.userAssemblyAiKey = "assemblyai-configured-test-key"
     }
 
     @Test
