@@ -194,6 +194,7 @@ tasks.withType<Test>().configureEach {
         exclude("**/LiveTranscriptPaneOverlongPartialTest.class")
         exclude("**/LiveTranscriptPaneWordFinalityTest.class")
         exclude("**/RecordingScreenTagsSlotTest.class")
+        exclude("**/RecordingScreenTranscriptSlotTest.class")
         exclude("**/ApiKeyManagementRowTest.class")
         exclude("**/SettingsCredentialRowsTest.class")
         exclude("**/IntelligenceStepTest.class")

@@ -94,10 +94,13 @@ import kotlin.math.roundToInt
  * app's own bottom nav normally lives). No bottom nav here -- this screen is
  * meant to be readable at arm's length while walking.
  *
- * [onOpenSettings] (bead vn-edu.46 superseding decision) is invoked when the
- * keyless tags-slot message is tapped -- deep-links to Settings' "Word cloud
- * & titles" key row ([ANTHROPIC_KEY_ROW_TEST_TAG]) rather than opening any
- * dialog on this glance-mode screen.
+ * [onOpenSettings] (bead vn-edu.46 superseding decision, extended by
+ * vn-edu.66) is invoked when either keyless message is tapped: the tags-slot
+ * message deep-links to Settings' "Word cloud & titles" key row
+ * ([ANTHROPIC_KEY_ROW_TEST_TAG]), the transcript-pane message to its "Live
+ * transcription" key row ([ASSEMBLYAI_KEY_ROW_TEST_TAG]) -- both just
+ * navigate to [SettingsScreen] itself (no in-screen scroll target exists yet)
+ * rather than opening any dialog on this glance-mode screen.
  */
 @Composable
 fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> Unit = {}, onOpenSettings: () -> Unit = {}) {
@@ -108,6 +111,7 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
     val hasBluetoothMic = remember { hasBluetoothInputDevice(context) }
     val tags by TagsStateHolder.state.collectAsStateWithLifecycle()
     val anthropicKeyConfigured = app.isAnthropicKeyConfigured()
+    val assemblyKeyConfigured = app.isAssemblyKeyConfigured()
 
     VoiceCaptureTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -128,7 +132,12 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
                     Spacer(modifier = Modifier.height(16.dp))
                     ModeSwitcher(currentMode = recordingState.mode, onSelect = onSetMode)
                     Spacer(modifier = Modifier.height(16.dp))
-                    LiveTranscriptPane(transcript = transcript, modifier = Modifier.weight(1f))
+                    LiveTranscriptPane(
+                        transcript = transcript,
+                        assemblyKeyConfigured = assemblyKeyConfigured,
+                        onOpenSettings = onOpenSettings,
+                        modifier = Modifier.weight(1f),
+                    )
                     Spacer(modifier = Modifier.height(16.dp))
                     TagChipsRow(tags = tags, anthropicKeyConfigured = anthropicKeyConfigured, onRegisterKeyTapped = onOpenSettings)
                     // Extra air below the chips row (bead vn-edu.32) so the inset STOP
@@ -428,9 +437,39 @@ private fun LazyListLayoutInfo.isScrolledToNewest(): Boolean {
  * scroll-away. That keeps the pane pinned to newest by default, lets a
  * reader scroll up to reread something, and snaps back to live once they've
  * been idle for [TranscriptFollowState.DEFAULT_IDLE_MS].
+ *
+ * Bead vn-edu.66: when [assemblyKeyConfigured] is false, none of the above
+ * runs -- recording keeps capturing audio (per [com.montauk.voicecapture.stt.SttClientFactory],
+ * a keyless build gets [com.montauk.voicecapture.stt.NoOpStreamingSttClient],
+ * so [transcript] never gains a final line, partial, or even a silence hint
+ * from a live STT session) and this slot instead shows the exact string
+ * "(no transcription key)", dimmed and tappable via [onOpenSettings] --
+ * mirrors the tags-slot keyless message ([TagChipsRow]) so the reader
+ * understands *why* nothing is transcribing, distinct from "recording, key
+ * present, just no speech yet" (which still renders the normal
+ * "Listening…"/"(silence)" rows below via the unchanged keyed path).
  */
 @Composable
-private fun LiveTranscriptPane(transcript: TranscriptUiState, modifier: Modifier = Modifier) {
+private fun LiveTranscriptPane(
+    transcript: TranscriptUiState,
+    assemblyKeyConfigured: Boolean,
+    onOpenSettings: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    if (!assemblyKeyConfigured) {
+        Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.BottomStart) {
+            Text(
+                text = "(no transcription key)",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenSettings)
+                    .testTag(NO_TRANSCRIPTION_KEY_MESSAGE_TEST_TAG),
+            )
+        }
+        return
+    }
     val rows = remember(
         transcript.finalLines,
         transcript.currentPartial,
@@ -475,6 +514,9 @@ private fun LiveTranscriptPane(transcript: TranscriptUiState, modifier: Modifier
 
 /** Exposed for [com.montauk.voicecapture.ui.LiveTranscriptPaneOverlongPartialTest]'s geometric pinning assertions. */
 internal const val LIVE_TRANSCRIPT_PANE_TEST_TAG = "live-transcript-pane"
+
+/** Test-only anchor for the keyless transcript-pane message (bead vn-edu.66). */
+const val NO_TRANSCRIPTION_KEY_MESSAGE_TEST_TAG = "recording_no_transcription_key_message"
 
 @Composable
 private fun TranscriptRowText(row: TranscriptRow) {
@@ -803,7 +845,7 @@ private fun LiveTranscriptPaneOverlongPreview() {
             Spacer(modifier = Modifier.height(16.dp))
             ModeSwitcher(currentMode = RecordingMode.LISTEN, onSelect = {})
             Spacer(modifier = Modifier.height(16.dp))
-            LiveTranscriptPane(transcript = transcript, modifier = Modifier.weight(1f))
+            LiveTranscriptPane(transcript = transcript, assemblyKeyConfigured = true, modifier = Modifier.weight(1f))
             Spacer(modifier = Modifier.height(16.dp))
             TagChipsRow(tags = syntheticTags(), anthropicKeyConfigured = true)
             Spacer(modifier = Modifier.height(24.dp))
@@ -843,7 +885,7 @@ private fun LiveTranscriptPaneGiantPartialPreview() {
             Spacer(modifier = Modifier.height(16.dp))
             ModeSwitcher(currentMode = RecordingMode.LISTEN, onSelect = {})
             Spacer(modifier = Modifier.height(16.dp))
-            LiveTranscriptPane(transcript = transcript, modifier = Modifier.weight(1f))
+            LiveTranscriptPane(transcript = transcript, assemblyKeyConfigured = true, modifier = Modifier.weight(1f))
             Spacer(modifier = Modifier.height(16.dp))
             TagChipsRow(tags = syntheticTags(), anthropicKeyConfigured = true)
             Spacer(modifier = Modifier.height(24.dp))
