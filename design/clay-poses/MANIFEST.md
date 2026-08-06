@@ -1,11 +1,16 @@
 # Clay Duck Animation Pose Library — Manifest
 
-40 poses of the rubberduck mascot in the chosen "Style B" soft 3D / clay-render
+46 poses of the rubberduck mascot in the chosen "Style B" soft 3D / clay-render
 look (`design/duck-sheet-b-clay-3d.png`), organized as animation SEQUENCES
-rather than 40 unrelated poses. Each sequence is a short loop or transition
+rather than unrelated poses. Each sequence is a short loop or transition
 meant to be played back frame-by-frame in the app; deltas between consecutive
 frames within a sequence are intentionally SMALL (limb/eye/wing motion only —
 no camera changes, no palette changes, no proportion changes).
+
+Poses 01-40 were generated for vn-edu.65 (see below); poses 41-46 were added
+for asn-ek1 to fill three gaps identified on the behavior-map design board:
+writing on a notepad, cupping an ear to indicate "didn't catch that," and a
+standalone BRB sign prop.
 
 ## Shared character lock (repeat in every generation prompt)
 
@@ -23,12 +28,15 @@ Reference image passed on every generation call: `design/duck-sheet-b-clay-3d.pn
 
 ## Backdrop / transparency convention
 
-Every pose is generated on a **flat, uniform chroma-key green background**
-(`#00B140`, a color that never appears on the character) with soft neutral
-studio shadow only directly beneath the character's feet — no props, no floor
-line, no gradient. The background is stripped to alpha in a second pass (see
-`scripts/strip_bg.py`) and every output file is verified to be true RGBA with
-transparent corner pixels before landing.
+Every pose is generated on a **flat, uniform pure white background**
+(`#FFFFFF`) with soft neutral studio shadow only directly beneath the
+character's feet — no props, no floor line, no gradient. White was chosen
+over a green chroma-key backdrop because green bounce light visibly bakes
+into the matte clay surface; white does not tint the character. The
+background is removed in a second pass using `rembg` plus matting-formula
+spill decontamination against the known white backdrop (see
+`scripts/strip_bg.py`), and every output file is verified to be true RGBA
+with transparent corner pixels before landing (`scripts/verify_alpha.py`).
 
 ## File naming
 
@@ -117,15 +125,47 @@ A squash-stretch bounce of joy.
 ### 13. Challenge / devil's-advocate (1 frame) — mode-switcher state (feeds vn-edu.64)
 - `40-challenge-01.png` — skeptical pose distinct from all above: one eyebrow-equivalent line raised, eyes narrowed slightly, both wings crossed in front of the chest, beak in a flat/pursed skeptical line — the "playing devil's advocate" stance for Challenge mode.
 
+### 14. Notes scribble (3 frames) — loop, plays while jotting down a note
+Duck holding a small spiral notepad against its chest in one wing, writing on
+it with a short pencil held in the other wing. Distinct from the thinking
+sequence (wing at the beak, no props) and from wing-flap/wave (no held props).
+
+- `41-notes-scribble-01.png` — pencil tip just touching the top of the blank notepad page, about to write.
+- `42-notes-scribble-02.png` — same pose, pencil moved partway down the page, a few scribble marks now visible.
+- `43-notes-scribble-03.png` — same pose, denser scribble marks on the page than frame 2 — loops back to `41` (blank page) to restart the scribble loop.
+
+### 15. Ear cup / "didn't catch that" (2 frames) — one-shot, plays on STT lag or unclear input
+One wing raised and pressed to the side of the head near the ear, leaning
+slightly in — distinct silhouette from the sleepy pose (no raised wing there)
+and from thinking (wing rests at the beak, not the side of the head).
+
+- `44-ear-cup-01.png` — wing cupped to the side of the head, leaning in slightly, uncertain expression.
+- `45-ear-cup-02.png` — same pose held a beat longer, with a small "?" question-mark accent floating beside the head to clarify the "didn't catch that" read.
+
+### 16. BRB sign (1 frame) — standalone prop, no duck in frame
+A free-standing placard-on-a-stand prop in the same clay-render material and
+coral-orange accent color as the duck's beak/scarf, for use as a "be right
+back" state indicator without needing the character itself in frame.
+
+- `46-brb-sign-01.png` — small clay sign on a short stand, facing camera, bold rounded claymation-style "BRB" lettering, no duck or other character in frame.
+
 ## Generation + verification notes
 
 - Every call passes `design/duck-sheet-b-clay-3d.png` as `--ref` plus the shared
-  character-lock text above, so the character stays on-model across all 40 files.
+  character-lock text above, so the character stays on-model across all poses
+  (the BRB sign prop, having no duck, uses a parallel prop-only lock instead of
+  the character lock — see `41-46` generation notes below).
 - Frame-to-frame deltas are deliberately described as small motion increments
   within each sequence (not scene changes), per the animation-frame requirement.
-- After generation, `scripts/strip_bg.py` removes the `#00B140` backdrop and
-  writes true RGBA PNGs; `scripts/verify_alpha.py` checks every file has mode
-  `RGBA` and fully transparent corner pixels before landing.
+- After generation, `scripts/strip_bg.py` removes the white `#FFFFFF` backdrop
+  via `rembg` + matting decontamination and writes true RGBA PNGs;
+  `scripts/verify_alpha.py` checks every file has mode `RGBA` and fully
+  transparent corner pixels before landing.
 - If a frame drifts off-model (wrong palette, wrong proportions, extra
   limbs/props), it is regenerated individually rather than accepted — this is
-  logged in the commit message / report, not silently shipped.
+  logged in the commit message / report, not silently shipped. (Frame
+  `43-notes-scribble-03.png` was regenerated once for asn-ek1: the first pass
+  moved the wing/pencil up toward the chin and widened the eyes, breaking
+  continuity with frames 41-42; the second pass added the frame-42 output
+  itself as an extra `--ref` alongside the duck-sheet reference to lock the
+  pose, which fixed it.)
