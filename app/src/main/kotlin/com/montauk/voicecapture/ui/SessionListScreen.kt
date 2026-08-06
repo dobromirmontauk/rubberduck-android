@@ -31,8 +31,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingStateHolder
+import com.montauk.voicecapture.session.SessionStatusResolver
 import com.montauk.voicecapture.session.SessionSummary
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
+import com.montauk.voicecapture.vault.VaultSessionSnapshot
 import kotlinx.coroutines.delay
 
 private const val POST_STOP_POLL_ATTEMPTS = 8
@@ -43,6 +45,7 @@ fun SessionListScreen(onSessionClick: (String) -> Unit) {
     val context = LocalContext.current
     val recordingState by RecordingStateHolder.state.collectAsStateWithLifecycle()
     var sessions by remember { mutableStateOf<List<SessionSummary>>(emptyList()) }
+    var vaultSnapshot by remember { mutableStateOf(VaultSessionSnapshot.EMPTY) }
 
     // Re-reads on every fresh mount of this screen (including on navigation
     // back to it, since NavHost recomposes it fresh each time it re-enters
@@ -72,6 +75,17 @@ fun SessionListScreen(onSessionClick: (String) -> Unit) {
         sessions = app.sessionStore.listSessions()
     }
 
+    // Bead vn-edu.54: one vault-listing refresh per fresh mount of this
+    // screen (same "re-enters the back stack" trigger as the sessions read
+    // above) -- there's no pull-to-refresh affordance on this screen yet, so
+    // "screen entry" is the only refresh trigger today. Keyless/no-vault
+    // resolves to VaultSessionSnapshot.EMPTY inside the reader itself, so no
+    // separate connected-to-GitHub check is needed here.
+    LaunchedEffect(Unit) {
+        val app = context.applicationContext as VoiceCaptureApp
+        vaultSnapshot = app.currentVaultSessions()
+    }
+
     VoiceCaptureTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
@@ -93,6 +107,19 @@ fun SessionListScreen(onSessionClick: (String) -> Unit) {
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
+                // Bead vn-edu.54: only shown when a live refresh attempt was made
+                // and failed (offline/network error) and this snapshot came from
+                // the on-disk cache instead -- keyless/no-vault never sets `stale`
+                // (see VaultSessionReader.refresh), so no caption there either.
+                val staleAsOfMs = vaultSnapshot.asOfMs
+                if (vaultSnapshot.stale && staleAsOfMs != null) {
+                    Text(
+                        text = "Integration status as of ${formatAsOfTime(staleAsOfMs)}",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
                 if (sessions.isEmpty()) {
                     Text(
                         text = "No sessions yet",
@@ -102,7 +129,11 @@ fun SessionListScreen(onSessionClick: (String) -> Unit) {
                 } else {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(sessions, key = { it.sessionId }) { session ->
-                            SessionRow(session = session, onClick = { onSessionClick(session.sessionId) })
+                            SessionRow(
+                                session = session,
+                                integratedSessionIds = vaultSnapshot.integratedSessionIds,
+                                onClick = { onSessionClick(session.sessionId) },
+                            )
                         }
                     }
                 }
@@ -115,7 +146,7 @@ fun SessionListScreen(onSessionClick: (String) -> Unit) {
 // pure, stateless row with no Context/app dependency) so the vn-edu.33 Sessions-scaffold
 // preview in BottomNavBarPreview.kt can render real-looking rows from fixture data.
 @Composable
-internal fun SessionRow(session: SessionSummary, onClick: () -> Unit) {
+internal fun SessionRow(session: SessionSummary, integratedSessionIds: Set<String> = emptySet(), onClick: () -> Unit) {
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
@@ -145,7 +176,7 @@ internal fun SessionRow(session: SessionSummary, onClick: () -> Unit) {
                 )
             }
             Spacer(modifier = Modifier.width(12.dp))
-            UploadStateChip(session.uploadState)
+            SessionStatusChip(SessionStatusResolver.resolve(session.uploadState, session.sessionId, integratedSessionIds))
         }
     }
 }

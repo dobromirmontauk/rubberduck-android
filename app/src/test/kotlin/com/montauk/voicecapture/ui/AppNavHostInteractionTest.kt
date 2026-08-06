@@ -16,7 +16,11 @@ import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
 import com.montauk.voicecapture.service.TranscriptStateHolder
 import com.montauk.voicecapture.session.RecordingMode
+import com.montauk.voicecapture.testutil.FakeVaultSessionSource
 import com.montauk.voicecapture.testutil.SessionFixtures
+import com.montauk.voicecapture.vault.VaultSessionCache
+import com.montauk.voicecapture.vault.VaultSessionReader
+import java.io.File
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -63,6 +67,13 @@ class AppNavHostInteractionTest {
         // them explicitly rather than depending on that isolation.
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
+        // Bead vn-edu.54: SessionListScreen now fetches vault-integration
+        // status on every mount. connectedToGithubShowsLogOutTab below sets a
+        // (fake) non-blank GitHub token while rendering Routes.SESSIONS, which
+        // without this override would make a real, unmocked HTTPS call to
+        // GitHub's Contents API. Every test in this class gets a deterministic,
+        // no-network reader regardless of whether it touches sign-in state.
+        app.vaultSessionReader = VaultSessionReader(VaultSessionCache(File(app.cacheDir, "vault-session-cache-test")), FakeVaultSessionSource())
     }
 
     /** The bottom nav's tab for [label] -- distinguishes it from same-text screen headlines (e.g. "Sessions" / "Settings"). */

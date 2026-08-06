@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.montauk.voicecapture.session.SessionStatus
 import com.montauk.voicecapture.session.UploadState
 import com.montauk.voicecapture.stt.SttConnectionState
 
@@ -32,6 +33,22 @@ fun UploadStateChip(state: UploadState, modifier: Modifier = Modifier) {
         UploadState.LOCAL -> "LOCAL" to MaterialTheme.colorScheme.onSurfaceVariant
         UploadState.QUEUED -> "QUEUED" to Color(0xFFE8A33D)
         UploadState.UPLOADED -> "UPLOADED" to Color(0xFF5FBF6E)
+    }
+    StatusChip(label, color, modifier)
+}
+
+/**
+ * Sessions-screen row chip (bead vn-edu.54): same LOCAL/QUEUED/UPLOADED
+ * colors as [UploadStateChip], plus INTEGRATED in a distinct blue/violet so
+ * it reads as a step further along rather than another shade of "done."
+ */
+@Composable
+fun SessionStatusChip(status: SessionStatus, modifier: Modifier = Modifier) {
+    val (label, color) = when (status) {
+        SessionStatus.LOCAL -> "LOCAL" to MaterialTheme.colorScheme.onSurfaceVariant
+        SessionStatus.QUEUED -> "QUEUED" to Color(0xFFE8A33D)
+        SessionStatus.UPLOADED -> "UPLOADED" to Color(0xFF5FBF6E)
+        SessionStatus.INTEGRATED -> "INTEGRATED" to Color(0xFF7C7CF0)
     }
     StatusChip(label, color, modifier)
 }

@@ -18,6 +18,9 @@ import com.montauk.voicecapture.tags.TagTreeCache
 import com.montauk.voicecapture.tags.TagTreeRepository
 import com.montauk.voicecapture.upload.BundleUploader
 import com.montauk.voicecapture.upload.BundleUploaderFactory
+import com.montauk.voicecapture.vault.VaultSessionCache
+import com.montauk.voicecapture.vault.VaultSessionReader
+import com.montauk.voicecapture.vault.VaultSessionSnapshot
 import java.io.File
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
@@ -62,11 +65,33 @@ class VoiceCaptureApp : Application() {
      */
     private lateinit var tagTreeRepository: TagTreeRepository
 
+    /**
+     * Bead vn-edu.54: fetch/cache policy for the vault's `sessions/` listing,
+     * which drives Sessions-screen rows graduating from UPLOADED to
+     * INTEGRATED. Owned at the application level like [tagTreeRepository] so
+     * its on-disk cache outlives any single Sessions-screen visit. See
+     * [currentVaultSessions] and [fetchVaultSessionArtifact].
+     *
+     * `internal set` (friend-module access from `src/test`, same as any
+     * other Android unit-test source set) rather than `private set`: unlike
+     * [tagTreeRepository] -- only ever driven from [RecordingService], never
+     * started in a Robolectric test -- [SessionListScreen][com.montauk.voicecapture.ui.SessionListScreen]
+     * calls [currentVaultSessions] unconditionally on every mount, so any
+     * Compose interaction test that renders it with a non-blank effective
+     * GitHub token (e.g. a fake token set purely to test a nav-tab label)
+     * would otherwise make a real, unmocked HTTPS call to GitHub. Tests that
+     * don't care about vault status swap this for one backed by a fake,
+     * no-network [com.montauk.voicecapture.vault.VaultSessionSource] instead.
+     */
+    lateinit var vaultSessionReader: VaultSessionReader
+        internal set
+
     override fun onCreate() {
         super.onCreate()
         sessionStore = SessionStore(File(filesDir, "sessions"))
         secretsStore = AppSecretsStore(this)
         tagTreeRepository = TagTreeRepository(TagTreeCache(File(filesDir, "tag-tree-cache")))
+        vaultSessionReader = VaultSessionReader(VaultSessionCache(File(filesDir, "vault-session-cache")))
         refreshBundleUploader()
         recoverUnfinalizedSessions()
     }
@@ -102,6 +127,37 @@ class VoiceCaptureApp : Application() {
         token = secretsStore.effectiveGithubToken(BuildConfig.GITHUB_TOKEN),
         owner = secretsStore.selectedVaultOwner ?: BuildConfig.VAULT_OWNER,
         repo = secretsStore.selectedVaultRepo ?: BuildConfig.VAULT_REPO,
+    )
+
+    /**
+     * The vault's current organized-session listing (bead vn-edu.54),
+     * resolved against the same effective GitHub token/owner/repo
+     * [refreshBundleUploader] and [currentTagTree] use. A blank effective
+     * token (never signed in, signed out) resolves to
+     * [VaultSessionSnapshot.EMPTY] inside [vaultSessionReader] itself, so
+     * [ui.SessionListScreen][com.montauk.voicecapture.ui.SessionListScreen]
+     * doesn't need its own blank-token check before calling this. Never
+     * throws; a fetch failure degrades to the last on-disk cache (with
+     * [VaultSessionSnapshot.stale] set), or to EMPTY if there's no cache yet.
+     */
+    suspend fun currentVaultSessions(): VaultSessionSnapshot = vaultSessionReader.refresh(
+        token = secretsStore.effectiveGithubToken(BuildConfig.GITHUB_TOKEN),
+        owner = secretsStore.selectedVaultOwner ?: BuildConfig.VAULT_OWNER,
+        repo = secretsStore.selectedVaultRepo ?: BuildConfig.VAULT_REPO,
+    )
+
+    /**
+     * Decoded text of a vault artifact under `sessions/<sessionId>/<filename>`
+     * (e.g. `organization.md`), disk-cached by [vaultSessionReader]. Unused
+     * by this bead's UI; left in place for vn-edu.57's Canonical/Filed-to
+     * tabs.
+     */
+    suspend fun fetchVaultSessionArtifact(sessionId: String, filename: String): String? = vaultSessionReader.fetchSessionArtifact(
+        token = secretsStore.effectiveGithubToken(BuildConfig.GITHUB_TOKEN),
+        owner = secretsStore.selectedVaultOwner ?: BuildConfig.VAULT_OWNER,
+        repo = secretsStore.selectedVaultRepo ?: BuildConfig.VAULT_REPO,
+        sessionId = sessionId,
+        filename = filename,
     )
 
     /**
