@@ -12,8 +12,8 @@ package com.montauk.voicecapture.duck
  *   interrupted by a one-shot [BLINK_SEQUENCE] every [blinkEveryMs].
  * - **SLEEPY**: loops [SLEEPY_SEQUENCE] at the slower [sleepyFrameDurationMs]
  *   cadence (spec: "slow cadence").
- * - **THINKING**: loops [THINKING_SEQUENCE] ("taking notes" stand-in) at the
- *   normal [frameDurationMs] cadence, for as long as [state] stays THINKING.
+ * - **THINKING**: loops [THINKING_SEQUENCE] ("taking notes") at the normal
+ *   [frameDurationMs] cadence, for as long as [state] stays THINKING.
  * - **GONE_BRB**: no duck frame at all -- [tick] returns [DuckVisual.Brb].
  *
  * [triggerHappyBounce] layers a one-shot [HAPPY_BOUNCE_SEQUENCE] on top of

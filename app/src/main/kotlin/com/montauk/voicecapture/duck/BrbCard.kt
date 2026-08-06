@@ -1,56 +1,45 @@
 package com.montauk.voicecapture.duck
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.montauk.voicecapture.R
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 
 /**
- * Hand-drawn-style "BRB" sign card standing in for the duck while recording
- * is paused, either kind (bead asn-3sm) -- see [DuckAnimator]'s GONE_BRB
- * branch. A slight tilt and warm paper color are the only "hand-drawn" cues;
- * deliberately simple rather than an actual illustration asset.
+ * The claymation "BRB" sign prop (bead asn-ek1's `46-brb-sign-01.png`,
+ * closing the design board's asset-gap note) standing in for the duck while
+ * recording is paused, either kind (bead asn-3sm) -- see [DuckAnimator]'s
+ * GONE_BRB branch and the design board's "duck walks off (waddle), sign
+ * remains" framing. The duck itself doesn't walk off on-screen (no waddle
+ * transition is built this round -- see this bead's landing report); the
+ * card crossfades in directly. A slight tilt is the only added touch, to
+ * read as a sign someone actually planted rather than a flat overlay.
  */
 @Composable
 fun BrbCard(modifier: Modifier = Modifier) {
     Box(modifier = modifier.testTag(BRB_CARD_TEST_TAG), contentAlignment = Alignment.Center) {
-        Box(
+        Image(
+            painter = painterResource(R.drawable.duck_brb_sign),
+            contentDescription = "Back in a moment",
             modifier = Modifier
-                .rotate(BRB_CARD_TILT_DEGREES)
-                .background(BRB_CARD_PAPER_COLOR, RoundedCornerShape(6.dp))
-                .border(BRB_CARD_BORDER_WIDTH, BRB_CARD_INK_COLOR, RoundedCornerShape(6.dp))
-                .padding(horizontal = 28.dp, vertical = 20.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "brb!",
-                fontSize = 36.sp,
-                fontWeight = FontWeight.Bold,
-                fontStyle = FontStyle.Italic,
-                color = BRB_CARD_INK_COLOR,
-            )
-        }
+                .fillMaxSize()
+                .padding(24.dp)
+                .rotate(BRB_SIGN_TILT_DEGREES),
+        )
     }
 }
 
 const val BRB_CARD_TEST_TAG = "duck_brb_card"
-private const val BRB_CARD_TILT_DEGREES = -4f
-private val BRB_CARD_BORDER_WIDTH = 2.dp
-private val BRB_CARD_PAPER_COLOR = Color(0xFFF4E9D8)
-private val BRB_CARD_INK_COLOR = Color(0xFF3A2E22)
+private const val BRB_SIGN_TILT_DEGREES = -4f
 
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10)
 @Composable

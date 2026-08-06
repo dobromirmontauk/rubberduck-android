@@ -49,9 +49,11 @@ internal val LISTENING_INTRO_SEQUENCE = listOf(
 internal val SLEEPY_SEQUENCE = listOf(DuckFrame.SLEEPY_1, DuckFrame.SLEEPY_2)
 
 /**
- * Loops for THINKING ("taking notes" stand-in until the real
- * writing-on-notepad pose lands as 41+, per the design board's asset-gap
- * note) -- MANIFEST.md sequence 7, frames 23-25.
+ * Loops for THINKING ("taking notes") -- MANIFEST.md sequence 14
+ * (notes-scribble, frames 41-43, bead asn-ek1). Originally stood in with the
+ * generic "thinking" pose (sequence 7, frames 23-25) until the real
+ * writing-on-notepad poses landed; only [DuckFrameResources] changed when
+ * they did, not this token list or [DuckAnimationEngine]'s THINKING phase.
  */
 internal val THINKING_SEQUENCE = listOf(DuckFrame.THINKING_1, DuckFrame.THINKING_2, DuckFrame.THINKING_3)
 

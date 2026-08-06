@@ -22,9 +22,13 @@ internal fun DuckFrame.drawableRes(): Int = when (this) {
     DuckFrame.LISTENING_INTRO_3 -> R.drawable.duck_listen_intro_03
     DuckFrame.SLEEPY_1 -> R.drawable.duck_sleepy_01
     DuckFrame.SLEEPY_2 -> R.drawable.duck_sleepy_02
-    DuckFrame.THINKING_1 -> R.drawable.duck_thinking_01
-    DuckFrame.THINKING_2 -> R.drawable.duck_thinking_02
-    DuckFrame.THINKING_3 -> R.drawable.duck_thinking_03
+    // Bead asn-ek1 landed the real "writing-on-notepad" poses (41-43) this
+    // bead's design board flagged as an asset gap -- the DuckFrame.THINKING_*
+    // tokens (and DuckAnimationEngine's THINKING phase) are unchanged, only
+    // the drawable each maps to swapped from the thinking-pose placeholder.
+    DuckFrame.THINKING_1 -> R.drawable.duck_notes_scribble_01
+    DuckFrame.THINKING_2 -> R.drawable.duck_notes_scribble_02
+    DuckFrame.THINKING_3 -> R.drawable.duck_notes_scribble_03
     DuckFrame.HAPPY_BOUNCE_1 -> R.drawable.duck_happy_01
     DuckFrame.HAPPY_BOUNCE_2 -> R.drawable.duck_happy_02
     DuckFrame.HAPPY_BOUNCE_3 -> R.drawable.duck_happy_03
