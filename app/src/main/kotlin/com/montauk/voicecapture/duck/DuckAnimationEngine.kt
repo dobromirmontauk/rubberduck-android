@@ -11,10 +11,15 @@ package com.montauk.voicecapture.duck
  *   entry, then settles into a looping [IDLE_BREATHING_SEQUENCE], briefly
  *   interrupted by a one-shot [BLINK_SEQUENCE] every [blinkEveryMs].
  * - **SLEEPY**: loops [SLEEPY_SEQUENCE] at the slower [sleepyFrameDurationMs]
- *   cadence (spec: "slow cadence").
+ *   cadence (spec: "slow cadence") -- quiet, but still recording; eyes stay
+ *   open/heavy-lidded.
  * - **THINKING**: loops [THINKING_SEQUENCE] ("taking notes") at the normal
  *   [frameDurationMs] cadence, for as long as [state] stays THINKING.
- * - **GONE_BRB**: no duck frame at all -- [tick] returns [DuckVisual.Brb].
+ * - **SLEEPING**: loops [SLEEPING_SEQUENCE] at the even slower
+ *   [sleepingFrameDurationMs] cadence -- recording paused, either kind; eyes
+ *   fully closed, deliberately deeper/stiller than SLEEPY. Replaces this
+ *   bead's original "no duck frame, BRB card instead" treatment after a
+ *   design-board revision dropped that prop from scope.
  *
  * [triggerHappyBounce] layers a one-shot [HAPPY_BOUNCE_SEQUENCE] on top of
  * whichever of the above is current -- design-board section 1's "Got it!"
@@ -28,10 +33,10 @@ package com.montauk.voicecapture.duck
  * not visible in practice).
  *
  * [isCrossfading] reports whether the most recent [setState] transition is
- * still inside its crossfade window. The actual pixel crossfade between the
- * duck and the BRB card is left to the Compose layer ([DuckAnimator] uses
- * `Crossfade`) -- this just lets a plain-JVM test assert that a state change
- * was registered as a transition, without needing Compose at all.
+ * still inside its crossfade window ([DuckAnimator] uses `Crossfade` for the
+ * actual pixel fade between poses) -- this just lets a plain-JVM test assert
+ * that a state change was registered as a transition, without needing
+ * Compose at all.
  *
  * Not thread-safe -- same single-owner-coroutine expectation as
  * [com.montauk.voicecapture.tags.TagTracker].
@@ -40,6 +45,7 @@ class DuckAnimationEngine(
     initialState: DuckState = DuckState.LISTENING,
     private val frameDurationMs: Long = DEFAULT_FRAME_DURATION_MS,
     private val sleepyFrameDurationMs: Long = DEFAULT_SLEEPY_FRAME_DURATION_MS,
+    private val sleepingFrameDurationMs: Long = DEFAULT_SLEEPING_FRAME_DURATION_MS,
     private val blinkEveryMs: Long = DEFAULT_BLINK_EVERY_MS,
     private val crossfadeMs: Long = DEFAULT_CROSSFADE_MS,
 ) {
@@ -51,7 +57,7 @@ class DuckAnimationEngine(
     private data class BlinkPhase(override val startedAtMs: Long) : Phase
     private data class SleepyPhase(override val startedAtMs: Long) : Phase
     private data class ThinkingPhase(override val startedAtMs: Long) : Phase
-    private data class BrbPhase(override val startedAtMs: Long) : Phase
+    private data class SleepingPhase(override val startedAtMs: Long) : Phase
 
     private var happyBounceStartedAtMs: Long? = null
 
@@ -86,7 +92,7 @@ class DuckAnimationEngine(
     }
 
     /** Advances frame timing to [nowMs] and returns what [DuckAnimator] should render. */
-    fun tick(nowMs: Long): DuckVisual {
+    fun tick(nowMs: Long): DuckVisual.Pose {
         val bounceStart = happyBounceStartedAtMs
         if (bounceStart != null) {
             val idx = ((nowMs - bounceStart) / frameDurationMs).toInt()
@@ -98,7 +104,10 @@ class DuckAnimationEngine(
         }
         if (phase == null) setState(state, nowMs)
         return when (val p = phase!!) {
-            is BrbPhase -> DuckVisual.Brb
+            is SleepingPhase -> {
+                val idx = (((nowMs - p.startedAtMs) / sleepingFrameDurationMs) % SLEEPING_SEQUENCE.size).toInt()
+                DuckVisual.Pose(SLEEPING_SEQUENCE[idx])
+            }
             is ThinkingPhase -> {
                 val idx = (((nowMs - p.startedAtMs) / frameDurationMs) % THINKING_SEQUENCE.size).toInt()
                 DuckVisual.Pose(THINKING_SEQUENCE[idx])
@@ -142,12 +151,13 @@ class DuckAnimationEngine(
         DuckState.LISTENING -> ListeningIntroPhase(nowMs)
         DuckState.SLEEPY -> SleepyPhase(nowMs)
         DuckState.THINKING -> ThinkingPhase(nowMs)
-        DuckState.GONE_BRB -> BrbPhase(nowMs)
+        DuckState.SLEEPING -> SleepingPhase(nowMs)
     }
 
     companion object {
         const val DEFAULT_FRAME_DURATION_MS = 180L
         const val DEFAULT_SLEEPY_FRAME_DURATION_MS = 900L
+        const val DEFAULT_SLEEPING_FRAME_DURATION_MS = 1_200L
         const val DEFAULT_BLINK_EVERY_MS = 4_000L
         const val DEFAULT_CROSSFADE_MS = 260L
     }

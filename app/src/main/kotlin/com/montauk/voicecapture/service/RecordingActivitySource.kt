@@ -28,7 +28,7 @@ interface RecordingActivitySource {
  * exist on [TranscriptUiState] -- active partial/final transcript text means
  * SPEAKING, [TranscriptUiState.silenceHintVisible] means QUIET. Neither
  * AUTO_PAUSED nor USER_PAUSED can be produced this way (no pause concept
- * exists yet), so GONE_BRB is unreachable from live recording state until
+ * exists yet), so SLEEPING is unreachable from live recording state until
  * the real StateFlow replaces this call.
  */
 fun crudeRecordingActivity(transcript: TranscriptUiState): RecordingActivity = when {

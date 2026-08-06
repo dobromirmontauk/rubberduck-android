@@ -25,6 +25,8 @@ enum class DuckFrame {
     HAPPY_BOUNCE_1,
     HAPPY_BOUNCE_2,
     HAPPY_BOUNCE_3,
+    SLEEPING_1,
+    SLEEPING_2,
 }
 
 /** Resting/default loop (bead asn-3sm) -- MANIFEST.md sequence 1, frames 01-04. */
@@ -63,3 +65,13 @@ internal val THINKING_SEQUENCE = listOf(DuckFrame.THINKING_1, DuckFrame.THINKING
  * for its duration -- MANIFEST.md sequence 8, frames 26-28.
  */
 internal val HAPPY_BOUNCE_SEQUENCE = listOf(DuckFrame.HAPPY_BOUNCE_1, DuckFrame.HAPPY_BOUNCE_2, DuckFrame.HAPPY_BOUNCE_3)
+
+/**
+ * Slow-cadence loop for SLEEPING (recording paused, either kind) -- deeper
+ * than SLEEPY: eyes fully closed rather than open/heavy-lidded, per
+ * MANIFEST.md sequence 18 (frames 48-49, bead asn-ek1). Replaces this
+ * bead's original standalone "BRB sign card" treatment after a design-board
+ * revision dropped that prop from scope in favor of the duck visibly
+ * nodding off in place.
+ */
+internal val SLEEPING_SEQUENCE = listOf(DuckFrame.SLEEPING_1, DuckFrame.SLEEPING_2)

@@ -36,20 +36,19 @@ import kotlinx.coroutines.delay
  * [DuckPoseFrame], used directly by goldens) without the test's idle-wait
  * ever trying to fast-forward through this endless loop.
  *
- * `Crossfade` is keyed on [state]: the two states that keep the duck visible
- * (LISTENING/SLEEPY) swap their current [DuckVisual.Pose] frame directly
- * (an ordinary flipbook -- no fade between individual frames), while a
- * transition into or out of GONE_BRB crossfades between the duck and the
- * [BrbCard]. During that brief crossfade window both the outgoing and
- * incoming content read the same live [DuckVisual] snapshot, so the
- * outgoing copy may show a frame from the new state for its last instant --
- * an accepted simplification for a ~260ms window, not a visible glitch at
- * normal viewing speed.
+ * `Crossfade` is keyed on [state]: every state renders a real
+ * [DuckVisual.Pose] (an ordinary flipbook within one state -- no fade
+ * between individual frames), and switching states crossfades between
+ * whichever pose each was last showing. During that brief crossfade window
+ * both the outgoing and incoming content read the same live [DuckVisual]
+ * snapshot, so the outgoing copy may show a frame from the new state for
+ * its last instant -- an accepted simplification for a ~260ms window, not a
+ * visible glitch at normal viewing speed.
  */
 @Composable
 fun DuckAnimator(state: DuckState, modifier: Modifier = Modifier, happyBounceTrigger: Int = 0) {
     val engine = remember { DuckAnimationEngine(initialState = state) }
-    var visual by remember { mutableStateOf<DuckVisual>(engine.tick(0L)) }
+    var visual by remember { mutableStateOf(engine.tick(0L)) }
 
     LaunchedEffect(state) {
         engine.setState(state, nowMillis())
@@ -75,33 +74,25 @@ fun DuckAnimator(state: DuckState, modifier: Modifier = Modifier, happyBounceTri
             targetState = state,
             animationSpec = tween(DuckAnimationEngine.DEFAULT_CROSSFADE_MS.toInt()),
             label = "duck-state-crossfade",
-        ) { s ->
-            DuckPoseFrame(visual = visual, state = s)
+        ) {
+            DuckPoseFrame(visual = visual)
         }
     }
 }
 
 /**
- * Pure render of one [visual] frame for target [state] -- no animation, no
- * clock, no coroutine. Used both by [DuckAnimator]'s per-frame content and
- * directly by screenshot goldens, which want one deterministic frame rather
- * than whatever the live loop above happens to land on.
+ * Pure render of one [visual] frame -- no animation, no clock, no
+ * coroutine. Used both by [DuckAnimator]'s per-frame content and directly by
+ * screenshot goldens, which want one deterministic frame rather than
+ * whatever the live loop above happens to land on.
  */
 @Composable
-internal fun DuckPoseFrame(visual: DuckVisual, state: DuckState, modifier: Modifier = Modifier) {
-    when (state) {
-        DuckState.GONE_BRB -> BrbCard(modifier = modifier)
-        else -> {
-            val pose = visual as? DuckVisual.Pose
-            if (pose != null) {
-                Image(
-                    painter = painterResource(pose.frame.drawableRes()),
-                    contentDescription = null,
-                    modifier = modifier.fillMaxSize(),
-                )
-            }
-        }
-    }
+internal fun DuckPoseFrame(visual: DuckVisual.Pose, modifier: Modifier = Modifier) {
+    Image(
+        painter = painterResource(visual.frame.drawableRes()),
+        contentDescription = null,
+        modifier = modifier.fillMaxSize(),
+    )
 }
 
 private fun nowMillis(): Long = System.currentTimeMillis()
@@ -133,10 +124,10 @@ private fun DuckAnimatorSleepyPreview() {
 
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 320, heightDp = 320)
 @Composable
-private fun DuckAnimatorBrbPreview() {
+private fun DuckAnimatorSleepingPreview() {
     VoiceCaptureTheme {
         Box(modifier = Modifier.padding(24.dp).aspectRatio(1f)) {
-            DuckAnimator(state = DuckState.GONE_BRB)
+            DuckAnimator(state = DuckState.SLEEPING)
         }
     }
 }

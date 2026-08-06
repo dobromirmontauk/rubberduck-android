@@ -16,8 +16,8 @@ class DuckActivityMappingTest {
     }
 
     @Test
-    fun `AUTO_PAUSED and USER_PAUSED both map to GONE_BRB`() {
-        assertEquals(DuckState.GONE_BRB, RecordingActivity.AUTO_PAUSED.toDuckState())
-        assertEquals(DuckState.GONE_BRB, RecordingActivity.USER_PAUSED.toDuckState())
+    fun `AUTO_PAUSED and USER_PAUSED both map to SLEEPING`() {
+        assertEquals(DuckState.SLEEPING, RecordingActivity.AUTO_PAUSED.toDuckState())
+        assertEquals(DuckState.SLEEPING, RecordingActivity.USER_PAUSED.toDuckState())
     }
 }

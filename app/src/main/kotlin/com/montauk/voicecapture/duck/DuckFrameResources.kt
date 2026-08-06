@@ -32,4 +32,6 @@ internal fun DuckFrame.drawableRes(): Int = when (this) {
     DuckFrame.HAPPY_BOUNCE_1 -> R.drawable.duck_happy_01
     DuckFrame.HAPPY_BOUNCE_2 -> R.drawable.duck_happy_02
     DuckFrame.HAPPY_BOUNCE_3 -> R.drawable.duck_happy_03
+    DuckFrame.SLEEPING_1 -> R.drawable.duck_sleeping_01
+    DuckFrame.SLEEPING_2 -> R.drawable.duck_sleeping_02
 }

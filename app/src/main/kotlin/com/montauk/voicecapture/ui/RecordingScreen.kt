@@ -111,7 +111,7 @@ import kotlin.math.roundToInt
  * -- a crude stand-in (silence hint -> QUIET, else SPEAKING) for asn-r60's
  * real `StateFlow<RecordingActivityState>` ([com.montauk.voicecapture.service.RecordingActivityStateHolder]
  * on that branch), which hasn't landed on `main` yet; neither paused
- * activity (and therefore GONE_BRB) is reachable until it does. THINKING
+ * activity (and therefore SLEEPING) is reachable until it does. THINKING
  * briefly overrides whichever of those is current for [THINKING_DISPLAY_MS]
  * every time [SummaryStateHolder] publishes a fresh summary (design board:
  * "duck plays 'taking notes', then the notes card slides up") -- the

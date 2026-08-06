@@ -122,9 +122,9 @@ private fun DuckStageSleepyPreview() {
 
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 640)
 @Composable
-private fun DuckStageBrbPreview() {
+private fun DuckStageSleepingPreview() {
     VoiceCaptureTheme {
-        DuckStage(duckState = DuckState.GONE_BRB, words = ThoughtCloudWords.EMPTY, reducedMotion = false, onApproveWord = {},
+        DuckStage(duckState = DuckState.SLEEPING, words = ThoughtCloudWords.EMPTY, reducedMotion = false, onApproveWord = {},
             summary = com.montauk.voicecapture.service.SummaryUiState(),
             latencyState = com.montauk.voicecapture.service.LatencyBadgeUiState(),
             onLatencyBadgeTap = {})

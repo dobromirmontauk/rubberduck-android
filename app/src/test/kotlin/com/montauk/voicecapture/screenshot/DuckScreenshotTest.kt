@@ -12,7 +12,6 @@ import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.montauk.voicecapture.duck.DuckFrame
 import com.montauk.voicecapture.duck.DuckPoseFrame
-import com.montauk.voicecapture.duck.DuckState
 import com.montauk.voicecapture.duck.DuckVisual
 import com.montauk.voicecapture.duck.TagWordStatus
 import com.montauk.voicecapture.duck.ThoughtCloud
@@ -70,7 +69,6 @@ class DuckScreenshotTest {
                     )
                     DuckPoseFrame(
                         visual = DuckVisual.Pose(DuckFrame.IDLE_BREATHING_1),
-                        state = DuckState.LISTENING,
                         modifier = Modifier.fillMaxWidth(0.55f).aspectRatio(1f),
                     )
                 }
@@ -88,7 +86,6 @@ class DuckScreenshotTest {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     DuckPoseFrame(
                         visual = DuckVisual.Pose(DuckFrame.SLEEPY_1),
-                        state = DuckState.SLEEPY,
                         modifier = Modifier.fillMaxWidth(0.55f).aspectRatio(1f),
                     )
                 }
@@ -106,7 +103,6 @@ class DuckScreenshotTest {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     DuckPoseFrame(
                         visual = DuckVisual.Pose(DuckFrame.THINKING_1),
-                        state = DuckState.THINKING,
                         modifier = Modifier.fillMaxWidth(0.55f).aspectRatio(1f),
                     )
                 }
@@ -118,13 +114,12 @@ class DuckScreenshotTest {
     }
 
     @Test
-    fun brbPaused() {
+    fun duckSleeping() {
         composeTestRule.setContent {
             VoiceCaptureTheme {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     DuckPoseFrame(
-                        visual = DuckVisual.Brb,
-                        state = DuckState.GONE_BRB,
+                        visual = DuckVisual.Pose(DuckFrame.SLEEPING_1),
                         modifier = Modifier.fillMaxWidth(0.55f).aspectRatio(1f),
                     )
                 }
@@ -132,6 +127,6 @@ class DuckScreenshotTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_brb_paused.png")
+        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_sleeping.png")
     }
 }

@@ -11,12 +11,14 @@ class DuckAnimationEngineTest {
         initialState: DuckState = DuckState.LISTENING,
         frameDurationMs: Long = 100L,
         sleepyFrameDurationMs: Long = 500L,
+        sleepingFrameDurationMs: Long = 700L,
         blinkEveryMs: Long = 1_000L,
         crossfadeMs: Long = 200L,
     ) = DuckAnimationEngine(
         initialState = initialState,
         frameDurationMs = frameDurationMs,
         sleepyFrameDurationMs = sleepyFrameDurationMs,
+        sleepingFrameDurationMs = sleepingFrameDurationMs,
         blinkEveryMs = blinkEveryMs,
         crossfadeMs = crossfadeMs,
     )
@@ -76,10 +78,11 @@ class DuckAnimationEngineTest {
     }
 
     @Test
-    fun `GONE_BRB always renders Brb regardless of elapsed time`() {
-        val e = engine(initialState = DuckState.GONE_BRB)
-        assertEquals(DuckVisual.Brb, e.tick(0L))
-        assertEquals(DuckVisual.Brb, e.tick(50_000L))
+    fun `SLEEPING loops its 2 frames at the deeper (slower) cadence`() {
+        val e = engine(initialState = DuckState.SLEEPING, sleepingFrameDurationMs = 700L)
+        assertEquals(DuckVisual.Pose(DuckFrame.SLEEPING_1), e.tick(0L))
+        assertEquals(DuckVisual.Pose(DuckFrame.SLEEPING_2), e.tick(700L))
+        assertEquals(DuckVisual.Pose(DuckFrame.SLEEPING_1), e.tick(1_400L))
     }
 
     @Test
@@ -116,13 +119,18 @@ class DuckAnimationEngineTest {
     }
 
     @Test
-    fun `triggerHappyBounce interrupts GONE_BRB too, then resumes Brb`() {
-        val e = engine(initialState = DuckState.GONE_BRB)
+    fun `triggerHappyBounce interrupts SLEEPING too, then resumes it`() {
+        val e = engine(initialState = DuckState.SLEEPING, sleepingFrameDurationMs = 700L)
         e.tick(0L)
         e.triggerHappyBounce(1_000L)
 
         assertEquals(DuckVisual.Pose(DuckFrame.HAPPY_BOUNCE_1), e.tick(1_000L))
-        assertEquals(DuckVisual.Brb, e.tick(1_300L))
+        // 3 frames * 100ms = 300ms; past that, back to SLEEPING -- the
+        // underlying SleepingPhase's own clock (started at t=0) never
+        // paused, so at t=1300 it's mid-cycle (1300/700 = 1 -> frame 2), not
+        // restarted at frame 1 -- see the class KDoc's "not literally
+        // paused-and-resumed" note.
+        assertEquals(DuckVisual.Pose(DuckFrame.SLEEPING_2), e.tick(1_300L))
     }
 
     @Test
@@ -162,7 +170,7 @@ class DuckAnimationEngineTest {
     fun `isCrossfading is true immediately after a state transition and false after the window elapses`() {
         val e = engine(initialState = DuckState.LISTENING, crossfadeMs = 200L)
         e.tick(0L)
-        e.setState(DuckState.GONE_BRB, 1_000L)
+        e.setState(DuckState.SLEEPING, 1_000L)
 
         assertTrue(e.isCrossfading(1_000L))
         assertTrue(e.isCrossfading(1_199L))
