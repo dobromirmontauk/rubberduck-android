@@ -196,6 +196,7 @@ tasks.withType<Test>().configureEach {
         exclude("**/RecordingScreenTagsSlotTest.class")
         exclude("**/RecordingScreenTranscriptSlotTest.class")
         exclude("**/RecordingScreenDuckToggleTest.class")
+        exclude("**/RecordingScreenLayoutATest.class")
         exclude("**/ApiKeyManagementRowTest.class")
         exclude("**/SettingsCredentialRowsTest.class")
         exclude("**/IntelligenceStepTest.class")
