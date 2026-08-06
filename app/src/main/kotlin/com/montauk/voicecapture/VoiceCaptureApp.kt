@@ -53,9 +53,15 @@ class VoiceCaptureApp : Application() {
      * [secretsStore]'s sign-in state changes (log out / restore from build
      * config) so an in-flight [com.montauk.voicecapture.upload.UploadWorker]
      * run picks up the new effective token on its next enqueue.
+     *
+     * `internal set` (same reasoning as [vaultSessionReader]): vn-edu.55's
+     * delete-from-phone/bulk-archive tests swap this for a call-recording
+     * fake to prove those LOCAL-ONLY actions never invoke the uploader --
+     * a real behavioral guarantee (whatever's wired here goes untouched),
+     * not just a fact about [SessionStore.deleteSession]'s own signature.
      */
     var bundleUploader: BundleUploader = BundleUploaderFactory.create(token = "", owner = "", repo = "")
-        private set
+        internal set
 
     /**
      * Bead vn-edu.47: fetch/cache/daily-refresh policy for the vault's

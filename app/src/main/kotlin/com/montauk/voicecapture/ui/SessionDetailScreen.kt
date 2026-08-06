@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
@@ -26,6 +27,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -88,6 +90,8 @@ fun SessionDetailScreen(sessionId: String, onBack: () -> Unit) {
     var transcriptLines by remember { mutableStateOf<List<LiveTranscriptLine>>(emptyList()) }
     var uploadState by remember { mutableStateOf(UploadState.LOCAL) }
     var selectedTab by remember { mutableStateOf(DetailTab.LIVE_TEXT) }
+    // Bead vn-edu.55: "Delete from phone" confirm state -- see ActionsRow.
+    var showDeleteDialog by remember { mutableStateOf(false) }
 
     // Bead vn-edu.57: null until the first LaunchedEffect below resolves it --
     // distinct from any real SessionStatus so a tab opened before that
@@ -201,10 +205,26 @@ fun SessionDetailScreen(sessionId: String, onBack: () -> Unit) {
                         UploadWorker.enqueue(context, sessionId)
                     },
                     onShare = { shareAudio(context, oggFile) },
+                    onDelete = { showDeleteDialog = true },
                 )
                 Spacer(modifier = Modifier.height(16.dp))
             }
         }
+    }
+
+    // Bead vn-edu.55: local-only -- deletes sessionStore's on-disk directory
+    // and nothing else (never the vault/uploader), then leaves this screen
+    // immediately since there's nothing left here to show.
+    if (showDeleteDialog) {
+        DeleteSessionConfirmDialog(
+            uploadState = uploadState,
+            onConfirm = {
+                app.sessionStore.deleteSession(sessionId)
+                showDeleteDialog = false
+                onBack()
+            },
+            onDismiss = { showDeleteDialog = false },
+        )
     }
 }
 
@@ -480,8 +500,8 @@ private fun FiledToFooter(unassignedSpans: List<OrganizationUnassignedSpan>, tot
 }
 
 @Composable
-private fun ActionsRow(onReupload: () -> Unit, onShare: () -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+private fun ActionsRow(onReupload: () -> Unit, onShare: () -> Unit, onDelete: () -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         OutlinedButton(onClick = onReupload, modifier = Modifier.weight(1f)) {
             Text("Re-upload")
         }
@@ -489,6 +509,12 @@ private fun ActionsRow(onReupload: () -> Unit, onShare: () -> Unit) {
             Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.height(18.dp))
             Spacer(modifier = Modifier.width(6.dp))
             Text("Share audio")
+        }
+        // Bead vn-edu.55: "Delete from phone" -- icon-only (not weighted, unlike
+        // the two actions above) so it reads as a distinct, less-prominent
+        // destructive action rather than a third equally-weighted button.
+        IconButton(onClick = onDelete, colors = IconButtonDefaults.iconButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+            Icon(Icons.Filled.Delete, contentDescription = "Delete from phone")
         }
     }
 }

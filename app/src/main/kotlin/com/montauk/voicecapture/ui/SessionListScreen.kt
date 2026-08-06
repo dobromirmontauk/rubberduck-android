@@ -1,5 +1,7 @@
 package com.montauk.voicecapture.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -11,8 +13,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -31,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingStateHolder
+import com.montauk.voicecapture.session.BulkArchiveEligibility
 import com.montauk.voicecapture.session.SessionStatusResolver
 import com.montauk.voicecapture.session.SessionSummary
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
@@ -43,9 +50,16 @@ private const val POST_STOP_POLL_INTERVAL_MS = 750L
 @Composable
 fun SessionListScreen(onSessionClick: (String) -> Unit) {
     val context = LocalContext.current
+    val app = context.applicationContext as VoiceCaptureApp
     val recordingState by RecordingStateHolder.state.collectAsStateWithLifecycle()
     var sessions by remember { mutableStateOf<List<SessionSummary>>(emptyList()) }
     var vaultSnapshot by remember { mutableStateOf(VaultSessionSnapshot.EMPTY) }
+    // Bead vn-edu.55: long-press-to-delete (list row) and "Archive all
+    // integrated sessions" (top action) state. Both actions only ever touch
+    // sessionStore -- see SessionStore.deleteSession's KDoc for why neither
+    // can reach the uploader/vault.
+    var sessionPendingDelete by remember { mutableStateOf<SessionSummary?>(null) }
+    var showBulkArchiveDialog by remember { mutableStateOf(false) }
 
     // Re-reads on every fresh mount of this screen (including on navigation
     // back to it, since NavHost recomposes it fresh each time it re-enters
@@ -86,14 +100,42 @@ fun SessionListScreen(onSessionClick: (String) -> Unit) {
         vaultSnapshot = app.currentVaultSessions()
     }
 
+    // Bead vn-edu.55: eligibility for the bulk archive action -- only
+    // sessions the vault has actually organized (INTEGRATED, not merely
+    // UPLOADED), and only while vaultSnapshot is a live, current read.
+    // `vaultSnapshot.stale` means this came from a keyless/offline cache
+    // instead of a fresh fetch, so the action is disabled rather than acting
+    // on possibly-outdated integration status (see the caption already
+    // shown for the stale case below, which doubles as this action's
+    // explanatory subtitle).
+    val eligibleForBulkArchive = remember(sessions, vaultSnapshot) {
+        BulkArchiveEligibility.eligibleSessionIds(sessions, vaultSnapshot.integratedSessionIds)
+    }
+    val bulkArchiveEnabled = eligibleForBulkArchive.isNotEmpty() && !vaultSnapshot.stale
+
+    fun deleteSessionAndRefresh(sessionId: String) {
+        app.sessionStore.deleteSession(sessionId)
+        sessions = app.sessionStore.listSessions()
+    }
+
     VoiceCaptureTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-                Text(
-                    text = "Sessions",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Sessions",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = { showBulkArchiveDialog = true }, enabled = bulkArchiveEnabled) {
+                        Icon(
+                            imageVector = Icons.Filled.Archive,
+                            contentDescription = "Archive all integrated sessions",
+                            tint = if (bulkArchiveEnabled) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 // Bead vn-edu.29's quiet unconnected-state affordance: a fact, not a
                 // prompt -- no button, no icon, no color pulled from the error/warning
@@ -133,6 +175,7 @@ fun SessionListScreen(onSessionClick: (String) -> Unit) {
                                 session = session,
                                 integratedSessionIds = vaultSnapshot.integratedSessionIds,
                                 onClick = { onSessionClick(session.sessionId) },
+                                onLongPress = { sessionPendingDelete = session },
                             )
                         }
                     }
@@ -140,16 +183,51 @@ fun SessionListScreen(onSessionClick: (String) -> Unit) {
             }
         }
     }
+
+    sessionPendingDelete?.let { pending ->
+        DeleteSessionConfirmDialog(
+            uploadState = pending.uploadState,
+            onConfirm = {
+                deleteSessionAndRefresh(pending.sessionId)
+                sessionPendingDelete = null
+            },
+            onDismiss = { sessionPendingDelete = null },
+        )
+    }
+
+    if (showBulkArchiveDialog) {
+        BulkArchiveConfirmDialog(
+            count = eligibleForBulkArchive.size,
+            onConfirm = {
+                eligibleForBulkArchive.forEach { sessionId -> app.sessionStore.deleteSession(sessionId) }
+                sessions = app.sessionStore.listSessions()
+                showBulkArchiveDialog = false
+            },
+            onDismiss = { showBulkArchiveDialog = false },
+        )
+    }
 }
 
 // Visibility widened from `private` (not `private` -> business-logic reasons; this is a
 // pure, stateless row with no Context/app dependency) so the vn-edu.33 Sessions-scaffold
 // preview in BottomNavBarPreview.kt can render real-looking rows from fixture data.
+//
+// Bead vn-edu.55: [onLongPress] opens the per-session "delete from phone"
+// confirm -- deliberately a long-press on the existing row rather than a new
+// visible overflow icon, so this row's *static* appearance (and therefore
+// sessions_with_nav.png's committed pixels) doesn't change. Switched from
+// Card's own `onClick` overload to a plain Card + Modifier.combinedClickable
+// since Material3's clickable-Card overload has no long-press slot.
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun SessionRow(session: SessionSummary, integratedSessionIds: Set<String> = emptySet(), onClick: () -> Unit) {
+internal fun SessionRow(
+    session: SessionSummary,
+    integratedSessionIds: Set<String> = emptySet(),
+    onClick: () -> Unit,
+    onLongPress: () -> Unit = {},
+) {
     Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongPress),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(12.dp),
     ) {

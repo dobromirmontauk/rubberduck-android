@@ -208,6 +208,28 @@ class SessionStore(private val baseDir: File) {
         return runCatching { json.decodeFromString(SessionMeta.serializer(), file.readText()) }.getOrNull()
     }
 
+    /**
+     * Deletes [sessionId]'s entire on-disk directory (bead vn-edu.55) --
+     * backing the phone-local "delete from phone" and "archive all
+     * integrated sessions" actions. Mirrors
+     * [com.montauk.voicecapture.service.TooShortSessionDiscarder]'s best-
+     * effort recursive delete + exists-check verification; unlike that
+     * discard path (a session that never finished recording), this runs
+     * against a fully finalized session directory reached from the
+     * Sessions/detail screens. Callers ([DeleteConfirmPolicy],
+     * [BulkArchiveEligibility]) own eligibility and confirmation copy -- this
+     * is only the file removal, and it never touches the vault/uploader:
+     * nothing in this function's signature or body can reach either.
+     * Returns true if [sessionId]'s directory doesn't exist afterward
+     * (including if it never existed).
+     */
+    fun deleteSession(sessionId: String): Boolean {
+        val dir = sessionDir(sessionId)
+        if (!dir.exists()) return true
+        runCatching { dir.deleteRecursively() }
+        return !dir.exists()
+    }
+
     /** Reads and parses every line of live-transcript.jsonl for [sessionId], skipping any that fail to parse. */
     fun readTranscriptLines(sessionId: String): List<LiveTranscriptLine> {
         val file = transcriptFile(sessionDir(sessionId))

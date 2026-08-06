@@ -200,6 +200,7 @@ tasks.withType<Test>().configureEach {
         exclude("**/LoginScreenTest.class")
         exclude("**/SessionListVaultStatusTest.class")
         exclude("**/SessionDetailTabsTest.class")
+        exclude("**/SessionDeleteInteractionTest.class")
         exclude("**/screenshot/**")
     }
     if (!roborazziTaskRequested) {
