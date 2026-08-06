@@ -66,9 +66,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.montauk.voicecapture.VoiceCaptureApp
+import com.montauk.voicecapture.audio.AudioRouteType
 import com.montauk.voicecapture.audio.LoudnessVisualizer
 import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.service.RecordingStateHolder
+import com.montauk.voicecapture.service.RecordingUiState
 import com.montauk.voicecapture.service.TagsStateHolder
 import com.montauk.voicecapture.service.TranscriptLine
 import com.montauk.voicecapture.service.TranscriptStateHolder
@@ -117,7 +119,7 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
                     Spacer(modifier = Modifier.height(28.dp))
                     BigTimer(elapsedMs = recordingState.elapsedMs)
                     Spacer(modifier = Modifier.height(16.dp))
-                    ChipsRow(transcript = transcript, hasBluetoothMic = hasBluetoothMic)
+                    ChipsRow(transcript = transcript, hasBluetoothMic = hasBluetoothMic, recordingState = recordingState)
                     Spacer(modifier = Modifier.height(10.dp))
                     LoudnessMeterBar(level = transcript.micLevel, sessionId = recordingState.sessionId)
                     Spacer(modifier = Modifier.height(16.dp))
@@ -230,8 +232,17 @@ private fun BigTimer(elapsedMs: Long) {
     )
 }
 
+/**
+ * [recordingState] carries the live Bluetooth-routing status (bead vn-edu.2):
+ * [RecordingUiState.activeAudioRoute]/[RecordingUiState.scoNarrowbandWarning]
+ * update as [com.montauk.voicecapture.audio.MicAudioSource] re-routes
+ * mid-session, unlike [hasBluetoothMic] (a one-time presence check taken at
+ * screen-composition time) or [TranscriptUiState.sourceLabel] (fixed for the
+ * whole session). [hasBluetoothMic] stays as the pre-routing fallback for
+ * the brief window before the first route decision lands.
+ */
 @Composable
-private fun ChipsRow(transcript: TranscriptUiState, hasBluetoothMic: Boolean) {
+private fun ChipsRow(transcript: TranscriptUiState, hasBluetoothMic: Boolean, recordingState: RecordingUiState) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         SttStatusChip(transcript.connectionState)
         val (label, color) = when {
@@ -239,10 +250,22 @@ private fun ChipsRow(transcript: TranscriptUiState, hasBluetoothMic: Boolean) {
             // the live bluetooth/phone-mic detection below since there's no real
             // AudioRecord device to ask about while a file is standing in for one.
             transcript.sourceLabel == "FILE" -> "FILE" to Color(0xFFE0A93A)
+            recordingState.scoNarrowbandWarning -> "BLUETOOTH (LOW QUALITY)" to Color(0xFFE8A33D)
+            recordingState.activeAudioRoute == AudioRouteType.BLE_HEADSET ||
+                recordingState.activeAudioRoute == AudioRouteType.BLUETOOTH_SCO -> "BLUETOOTH" to Color(0xFF5FBF6E)
+            recordingState.activeAudioRoute == AudioRouteType.BUILTIN_MIC -> "PHONE MIC" to MaterialTheme.colorScheme.onSurfaceVariant
             hasBluetoothMic -> "BLUETOOTH" to Color(0xFF5FBF6E)
             else -> "PHONE MIC" to MaterialTheme.colorScheme.onSurfaceVariant
         }
         StatusChip(label, color)
+        // Sticky for the rest of the session once a Bluetooth device has
+        // dropped out mid-recording (see RecordingUiState.bluetoothDeviceLost's
+        // KDoc) -- a second, separate chip rather than folding into the one
+        // above so the "what happened" signal survives even after the
+        // BLUETOOTH/PHONE MIC chip above has already moved on.
+        if (recordingState.bluetoothDeviceLost) {
+            StatusChip("BT LOST → PHONE MIC", Color(0xFFE8A33D))
+        }
     }
 }
 

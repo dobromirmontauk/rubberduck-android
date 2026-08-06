@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
@@ -173,6 +174,14 @@ class RecordingService : LifecycleService() {
         TagsStateHolder.reset()
         silenceDetector.reset()
         modeStateMachine = RecordingModeStateMachine()
+        // Bead vn-edu.2: a previous session's Bluetooth route/warning/loss
+        // flags must never leak into this new one -- createAudioSource's
+        // onRouteChanged callback only ever sets these forward, it never
+        // clears bluetoothDeviceLost, so a stale true from the last session
+        // would otherwise stick around until the *next* device-list change.
+        RecordingStateHolder.update {
+            it.copy(activeAudioRoute = null, scoNarrowbandWarning = false, bluetoothDeviceLost = false)
+        }
 
         startTagPipeline(app, session)
 
@@ -224,7 +233,25 @@ class RecordingService : LifecycleService() {
      * activity/service extra is not a trustworthy gate on its own.
      */
     private fun createAudioSource(injectAudioSpec: String?): AudioSource {
-        if (!BuildConfig.DEBUG || injectAudioSpec.isNullOrBlank()) return MicAudioSource()
+        if (!BuildConfig.DEBUG || injectAudioSpec.isNullOrBlank()) {
+            val mic = MicAudioSource(audioManager = getSystemService(AudioManager::class.java))
+            // Bead vn-edu.2: publish every routing decision (initial pick,
+            // Bluetooth upgrade/downgrade, or a mid-session device-loss
+            // fallback to the phone mic) to the recording screen. Onto
+            // RecordingStateHolder rather than TranscriptStateHolder because
+            // this changes live, mid-session -- unlike TranscriptUiState.sourceLabel,
+            // which is fixed for the whole session.
+            mic.onRouteChanged = { transition ->
+                RecordingStateHolder.update {
+                    it.copy(
+                        activeAudioRoute = transition.route.type,
+                        scoNarrowbandWarning = transition.route.scoNarrowbandWarning,
+                        bluetoothDeviceLost = it.bluetoothDeviceLost || transition.isDeviceLossFallback,
+                    )
+                }
+            }
+            return mic
+        }
         return FileAudioSource(openStream = { openInjectedAudioStream(injectAudioSpec) })
     }
 
