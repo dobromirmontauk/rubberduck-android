@@ -1,6 +1,8 @@
 package com.montauk.voicecapture.duck
 
 import com.montauk.voicecapture.tags.DisplayedTag
+import com.montauk.voicecapture.tags.TagRailChip
+import com.montauk.voicecapture.tags.TagStatus
 
 /**
  * Color axis for a thought-cloud word (bead asn-0jk, design-board section 5)
@@ -65,5 +67,43 @@ object ThoughtCloudWords {
         return top + candidates
     }
 
+    /**
+     * Adapts bead asn-45m's [TagRailChip] rail (the schema
+     * [com.montauk.voicecapture.service.TagRailStateHolder] publishes) into
+     * the thought cloud's word list -- the seam [fromDisplayedTags]'s own
+     * KDoc anticipated, now that the tag rail's own color axis (asn-0jk)
+     * carries the exact same status split this word cloud needs:
+     * ```
+     * status == EXISTING                   -> EXISTING (blue)
+     * status == PROPOSED_NEW && !approved  -> PROPOSED (purple)
+     * status == PROPOSED_NEW && approved   -> APPROVED (green)
+     * ```
+     * [chips] is assumed already in the rail's own display order (user
+     * chips first, then suggested, per [com.montauk.voicecapture.tags.TagChipRail.chips]) --
+     * same top/candidate split as [fromDisplayedTags]. [TagRailChip.confidence]
+     * is null for every [com.montauk.voicecapture.tags.RailChipSource.USER]
+     * chip (that field's own KDoc: "a user's own pick has no scorer
+     * confidence, it's simply confirmed") -- sized as fully confident
+     * ([MAX_CONFIDENCE]) rather than faded, since a user-added/approved word
+     * should never read as tentative.
+     */
+    fun fromTagRailChips(chips: List<TagRailChip>): List<ThoughtCloudWord> {
+        val top = chips.take(MAX_TOP).map { chip -> ThoughtCloudWord(chip.tag, chip.confidence ?: MAX_CONFIDENCE, chip.wordStatus) }
+        val candidates = chips.drop(MAX_TOP).take(MAX_CANDIDATES).map { chip ->
+            ThoughtCloudWord(chip.tag, chip.confidence ?: MAX_CONFIDENCE, TagWordStatus.CANDIDATE)
+        }
+        return top + candidates
+    }
+
+    /** Confidence assigned to a [TagRailChip] with no scorer confidence of its own -- see [fromTagRailChips]. */
+    private const val MAX_CONFIDENCE = 1.0
+
     private fun normalize(tag: String): String = tag.trim().lowercase()
 }
+
+private val TagRailChip.wordStatus: TagWordStatus
+    get() = when {
+        status == TagStatus.EXISTING -> TagWordStatus.EXISTING
+        approved -> TagWordStatus.APPROVED
+        else -> TagWordStatus.PROPOSED
+    }

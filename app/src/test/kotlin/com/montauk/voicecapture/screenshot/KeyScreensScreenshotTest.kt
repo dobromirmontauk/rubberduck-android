@@ -8,7 +8,8 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
-import com.montauk.voicecapture.service.TagsStateHolder
+import com.montauk.voicecapture.service.TagRailStateHolder
+import com.montauk.voicecapture.service.TagTreeStateHolder
 import com.montauk.voicecapture.service.TranscriptLine
 import com.montauk.voicecapture.service.TranscriptStateHolder
 import com.montauk.voicecapture.service.TranscriptUiState
@@ -18,8 +19,8 @@ import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.session.RemovalAction
 import com.montauk.voicecapture.session.UploadState
 import com.montauk.voicecapture.stt.SttConnectionState
-import com.montauk.voicecapture.tags.DisplayedTag
-import com.montauk.voicecapture.tags.TagTier
+import com.montauk.voicecapture.tags.RailChipSource
+import com.montauk.voicecapture.tags.TagRailChip
 import com.montauk.voicecapture.testutil.SessionFixtures
 import com.montauk.voicecapture.ui.AppNavHost
 import com.montauk.voicecapture.ui.Routes
@@ -86,13 +87,14 @@ class KeyScreensScreenshotTest {
         app = ApplicationProvider.getApplicationContext()
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
+        TagRailStateHolder.reset()
+        TagTreeStateHolder.reset()
         // Bead asn-3sm: RecordingScreen now also reads these three
         // singletons -- reset so an earlier test class's state (approvals,
         // a fake summary, a latency badge) never leaks into this one.
         com.montauk.voicecapture.service.TagApprovalStateHolder.reset()
         com.montauk.voicecapture.service.SummaryStateHolder.reset()
         com.montauk.voicecapture.service.LatencyBadgeStateHolder.reset()
-        TagsStateHolder.reset()
         // Process-global singleton (bead asn-638) -- reset explicitly rather
         // than relying on Robolectric's per-test static sandboxing, same
         // belt-and-suspenders as SessionSwipeInteractionTest.
@@ -212,14 +214,36 @@ class KeyScreensScreenshotTest {
         }
         // Bead vn-edu.38: tag chips no longer derive synchronously from
         // TranscriptStateHolder inside the composable (the way the old
-        // TopicCloud-based chips did) -- they come from TagsStateHolder,
-        // which only RecordingService's TagCoordinator pipeline populates.
+        // TopicCloud-based chips did) -- they come from a StateHolder only
+        // RecordingService's TagCoordinator/TagChipRail pipeline populates.
         // No such pipeline runs in this Robolectric render, so this golden
-        // seeds fixed tags directly, matching the transcript fixture above.
-        TagsStateHolder.update(
+        // seeds the rail directly, matching the transcript fixture above.
+        // Bead asn-45m/asn-0jk: all three rail chip color states in one
+        // golden -- "kitchen remodel" (no tagId, USER) is an approved
+        // PROPOSED_NEW chip (green), "budget" (tagId set, SUGGESTED) is
+        // EXISTING (blue, regardless of source), "gardening" (no tagId,
+        // SUGGESTED) is a still-unapproved PROPOSED_NEW chip (purple,
+        // dashed). The ribbon underneath derives from the rail's primary
+        // ("kitchen remodel", free-form/no tagId, no vault configured in
+        // this golden -- see setUp's isSignedOut = true) so it slugifies
+        // straight to "notes/kitchen-remodel.md".
+        //
+        // NOTE (bead asn-p6y): this golden's committed PNG predates asn-45m/
+        // asn-0jk's layout+color changes and has NOT been re-recorded on
+        // Linux CI yet (GitHub Actions was down for the whole asn-45m
+        // session) -- verifyRoborazziDebug against it will legitimately fail
+        // until the post-outage record-goldens batch (asn-p6y) re-records
+        // it. testDebugUnitTest/testReleaseUnitTest (this repo's actual
+        // local gate) never execute this class at all -- Roborazzi
+        // screenshot tests are excluded from plain `test` runs by
+        // build.gradle.kts, only running under recordRoborazziDebug/
+        // verifyRoborazziDebug/compareRoborazziDebug -- so this staleness
+        // does not block the local suite.
+        TagRailStateHolder.update(
             listOf(
-                DisplayedTag("kitchen remodel", 0.92, rank = 1, tier = TagTier.PRIMARY),
-                DisplayedTag("budget", 0.7, rank = 2, tier = TagTier.SECONDARY),
+                TagRailChip("kitchen remodel", source = RailChipSource.USER),
+                TagRailChip("budget", tagId = "t_budget", source = RailChipSource.SUGGESTED),
+                TagRailChip("gardening", source = RailChipSource.SUGGESTED),
             ),
         )
 

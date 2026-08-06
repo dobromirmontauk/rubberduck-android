@@ -9,6 +9,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
+import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
@@ -41,9 +42,16 @@ import org.robolectric.annotation.Config
  * ([enterDebugTranscriptView]) before asserting on transcript-pane content;
  * the underlying transcript behavior itself (including this keyless
  * message) is otherwise unchanged.
+ *
+ * Bead asn-45m: pinned to [RobolectricDeviceQualifiers.Pixel7] (matching
+ * [LiveTranscriptPaneWordFinalityTest]/[LiveTranscriptPaneOverlongPartialTest],
+ * which exercise this same pane) rather than Robolectric's unqualified
+ * default window -- the tag rail + filing ribbon above the transcript pane
+ * in the debug view push its `weight(1f)` allotment to zero height on that
+ * tiny default, which no real device this app ships on is anywhere close to.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], qualifiers = RobolectricDeviceQualifiers.Pixel7)
 class RecordingScreenTranscriptSlotTest {
 
     @get:Rule
