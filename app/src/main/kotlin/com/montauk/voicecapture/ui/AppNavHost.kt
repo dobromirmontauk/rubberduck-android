@@ -34,10 +34,6 @@ import com.montauk.voicecapture.session.PendingRemovalHolder
 import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.session.SwipeHintStateHolder
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
-import kotlinx.coroutines.withTimeoutOrNull
-
-/** Bead vn-edu.67: how long a swiped delete/archive's "Undo" snackbar stays actionable before PendingRemovalHolder.flush() commits it. */
-private const val UNDO_WINDOW_MS = 5_000L
 
 /**
  * Hosts the nav graph + Material 3 bottom bar. The bottom bar is visible on
@@ -93,27 +89,6 @@ fun AppNavHost(
         }
     }
 
-    // Bead vn-edu.67: Gmail-style undo snackbar for a swiped delete/archive
-    // on the Sessions screen (see PendingRemovalHolder, SessionListScreen).
-    // Unlike the too-short warning above, the undo window's timing lives
-    // HERE, not in whatever scheduled the removal -- withTimeoutOrNull races
-    // the fixed window against the snackbar itself resolving (Undo tapped,
-    // or the user swiping the snackbar away, which resolves it early with
-    // SnackbarResult.Dismissed). Either a timeout (null) or a Dismissed
-    // result commits the removal; only ActionPerformed (Undo) cancels it.
-    val pendingRemoval by PendingRemovalHolder.state.collectAsStateWithLifecycle()
-    LaunchedEffect(pendingRemoval) {
-        val removal = pendingRemoval ?: return@LaunchedEffect
-        val result = withTimeoutOrNull(UNDO_WINDOW_MS) {
-            snackbarHostState.showSnackbar(message = removal.message, actionLabel = "Undo", duration = SnackbarDuration.Indefinite)
-        }
-        if (result == SnackbarResult.ActionPerformed) {
-            PendingRemovalHolder.undo()
-        } else {
-            PendingRemovalHolder.flush()
-        }
-    }
-
     // Bead vn-edu.67: transient "Not yet integrated" hint when a right-swipe
     // (archive) settles back on an ineligible row -- no undo/execute
     // semantics at all, just a message shown once and cleared.
@@ -124,17 +99,19 @@ fun AppNavHost(
         SwipeHintStateHolder.clear()
     }
 
-    // Bead vn-edu.67: "the app backgrounds" leg of PendingRemovalHolder's
-    // flush triggers (window expiry and snackbar dismissal are both handled
-    // by the LaunchedEffect above). ON_STOP is the Activity going invisible
-    // -- multitasking away, screen off, or an incoming call -- the same
-    // signal a real Gmail-style undo commits on, since there's no guarantee
-    // the process (and this composition) survives to show the snackbar's
-    // resolution otherwise.
+    // Bead vn-edu.67 (asn-638: flush() -> flushAll(), now that multiple rows
+    // can be pending at once): "the app backgrounds" leg of the no-lost-
+    // commits guarantee -- the other leg is each pending row's own 10s
+    // countdown (SessionListScreen's PendingSessionRow) and the "leaves the
+    // Sessions screen" case (SessionListScreen's own DisposableEffect).
+    // ON_STOP is the Activity going invisible -- multitasking away, screen
+    // off, or an incoming call -- since there's no guarantee the process
+    // (and this composition, and every pending row's countdown coroutine)
+    // survives past that point.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) PendingRemovalHolder.flush()
+            if (event == Lifecycle.Event.ON_STOP) PendingRemovalHolder.flushAll()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }

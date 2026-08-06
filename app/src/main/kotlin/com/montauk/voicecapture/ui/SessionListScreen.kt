@@ -23,25 +23,31 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -49,7 +55,9 @@ import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.session.BulkArchiveEligibility
 import com.montauk.voicecapture.session.DeleteConfirmPolicy
+import com.montauk.voicecapture.session.PENDING_REMOVAL_WINDOW_MS
 import com.montauk.voicecapture.session.PendingRemoval
+import com.montauk.voicecapture.session.PendingRemovalCountdown
 import com.montauk.voicecapture.session.PendingRemovalHolder
 import com.montauk.voicecapture.session.RemovalAction
 import com.montauk.voicecapture.session.SessionStatus
@@ -105,21 +113,32 @@ fun SessionListScreen(onSessionClick: (String) -> Unit) {
         sessions = app.sessionStore.listSessions()
     }
 
-    // Bead vn-edu.67: resyncs this screen's own list with disk whenever
-    // PendingRemovalHolder's pending removal clears -- covers both outcomes
-    // of a swiped delete/archive without this screen needing to know which
-    // one happened. Undo: the file was never touched, so re-reading restores
-    // the row exactly where sort order puts it (rather than this screen
-    // tracking a separate "undo -> re-insert at index N" patch). Flush: the
-    // file is already gone by the time this fires, so re-reading is a no-op
-    // confirming what the earlier optimistic removeFromUiList() call already
-    // reflected. Runs once harmlessly on initial mount too (pendingRemoval
-    // starts null), overlapping with the LaunchedEffect(Unit) read above.
-    val pendingRemoval by PendingRemovalHolder.state.collectAsStateWithLifecycle()
-    LaunchedEffect(pendingRemoval) {
-        if (pendingRemoval == null) {
-            sessions = app.sessionStore.listSessions()
-        }
+    // Bead asn-638 (was vn-edu.67's single-slot version): resyncs this
+    // screen's own list with disk whenever the *set* of pending sessionIds
+    // changes -- covers every outcome of a swiped delete/archive (scheduled,
+    // undone, or flushed) without this screen needing to know which one
+    // happened for which row. Undo: the file was never touched, so
+    // re-reading is a no-op that just confirms the row's still there. Flush:
+    // the file is already gone by the time this fires, so re-reading drops
+    // it from `sessions` -- rows no longer render their normal SessionRow
+    // optimistically ahead of that (see the pending-row branch below), the
+    // file removal is what retires them. Runs once harmlessly on initial
+    // mount too (pendingRemovals starts empty), overlapping with the
+    // LaunchedEffect(Unit) read above.
+    val pendingRemovals by PendingRemovalHolder.state.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingRemovals.keys) {
+        sessions = app.sessionStore.listSessions()
+    }
+
+    // Bead asn-638: "the user leaves this screen" leg of the no-lost-commits
+    // guarantee (the other leg -- app backgrounding -- lives in AppNavHost's
+    // ON_STOP observer). NavHost fully disposes this composable when
+    // navigating away (session detail, Settings, etc.) and recreates it
+    // fresh on return, so onDispose firing IS "screen exit" here; flushAll()
+    // commits whatever rows are still mid-countdown rather than leaving them
+    // to resolve (or not) on some later, unrelated mount of this screen.
+    DisposableEffect(Unit) {
+        onDispose { PendingRemovalHolder.flushAll() }
     }
 
     // Bead vn-edu.54: one vault-listing refresh per fresh mount of this
@@ -149,15 +168,6 @@ fun SessionListScreen(onSessionClick: (String) -> Unit) {
     fun deleteSessionAndRefresh(sessionId: String) {
         app.sessionStore.deleteSession(sessionId)
         sessions = app.sessionStore.listSessions()
-    }
-
-    // Bead vn-edu.67: optimistic row removal for an instant swipe (delete of
-    // an uploaded/integrated session, or archive of an integrated one) --
-    // the on-disk removal itself is deferred to PendingRemovalHolder.flush,
-    // not called here. Filters rather than re-reading sessionStore.listSessions()
-    // since the file is deliberately still on disk at this point.
-    fun removeFromUiList(sessionId: String) {
-        sessions = sessions.filterNot { it.sessionId == sessionId }
     }
 
     VoiceCaptureTheme {
@@ -213,38 +223,54 @@ fun SessionListScreen(onSessionClick: (String) -> Unit) {
                 } else {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(sessions, key = { it.sessionId }) { session ->
-                            SessionRow(
-                                session = session,
-                                integratedSessionIds = vaultSnapshot.integratedSessionIds,
-                                onClick = { onSessionClick(session.sessionId) },
-                                onLongPress = { sessionPendingDelete = session },
-                                // Bead vn-edu.67: swipe LEFT = delete, swipe RIGHT =
-                                // archive. Both instant paths remove the row from
-                                // this screen's own list immediately and defer the
-                                // actual disk removal to PendingRemovalHolder --
-                                // AppNavHost's Undo snackbar flushes or undoes it.
-                                onSwipeDeleteInstant = { s ->
-                                    removeFromUiList(s.sessionId)
-                                    PendingRemovalHolder.schedule(
-                                        PendingRemoval(s.sessionId, RemovalAction.DELETE, "Deleted"),
-                                        execute = { app.sessionStore.deleteSession(s.sessionId) },
-                                    )
-                                },
-                                // Swipe-left on a LOCAL/QUEUED (never-uploaded) session
-                                // settles back instead of committing (see SessionRow's
-                                // confirmValueChange) -- this just opens the same hard-
-                                // confirm dialog long-press already uses, no different
-                                // treatment for a swipe than a long-press here.
-                                onSwipeDeleteRequiresConfirm = { s -> sessionPendingDelete = s },
-                                onSwipeArchiveInstant = { s ->
-                                    removeFromUiList(s.sessionId)
-                                    PendingRemovalHolder.schedule(
-                                        PendingRemoval(s.sessionId, RemovalAction.ARCHIVE, "Archived"),
-                                        execute = { app.sessionStore.deleteSession(s.sessionId) },
-                                    )
-                                },
-                                onSwipeArchiveIneligible = { SwipeHintStateHolder.show("Not yet integrated") },
-                            )
+                            // Bead asn-638: a session with a pending removal renders
+                            // as PendingSessionRow (dimmed content + inline Undo +
+                            // countdown line) in the SAME list slot instead of the
+                            // normal swipeable SessionRow -- no separate "remove from
+                            // this screen's list" step, the row simply keeps existing
+                            // (still backed by real SessionSummary data) until its
+                            // countdown flushes and the resync effect above drops it.
+                            val pending = pendingRemovals[session.sessionId]
+                            if (pending != null) {
+                                PendingSessionRow(
+                                    session = session,
+                                    pending = pending,
+                                    onUndo = { PendingRemovalHolder.undo(session.sessionId) },
+                                )
+                            } else {
+                                SessionRow(
+                                    session = session,
+                                    integratedSessionIds = vaultSnapshot.integratedSessionIds,
+                                    onClick = { onSessionClick(session.sessionId) },
+                                    onLongPress = { sessionPendingDelete = session },
+                                    // Bead vn-edu.67 (asn-638: no more removeFromUiList --
+                                    // the row swaps to PendingSessionRow via the branch
+                                    // above once schedule() lands in pendingRemovals):
+                                    // swipe LEFT = delete, swipe RIGHT = archive. Both
+                                    // instant paths defer the actual disk removal to
+                                    // PendingRemovalHolder; the row's own inline Undo (or
+                                    // its 10s countdown elapsing) resolves it.
+                                    onSwipeDeleteInstant = { s ->
+                                        PendingRemovalHolder.schedule(
+                                            PendingRemoval(s.sessionId, RemovalAction.DELETE, "Deleted"),
+                                            execute = { app.sessionStore.deleteSession(s.sessionId) },
+                                        )
+                                    },
+                                    // Swipe-left on a LOCAL/QUEUED (never-uploaded) session
+                                    // settles back instead of committing (see SessionRow's
+                                    // confirmValueChange) -- this just opens the same hard-
+                                    // confirm dialog long-press already uses, no different
+                                    // treatment for a swipe than a long-press here.
+                                    onSwipeDeleteRequiresConfirm = { s -> sessionPendingDelete = s },
+                                    onSwipeArchiveInstant = { s ->
+                                        PendingRemovalHolder.schedule(
+                                            PendingRemoval(s.sessionId, RemovalAction.ARCHIVE, "Archived"),
+                                            execute = { app.sessionStore.deleteSession(s.sessionId) },
+                                        )
+                                    },
+                                    onSwipeArchiveIneligible = { SwipeHintStateHolder.show("Not yet integrated") },
+                                )
+                            }
                         }
                     }
                 }
@@ -390,6 +416,90 @@ internal fun SessionRow(
 
 /** Not part of the Material3 color scheme (no "success"/archive role defined in Theme.kt) -- a plain, theme-independent green reads fine against either the red delete counterpart or a white icon. */
 private val SwipeArchiveGreen = Color(0xFF2E7D32)
+
+/**
+ * Bead asn-638: the same list slot [SessionRow] occupies for [session.sessionId],
+ * shown instead of it while a swipe on that row is pending. Same Card shell
+ * and layout as [SessionRow] (so the row doesn't visibly reflow), but its
+ * title/meta/status content is dimmed via [alpha] rather than replaced, an
+ * inline "Undo" button sits where the row's swipe gesture used to live, and a
+ * thin [LinearProgressIndicator] across the bottom shrinks from full to empty
+ * over [PENDING_REMOVAL_WINDOW_MS] as the countdown affordance. Not
+ * swipeable itself -- no [SwipeToDismissBox] here -- undo is a tap, not a
+ * gesture, while a row is already pending.
+ *
+ * Owns the actual 10s timer via [PendingRemovalCountdown.run] (deliberately
+ * plain-coroutine, not a Compose animation -- see that object's KDoc for
+ * why): drives both the progress line and, on completion,
+ * [PendingRemovalHolder.flush] -- the only place in this bead that commits
+ * on a plain timeout (leaving the screen or backgrounding the app instead go
+ * through [PendingRemovalHolder.flushAll], which this composable's own
+ * cancellation-on-dispose can't reach in time to run). Keyed on
+ * [pending.sessionId] rather than the whole [pending] value so
+ * re-scheduling the *same* session (a second swipe before the first's
+ * countdown elapses) restarts the clock from the top instead of leaving a
+ * stale countdown running toward an old target.
+ */
+@Composable
+private fun PendingSessionRow(
+    session: SessionSummary,
+    pending: PendingRemoval,
+    onUndo: () -> Unit,
+) {
+    var progress by remember(pending.sessionId) { mutableFloatStateOf(1f) }
+    LaunchedEffect(pending.sessionId) {
+        PendingRemovalCountdown.run(
+            windowMs = PENDING_REMOVAL_WINDOW_MS,
+            onProgress = { progress = it },
+            onElapsed = { PendingRemovalHolder.flush(pending.sessionId) },
+        )
+    }
+    val tint = when (pending.action) {
+        RemovalAction.DELETE -> MaterialTheme.colorScheme.error
+        RemovalAction.ARCHIVE -> SwipeArchiveGreen
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("session-pending-${session.sessionId}"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f).alpha(0.4f)) {
+                    Text(
+                        text = session.title,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = pending.message,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                TextButton(onClick = onUndo, modifier = Modifier.testTag("session-undo-${session.sessionId}")) {
+                    Text(text = "Undo", color = tint, fontWeight = FontWeight.Bold)
+                }
+            }
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.fillMaxWidth().height(2.dp).testTag("session-pending-progress-${session.sessionId}"),
+                color = tint,
+                trackColor = Color.Transparent,
+            )
+        }
+    }
+}
 
 /** [SwipeToDismissBox]'s `backgroundContent` -- red+delete-icon revealed from the right on a left swipe, green+archive-icon revealed from the left on a right swipe. Fully hidden behind the row at rest (dismissDirection == Settled), which is what keeps the static golden unaffected -- see [SessionRow]'s KDoc. */
 @OptIn(ExperimentalMaterial3Api::class)

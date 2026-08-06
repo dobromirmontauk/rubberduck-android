@@ -12,7 +12,10 @@ import com.montauk.voicecapture.service.TagsStateHolder
 import com.montauk.voicecapture.service.TranscriptLine
 import com.montauk.voicecapture.service.TranscriptStateHolder
 import com.montauk.voicecapture.service.TranscriptUiState
+import com.montauk.voicecapture.session.PendingRemoval
+import com.montauk.voicecapture.session.PendingRemovalHolder
 import com.montauk.voicecapture.session.RecordingMode
+import com.montauk.voicecapture.session.RemovalAction
 import com.montauk.voicecapture.session.UploadState
 import com.montauk.voicecapture.stt.SttConnectionState
 import com.montauk.voicecapture.tags.DisplayedTag
@@ -20,6 +23,7 @@ import com.montauk.voicecapture.tags.TagTier
 import com.montauk.voicecapture.testutil.SessionFixtures
 import com.montauk.voicecapture.ui.AppNavHost
 import com.montauk.voicecapture.ui.Routes
+import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -83,11 +87,20 @@ class KeyScreensScreenshotTest {
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
         TagsStateHolder.reset()
+        // Process-global singleton (bead asn-638) -- reset explicitly rather
+        // than relying on Robolectric's per-test static sandboxing, same
+        // belt-and-suspenders as SessionSwipeInteractionTest.
+        PendingRemovalHolder.flushAll()
         // See the class doc -- neutralizes AppSecretsStore's BuildConfig fallbacks
         // so goldens don't encode whichever machine happens to run this test.
         app.secretsStore.isSignedOut = true
         app.secretsStore.selectedVaultOwner = "dobromirmontauk"
         app.secretsStore.selectedVaultRepo = "voice-vault"
+    }
+
+    @After
+    fun tearDown() {
+        PendingRemovalHolder.flushAll()
     }
 
     @Test
@@ -127,6 +140,50 @@ class KeyScreensScreenshotTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "sessions_with_nav.png")
+    }
+
+    /**
+     * Bead asn-638: one row mid-swipe-pending (dimmed content + inline Undo
+     * + full-width countdown line) alongside a normal, untouched row --
+     * proves the pending-row treatment renders as intended rather than just
+     * asserting on text/testTag presence (see [SessionSwipeInteractionTest]
+     * for the interaction coverage). Schedules the pending removal directly
+     * via [PendingRemovalHolder.schedule] rather than performing an actual
+     * swipe gesture -- equivalent end state, and keeps this golden's setup
+     * decoupled from `SwipeToDismissBox`'s gesture-threshold mechanics.
+     * Captured immediately after [PendingRemovalHolder.schedule] with no
+     * elapsed time, so the countdown line is full-width (progress == 1f) --
+     * see `PendingRemovalCountdown`'s KDoc for why that's deterministic here
+     * (a plain-coroutine `delay()`, not a Compose animation the test
+     * harness's idle-sync would otherwise fast-forward).
+     */
+    @Test
+    fun sessionsListWithPendingRow() {
+        SessionFixtures.seedSession(
+            app.sessionStore,
+            sessionId = "2026-08-01_0900_ab12",
+            transcriptText = "Kitchen remodel budget check",
+            uploadState = UploadState.UPLOADED,
+            startedAt = Date(SessionFixtures.FIXED_STARTED_AT.time),
+        )
+        SessionFixtures.seedSession(
+            app.sessionStore,
+            sessionId = "2026-08-01_1000_cd34",
+            transcriptText = "Marathon training recap",
+            uploadState = UploadState.QUEUED,
+            startedAt = Date(SessionFixtures.FIXED_STARTED_AT.time + 3_600_000L),
+        )
+        PendingRemovalHolder.schedule(
+            PendingRemoval("2026-08-01_0900_ab12", RemovalAction.DELETE, "Deleted"),
+            execute = { app.sessionStore.deleteSession("2026-08-01_0900_ab12") },
+        )
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.SESSIONS, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "sessions_list_pending_row.png")
     }
 
     @Test
