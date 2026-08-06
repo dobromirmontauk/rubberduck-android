@@ -77,6 +77,7 @@ import com.montauk.voicecapture.stt.SttConnectionState
 import com.montauk.voicecapture.tags.RailChipSource
 import com.montauk.voicecapture.tags.TagFilingDestination
 import com.montauk.voicecapture.tags.TagRailChip
+import com.montauk.voicecapture.tags.TagStatus
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -105,6 +106,7 @@ fun RecordingScreen(
     onAddTag: (tag: String, tagId: String?) -> Unit = { _, _ -> },
     onRemoveTag: (tag: String) -> Unit = {},
     onSwapTag: (oldTag: String, newTag: String, newTagId: String?) -> Unit = { _, _, _ -> },
+    onApproveTag: (tag: String) -> Unit = {},
     onOpenSettings: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -154,6 +156,7 @@ fun RecordingScreen(
                         onRemove = onRemoveTag,
                         onRequestAdd = { pickerRequest = TagPickerRequest.Add },
                         onRequestSwap = { oldTag -> pickerRequest = TagPickerRequest.Swap(oldTag) },
+                        onApprove = onApproveTag,
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     LiveTranscriptPane(
@@ -647,6 +650,7 @@ private fun TagRailSection(
     onRemove: (String) -> Unit = {},
     onRequestAdd: () -> Unit = {},
     onRequestSwap: (String) -> Unit = {},
+    onApprove: (String) -> Unit = {},
 ) {
     val visibleRail = if (anthropicKeyConfigured) rail else rail.filter { it.source == RailChipSource.USER }
     if (!anthropicKeyConfigured && visibleRail.isEmpty()) {
@@ -671,7 +675,15 @@ private fun TagRailSection(
         ) {
             visibleRail.forEach { chip ->
                 key(chip.tag) {
-                    TagRailChipView(chip = chip, onRemove = { onRemove(chip.tag) }, onTapBody = { onRequestSwap(chip.tag) })
+                    // Bead asn-0jk: a still-unapproved PROPOSED_NEW chip's
+                    // body tap approves it in place (no picker); every other
+                    // chip's body tap still opens the picker to swap it.
+                    val onTapBody = if (chip.status == TagStatus.PROPOSED_NEW && !chip.approved) {
+                        { onApprove(chip.tag) }
+                    } else {
+                        { onRequestSwap(chip.tag) }
+                    }
+                    TagRailChipView(chip = chip, onRemove = { onRemove(chip.tag) }, onTapBody = onTapBody)
                 }
             }
             AddTagChip(onClick = onRequestAdd)
@@ -688,14 +700,22 @@ const val REGISTER_KEY_MESSAGE_TEST_TAG = "recording_register_key_message"
 const val TAG_RAIL_TEST_TAG = "recording_tag_rail"
 const val TAG_RAIL_CHIP_SUGGESTED_TEST_TAG = "recording_tag_rail_chip_suggested"
 const val TAG_RAIL_CHIP_USER_TEST_TAG = "recording_tag_rail_chip_user"
+const val TAG_RAIL_CHIP_PROPOSED_TEST_TAG = "recording_tag_rail_chip_proposed"
 const val TAG_RAIL_ADD_CHIP_TEST_TAG = "recording_tag_rail_add_chip"
 const val FILING_DESTINATION_RIBBON_TEST_TAG = "recording_filing_destination_ribbon"
 
 /**
- * One rendered rail chip: outlined for [RailChipSource.SUGGESTED], filled
- * (tinted background, bold text) for [RailChipSource.USER] -- the bead's
- * exact two-state spec. Tapping the tag text requests a swap ([onTapBody]);
- * tapping the ✕ removes the chip ([onRemove]).
+ * One rendered rail chip, three visual states (bead asn-0jk's locked
+ * tag-colors design, layered onto asn-45m's original outlined/filled split):
+ * an unapproved [TagStatus.PROPOSED_NEW] chip (still [RailChipSource.SUGGESTED])
+ * gets a distinct tertiary-tinted outline ([TAG_RAIL_CHIP_PROPOSED_TEST_TAG]
+ * -- "purple" in the design doc); any other still-[RailChipSource.SUGGESTED]
+ * chip (an [TagStatus.EXISTING] candidate) stays plain-outlined ("white");
+ * any [RailChipSource.USER] chip -- confirmed, swapped-in, or an approved
+ * former proposal -- is filled ("green"). Tapping the tag text requests a
+ * swap or an approval depending on which state the chip is in (decided by
+ * the caller, [TagRailSection], via [onTapBody]); tapping the ✕ removes the
+ * chip ([onRemove]).
  *
  * [onTapBody]'s `clickable` and [onRemove]'s `clickable` are **siblings**
  * inside a plain (non-clickable) outer [Row] -- deliberately NOT one nested
@@ -714,15 +734,27 @@ const val FILING_DESTINATION_RIBBON_TEST_TAG = "recording_filing_destination_rib
 private fun TagRailChipView(chip: TagRailChip, onRemove: () -> Unit, onTapBody: () -> Unit) {
     val shape = RoundedCornerShape(999.dp)
     val filled = chip.source == RailChipSource.USER
-    val borderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+    val isUnapprovedProposal = chip.status == TagStatus.PROPOSED_NEW && !chip.approved
+    val testTag = when {
+        filled -> TAG_RAIL_CHIP_USER_TEST_TAG
+        isUnapprovedProposal -> TAG_RAIL_CHIP_PROPOSED_TEST_TAG
+        else -> TAG_RAIL_CHIP_SUGGESTED_TEST_TAG
+    }
+    val proposedBorderColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f)
+    val plainBorderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+    val borderColor = if (isUnapprovedProposal) proposedBorderColor else plainBorderColor
     val backgroundColor = if (filled) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color.Transparent
-    val contentColor = if (filled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    val contentColor = when {
+        filled -> MaterialTheme.colorScheme.primary
+        isUnapprovedProposal -> MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .background(backgroundColor, shape)
             .border(1.dp, borderColor, shape)
-            .testTag(if (filled) TAG_RAIL_CHIP_USER_TEST_TAG else TAG_RAIL_CHIP_SUGGESTED_TEST_TAG)
+            .testTag(testTag)
             .padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 6.dp),
     ) {
         Text(

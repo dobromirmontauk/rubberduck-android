@@ -49,6 +49,7 @@ fun AppNavHost(
     onAddTag: (tag: String, tagId: String?) -> Unit = { _, _ -> },
     onRemoveTag: (tag: String) -> Unit = {},
     onSwapTag: (oldTag: String, newTag: String, newTagId: String?) -> Unit = { _, _, _ -> },
+    onApproveTag: (tag: String) -> Unit = {},
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
@@ -180,6 +181,7 @@ fun AppNavHost(
                     onAddTag = onAddTag,
                     onRemoveTag = onRemoveTag,
                     onSwapTag = onSwapTag,
+                    onApproveTag = onApproveTag,
                     onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                     onStopRecording = {
                         onStopRecording()

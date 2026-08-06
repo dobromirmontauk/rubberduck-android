@@ -8,23 +8,54 @@ package com.montauk.voicecapture.tags
 enum class RailChipSource { SUGGESTED, USER }
 
 /**
+ * Whether [TagRailChip.tagId] resolves to a real node in the vault's
+ * currently-loaded tag tree (bead asn-0jk's locked tag-colors design):
+ * [EXISTING] iff [TagRailChip.tagId] is non-null, [PROPOSED_NEW] otherwise --
+ * covers both a scorer's explicit "this looks like a genuinely new topic"
+ * proposal and the legacy free-form/no-vault case (nothing in `tags.yaml` to
+ * match against either way, so from the vault's perspective this tag simply
+ * doesn't exist yet). Wire value is the lowercase-with-underscore string
+ * ([TagStatus.wireValue]), matching this app's other event-line string fields
+ * (`"event"`, `"source"`) rather than Kotlin's default enum-name casing.
+ */
+enum class TagStatus { EXISTING, PROPOSED_NEW }
+
+/** [TagStatus]'s `live-transcript.jsonl` wire representation -- see [TagStatus]'s KDoc. */
+val TagStatus.wireValue: String
+    get() = when (this) {
+        TagStatus.EXISTING -> "existing"
+        TagStatus.PROPOSED_NEW -> "proposed_new"
+    }
+
+/**
  * One entry in the merged suggested+user list [TagChipRail.chips] returns --
  * the shared, screen-agnostic unit two different views bind to: the
  * recording screen's editable chip rail (outlined for [RailChipSource.SUGGESTED],
  * filled for [RailChipSource.USER]) and, per bead asn-3sm, an animated-duck
- * word cloud (green for confirmed/high-confidence, white for candidates).
+ * word cloud (green for confirmed/high-confidence or approved, white for
+ * unapproved existing candidates, purple for an unapproved new-tag proposal).
  *
  * [confidence] carries [DisplayedTag.confidence] through for [RailChipSource.SUGGESTED]
  * chips (word-cloud sizing/coloring by confidence) and is always null for
  * [RailChipSource.USER] chips -- a user's own pick has no scorer confidence,
  * it's simply confirmed.
+ *
+ * [approved] is `source == USER` verbatim -- there is no separate "approved"
+ * bookkeeping in [TagChipRail]; a chip is approved exactly when the user has
+ * acted on it (added, swapped-in, or, for a [TagStatus.PROPOSED_NEW] chip,
+ * tapped to approve via [TagChipRail.onApprove]). Only meaningful for
+ * [TagStatus.PROPOSED_NEW] -- approving an already-[TagStatus.EXISTING] tag
+ * is a no-op concept, since it's already a real `tags.yaml` node either way.
  */
 data class TagRailChip(
     val tag: String,
     val tagId: String? = null,
     val source: RailChipSource,
     val confidence: Double? = null,
-)
+) {
+    val status: TagStatus get() = if (tagId != null) TagStatus.EXISTING else TagStatus.PROPOSED_NEW
+    val approved: Boolean get() = source == RailChipSource.USER
+}
 
 /**
  * State machine behind the recording screen's editable tag chip rail (bead
@@ -137,6 +168,27 @@ class TagChipRail {
         val added = onAdd(newTag, newTagId)
         return removed || added
     }
+
+    /**
+     * User tapped a [TagStatus.PROPOSED_NEW] chip's body to approve it in
+     * place (bead asn-0jk: purple -> green, a single tap, no picker --
+     * distinct from [onSwap], which a tap on an already-[TagStatus.EXISTING]
+     * chip still opens) -- promotes that exact suggested proposal to a
+     * [RailChipSource.USER] chip, same [TagRailChip.approved] == `source ==
+     * USER` rule every other chip already follows. A no-op (returns false)
+     * if [tag] isn't currently a still-suggested, still-[TagStatus.PROPOSED_NEW]
+     * candidate -- e.g. it was already approved (already a user chip), never
+     * suggested at all, or is tree-matched ([TagStatus.EXISTING], nothing to
+     * approve).
+     */
+    fun onApprove(tag: String): Boolean {
+        val key = normalize(tag)
+        val candidate = suggested.find { normalize(it.tag) == key && it.tagId == null } ?: return false
+        return onAdd(candidate.tag, tagId = null)
+    }
+
+    /** Normalized tag keys of every currently-[TagRailChip.approved] chip -- feeds [TagsEventWriter.encodeLine]'s model-snapshot lines so an untouched proposal keeps reporting `approved:false` without [com.montauk.voicecapture.service.RecordingService] reaching into chip internals itself. */
+    fun approvedKeys(): Set<String> = chips().filter { it.approved }.map { normalize(it.tag) }.toSet()
 
     private fun normalize(tag: String): String = tag.trim().lowercase()
 }
