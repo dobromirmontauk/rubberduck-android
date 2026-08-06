@@ -9,8 +9,18 @@ import com.montauk.voicecapture.vault.VaultSessionSource
  * whether or not the test happens to set a (fake) non-blank GitHub token.
  * [integratedSessionIds] defaults to empty (nothing integrated); pass a
  * non-empty set to simulate a vault listing hit for those ids.
+ *
+ * [artifacts] (bead vn-edu.57, Canonical/Filed-to tabs) is a
+ * `"<sessionId>/<filename>"`-keyed map of fake artifact bytes -- e.g.
+ * `"2026-08-05_0005_guem/transcript.json" to fixtureBytes`. A lookup miss
+ * returns null, same as [com.montauk.voicecapture.vault.GitHubVaultSessionSource]'s
+ * "doesn't exist or fetch failed" contract.
  */
-class FakeVaultSessionSource(private val integratedSessionIds: Set<String> = emptySet()) : VaultSessionSource {
+class FakeVaultSessionSource(
+    private val integratedSessionIds: Set<String> = emptySet(),
+    private val artifacts: Map<String, ByteArray> = emptyMap(),
+) : VaultSessionSource {
     override suspend fun listSessionIds(token: String, owner: String, repo: String): Set<String>? = integratedSessionIds
-    override suspend fun fetchArtifact(token: String, owner: String, repo: String, sessionId: String, filename: String): ByteArray? = null
+    override suspend fun fetchArtifact(token: String, owner: String, repo: String, sessionId: String, filename: String): ByteArray? =
+        artifacts["$sessionId/$filename"]
 }
