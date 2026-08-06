@@ -39,6 +39,8 @@ import com.montauk.voicecapture.BuildConfig
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.llm.AnthropicKeyError
 import com.montauk.voicecapture.llm.AnthropicKeyValidator
+import com.montauk.voicecapture.settings.CredentialDisplayState
+import com.montauk.voicecapture.settings.credentialDisplayState
 import com.montauk.voicecapture.stt.AssemblyAiKeyError
 import com.montauk.voicecapture.stt.AssemblyAiKeyValidator
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
@@ -54,6 +56,19 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit, onConnectGithub: () -> Unit) {
     val vaultOwner = app.secretsStore.selectedVaultOwner ?: BuildConfig.VAULT_OWNER
     val vaultRepo = app.secretsStore.selectedVaultRepo ?: BuildConfig.VAULT_REPO
     val connected = app.secretsStore.isConnectedToGithub()
+    // Bead vn-edu.52: "connected" already is the runtime-token/signed-in
+    // check (AppSecretsStore.isConnectedToGithub), so it doubles as
+    // credentialDisplayState's hasRuntimeValue here -- isGithubTokenConfigured()
+    // (the effective/BuildConfig-inclusive check) supplies hasDevFallback.
+    val uploadTokenState = credentialDisplayState(hasRuntimeValue = connected, hasDevFallback = app.isGithubTokenConfigured())
+    val assemblyKeyState = credentialDisplayState(
+        hasRuntimeValue = !app.secretsStore.userAssemblyAiKey.isNullOrBlank(),
+        hasDevFallback = app.isAssemblyKeyConfigured(),
+    )
+    val anthropicKeyState = credentialDisplayState(
+        hasRuntimeValue = !app.secretsStore.userAnthropicKey.isNullOrBlank(),
+        hasDevFallback = app.isAnthropicKeyConfigured(),
+    )
 
     VoiceCaptureTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -65,25 +80,31 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit, onConnectGithub: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(20.dp))
                 SettingsSection {
-                    InfoRow(label = "GitHub", value = if (connected) app.secretsStore.userGithubLogin ?: "Connected" else "Not connected")
                     // Bead vn-edu.29: GitHub is an optional, later step now, not
                     // something a fresh install already asked about -- this is the
                     // one place to start that flow when signed out (the bottom
                     // nav's "Sign In" tab is the other).
-                    if (!connected) {
-                        TextButton(onClick = onConnectGithub) { Text("Connect GitHub") }
-                    }
+                    GithubConnectionRow(
+                        connected = connected,
+                        githubLogin = app.secretsStore.userGithubLogin,
+                        // Only worth a notice when signed out -- a connected
+                        // account's own token is already what's uploading.
+                        showDevFallbackNotice = !connected && uploadTokenState == CredentialDisplayState.DEV_FALLBACK,
+                        onConnectGithub = onConnectGithub,
+                    )
                     InfoRow(label = "Vault repo", value = "$vaultOwner/$vaultRepo")
-                    InfoRow(label = "Upload token", value = if (app.isGithubTokenConfigured()) "Configured" else "Not configured")
+                    UploadTokenRow(state = uploadTokenState)
                     InfoRow(label = "App version", value = app.appVersionName())
                 }
                 Spacer(modifier = Modifier.height(20.dp))
                 // Bead vn-edu.48: in-app key management -- each row shows the
                 // runtime-entered key's state (masked, last-4 visible), a reveal
-                // toggle, and a Replace flow that validates before storing. The
-                // BuildConfig/local.properties dev fallback isn't reflected here
-                // deliberately -- it's a dev-build convenience this UI doesn't
-                // manage (see AppSecretsStore.effective*() KDoc).
+                // toggle, and a Replace flow that validates before storing.
+                // Bead vn-edu.52: when there's no runtime key but the
+                // BuildConfig/local.properties dev fallback is non-blank, the
+                // row shows a distinct "Using build-time key (dev)" state
+                // instead of misreporting "Not configured" -- see
+                // devFallbackActive's KDoc on ApiKeyManagementRow.
                 SettingsSection {
                     ApiKeyManagementRow(
                         label = "Live transcription",
@@ -93,6 +114,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit, onConnectGithub: () -> Unit) {
                             if (e is AssemblyAiKeyError.Invalid) "That key didn't work" else "Couldn't reach AssemblyAI"
                         },
                         onSave = { key -> app.secretsStore.userAssemblyAiKey = key },
+                        devFallbackActive = assemblyKeyState == CredentialDisplayState.DEV_FALLBACK,
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     ApiKeyManagementRow(
@@ -104,6 +126,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit, onConnectGithub: () -> Unit) {
                         },
                         onSave = { key -> app.secretsStore.userAnthropicKey = key },
                         modifier = Modifier.testTag(ANTHROPIC_KEY_ROW_TEST_TAG),
+                        devFallbackActive = anthropicKeyState == CredentialDisplayState.DEV_FALLBACK,
                     )
                 }
                 Spacer(modifier = Modifier.height(20.dp))
@@ -143,6 +166,54 @@ private fun InfoRow(label: String, value: String) {
     }
 }
 
+/**
+ * Bead vn-edu.52: the OAuth sign-in row itself keeps its existing semantics
+ * ("Not connected" means "not signed in", full stop) -- but a dev/build
+ * token can be actively uploading while signed out, and a bare "Not
+ * connected" reads as "uploads impossible." [showDevFallbackNotice] adds a
+ * short secondary line for exactly that case. `internal` for
+ * [ApiKeyManagementRowTest]-style direct test visibility -- see
+ * [ApiKeyManagementRow]'s KDoc for the convention.
+ */
+@Composable
+internal fun GithubConnectionRow(
+    connected: Boolean,
+    githubLogin: String?,
+    showDevFallbackNotice: Boolean,
+    onConnectGithub: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        InfoRow(label = "GitHub", value = if (connected) githubLogin ?: "Connected" else "Not connected")
+        if (!connected) {
+            TextButton(onClick = onConnectGithub) { Text("Connect GitHub") }
+            if (showDevFallbackNotice) {
+                Text(
+                    text = "Uploads active via build-time token (dev)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Bead vn-edu.52: distinguishes a user-entered token ("Configured (in-app)")
+ * from a dev build's BuildConfig/`local.properties` fallback ("Using
+ * build-time token (dev)") from neither ("Not configured") -- see
+ * [CredentialDisplayState]. `internal` for test visibility, same convention
+ * as [ApiKeyManagementRow].
+ */
+@Composable
+internal fun UploadTokenRow(state: CredentialDisplayState) {
+    val value = when (state) {
+        CredentialDisplayState.CONFIGURED -> "Configured (in-app)"
+        CredentialDisplayState.DEV_FALLBACK -> "Using build-time token (dev)"
+        CredentialDisplayState.NOT_CONFIGURED -> "Not configured"
+    }
+    InfoRow(label = "Upload token", value = value)
+}
+
 /** Stub toggle -- doesn't yet wire to any real behavior; fine for this wave per the brief. */
 @Composable
 private fun ToggleRow(label: String, initiallyOn: Boolean) {
@@ -177,6 +248,15 @@ private fun ToggleRow(label: String, initiallyOn: Boolean) {
  * [ApiKeyManagementRowTest] can drive it directly with fake `validate`/
  * `onSave` lambdas instead of hitting the real AssemblyAI/Anthropic APIs
  * that [SettingsScreen] wires in production.
+ *
+ * [devFallbackActive] (bead vn-edu.52) only changes the not-configured-yet
+ * display: when there's no [initialValue] but the caller's BuildConfig/
+ * `local.properties` dev fallback is non-blank, the row shows "Using
+ * build-time key (dev)" instead of "Not configured", with the same "Add"
+ * affordance -- adding a runtime key still replaces the dev fallback (bead
+ * vn-edu.48 precedence, unchanged here). Once [initialValue] is non-blank,
+ * [devFallbackActive] no longer matters -- the masked/revealed value always
+ * wins.
  */
 @Composable
 internal fun ApiKeyManagementRow(
@@ -186,6 +266,7 @@ internal fun ApiKeyManagementRow(
     errorMessageFor: (Throwable) -> String,
     onSave: (String) -> Unit,
     modifier: Modifier = Modifier,
+    devFallbackActive: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
     var storedValue by remember { mutableStateOf(initialValue) }
@@ -206,6 +287,7 @@ internal fun ApiKeyManagementRow(
                 val current = storedValue
                 Text(
                     text = when {
+                        current.isNullOrBlank() && devFallbackActive -> "Using build-time key (dev)"
                         current.isNullOrBlank() -> "Not configured"
                         revealed -> current
                         else -> maskedLast4(current)

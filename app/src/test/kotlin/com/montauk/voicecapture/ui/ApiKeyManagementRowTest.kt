@@ -93,6 +93,84 @@ class ApiKeyManagementRowTest {
     }
 
     @Test
+    fun `dev fallback active with no runtime value shows the dev-key state and an Add affordance, not Replace`() {
+        composeTestRule.setContent {
+            ApiKeyManagementRow(
+                label = "Live transcription",
+                initialValue = null,
+                validate = { Result.success(Unit) },
+                errorMessageFor = { "unused" },
+                onSave = {},
+                devFallbackActive = true,
+            )
+        }
+
+        composeTestRule.onNodeWithText("Using build-time key (dev)").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Not configured").assertDoesNotExist()
+        composeTestRule.onNodeWithText("Add").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Replace").assertDoesNotExist()
+    }
+
+    @Test
+    fun `dev fallback active is ignored once a runtime value is stored -- masked value wins`() {
+        composeTestRule.setContent {
+            ApiKeyManagementRow(
+                label = "Live transcription",
+                initialValue = "sk-secret-real-value-3f2a",
+                validate = { Result.success(Unit) },
+                errorMessageFor = { "unused" },
+                onSave = {},
+                devFallbackActive = true,
+            )
+        }
+
+        composeTestRule.onNodeWithText("••••3f2a").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Using build-time key (dev)").assertDoesNotExist()
+        composeTestRule.onNodeWithText("Replace").assertIsDisplayed()
+    }
+
+    @Test
+    fun `no runtime value and no dev fallback shows Not configured, unchanged from before this bead`() {
+        composeTestRule.setContent {
+            ApiKeyManagementRow(
+                label = "Live transcription",
+                initialValue = null,
+                validate = { Result.success(Unit) },
+                errorMessageFor = { "unused" },
+                onSave = {},
+                devFallbackActive = false,
+            )
+        }
+
+        composeTestRule.onNodeWithText("Not configured").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Using build-time key (dev)").assertDoesNotExist()
+    }
+
+    @Test
+    fun `adding a runtime key while dev fallback is active switches display to the masked value`() {
+        var saved: String? = null
+        composeTestRule.setContent {
+            ApiKeyManagementRow(
+                label = "Live transcription",
+                initialValue = null,
+                validate = { Result.success(Unit) },
+                errorMessageFor = { "unused" },
+                onSave = { saved = it },
+                devFallbackActive = true,
+            )
+        }
+
+        composeTestRule.onNodeWithText("Add").performClick()
+        composeTestRule.onNode(hasSetTextAction()).performTextInput("sk-live-goodkey1234")
+        composeTestRule.onNodeWithText("Save").performClick()
+        composeTestRule.waitForIdle()
+
+        assertEquals("sk-live-goodkey1234", saved)
+        composeTestRule.onNodeWithText("••••1234").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Using build-time key (dev)").assertDoesNotExist()
+    }
+
+    @Test
     fun `replace flow persists and displays the new masked value only after validation succeeds`() {
         var saved: String? = null
         composeTestRule.setContent {
