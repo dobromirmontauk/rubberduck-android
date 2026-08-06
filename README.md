@@ -266,11 +266,12 @@ device. It runs in the default `./gradlew test` (part of `testDebugUnitTest`).
 ## Screenshot tests (Roborazzi)
 
 `app/src/test/kotlin/com/montauk/voicecapture/screenshot/KeyScreensScreenshotTest.kt`
-(bead vn-edu.34) renders five key screens -- Sessions list + bottom nav, the
+(bead vn-edu.34) renders six key screens -- Sessions list + bottom nav, the
 full Recording stack (timer, chips, loudness meter, mode switcher, live
-transcript, tag chips, STOP), Session detail, Settings, and Login -- via
-Robolectric's native-graphics renderer and diffs each against a committed
-golden PNG under `src/test/screenshot/goldens/`. No emulator, no device.
+transcript, tag chips, Pause/STOP), the Recording screen auto-paused (bead
+asn-r60), Session detail, Settings, and Login -- via Robolectric's
+native-graphics renderer and diffs each against a committed golden PNG under
+`src/test/screenshot/goldens/`. No emulator, no device.
 
 **Determinism.** Every screen is driven from fixed fixture state: fixed
 session ids/dates/transcript text via `testutil/SessionFixtures.kt` (no

@@ -25,7 +25,7 @@ jobs:
       # (ANDROID_HOME is already set), so no manual SDK setup step here.
       #
       # verifyRoborazziDebug (bead vn-edu.34, made hermetic in vn-edu.40)
-      # re-renders the 5 key-screen goldens under app/src/test/screenshot/goldens/
+      # re-renders the 6 key-screen goldens under app/src/test/screenshot/goldens/
       # and fails the build on any pixel diff -- folded into the same step as
       # `test` since both are JVM-only, no emulator/device needed.
       - name: Unit tests + screenshot verification
