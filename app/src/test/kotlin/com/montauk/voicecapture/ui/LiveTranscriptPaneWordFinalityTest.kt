@@ -67,6 +67,9 @@ class LiveTranscriptPaneWordFinalityTest {
         com.montauk.voicecapture.service.TagApprovalStateHolder.reset()
         com.montauk.voicecapture.service.SummaryStateHolder.reset()
         com.montauk.voicecapture.service.LatencyBadgeStateHolder.reset()
+        com.montauk.voicecapture.service.TagRailStateHolder.reset()
+        com.montauk.voicecapture.service.TagTreeStateHolder.reset()
+        com.montauk.voicecapture.service.RecordingActivityStateHolder.reset()
         // Bead vn-edu.66: the pane now gates on the effective AssemblyAI key
         // -- this test's fixture implies a real CONNECTED session (it seeds
         // currentPartial directly), so it needs a configured key or it would

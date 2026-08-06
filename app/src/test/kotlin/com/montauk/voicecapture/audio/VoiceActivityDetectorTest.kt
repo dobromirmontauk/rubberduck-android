@@ -50,7 +50,7 @@ class VoiceActivityDetectorTest {
     }
 
     @Test
-    fun `reset clears both isSpeaking and continuousQuietMs`() {
+    fun `reset clears isSpeaking, continuousQuietMs, and consecutiveSpeechWindows`() {
         val vad = VoiceActivityDetector(speechThreshold = 0.02f)
         vad.onWindow(rms = 0.5f, windowMs = 100L)
         repeat(3) { vad.onWindow(rms = 0f, windowMs = 100L) }
@@ -59,5 +59,40 @@ class VoiceActivityDetectorTest {
 
         assertFalse(vad.isSpeaking)
         assertEquals(0L, vad.continuousQuietMs)
+        assertEquals(0, vad.consecutiveSpeechWindows)
+    }
+
+    // --- Bead asn-o63: resume-hysteresis counter ---
+
+    @Test
+    fun `consecutiveSpeechWindows counts up across back-to-back speaking windows`() {
+        val vad = VoiceActivityDetector(speechThreshold = 0.02f)
+
+        vad.onWindow(rms = 0.5f, windowMs = 100L)
+        assertEquals(1, vad.consecutiveSpeechWindows)
+        vad.onWindow(rms = 0.5f, windowMs = 100L)
+        assertEquals(2, vad.consecutiveSpeechWindows)
+        vad.onWindow(rms = 0.5f, windowMs = 100L)
+        assertEquals(3, vad.consecutiveSpeechWindows)
+    }
+
+    @Test
+    fun `a single quiet window resets consecutiveSpeechWindows to zero -- fixes the single-blip auto-resume bug`() {
+        val vad = VoiceActivityDetector(speechThreshold = 0.02f)
+        vad.onWindow(rms = 0.5f, windowMs = 100L) // one blip of "speech"
+        assertEquals(1, vad.consecutiveSpeechWindows)
+
+        vad.onWindow(rms = 0f, windowMs = 100L) // back to quiet immediately
+
+        assertEquals(0, vad.consecutiveSpeechWindows)
+    }
+
+    @Test
+    fun `consecutiveSpeechWindows stays at zero throughout a purely quiet run`() {
+        val vad = VoiceActivityDetector(speechThreshold = 0.02f)
+
+        repeat(10) { vad.onWindow(rms = 0f, windowMs = 100L) }
+
+        assertEquals(0, vad.consecutiveSpeechWindows)
     }
 }

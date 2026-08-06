@@ -13,8 +13,9 @@ import kotlinx.coroutines.flow.asStateFlow
  * [RecordingService]'s pause-handling KDoc for the hard-vs-soft distinction.
  *
  * Consumed by the duck-screen bead (asn-3sm) for its animation state, and by
- * [com.montauk.voicecapture.ui.RecordingScreen] for the pause button label
- * and the auto-pause banner.
+ * [com.montauk.voicecapture.ui.RecordingScreen] for the pause button's label
+ * (bead asn-o63 dropped the separate auto-pause banner that used to also
+ * read this -- the button is the only pause UI now).
  */
 enum class RecordingActivityState {
     /** VAD currently reads above the speech-energy threshold. */

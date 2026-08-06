@@ -25,6 +25,7 @@ import com.montauk.voicecapture.audio.FileAudioSource
 import com.montauk.voicecapture.audio.MicAudioSource
 import com.montauk.voicecapture.audio.MicLevelMeter
 import com.montauk.voicecapture.audio.VoiceActivityDetector
+import com.montauk.voicecapture.audio.autoPauseFillFraction
 import com.montauk.voicecapture.session.LiveTranscriptLine
 import com.montauk.voicecapture.session.LiveTranscriptWriter
 import com.montauk.voicecapture.session.ModeChange
@@ -35,6 +36,7 @@ import com.montauk.voicecapture.session.RecordingModeStateMachine
 import com.montauk.voicecapture.session.SessionHandle
 import com.montauk.voicecapture.session.SessionModeEntry
 import com.montauk.voicecapture.session.UploadState
+import com.montauk.voicecapture.settings.AppSecretsStore
 import com.montauk.voicecapture.stt.StreamingSttClient
 import com.montauk.voicecapture.stt.SttConnectionState
 import com.montauk.voicecapture.stt.SttTimelineTracker
@@ -96,11 +98,13 @@ class RecordingService : LifecycleService() {
         const val ACTION_PAUSE = "com.montauk.voicecapture.action.PAUSE"
 
         /**
-         * Bead asn-r60: an explicit resume tap -- either the pause button
-         * while paused, or the auto-pause banner's own "tap to resume". VAD
-         * can also resume a soft/auto pause on its own without this action
-         * ever firing; see [resumeTapped]'s KDoc for how both paths land in
-         * the same place.
+         * Bead asn-r60: an explicit resume tap -- the same pause button,
+         * now reading "Resume", while either kind of pause is active (bead
+         * asn-o63 dropped the separate auto-pause banner that used to offer
+         * its own "tap to resume"; one control does both now). VAD can also
+         * resume a soft/auto pause on its own without this action ever
+         * firing; see [resumeTapped]'s KDoc for how both paths land in the
+         * same place.
          */
         const val ACTION_RESUME = "com.montauk.voicecapture.action.RESUME"
 
@@ -144,6 +148,15 @@ class RecordingService : LifecycleService() {
 
         /** Bead asn-r60: the two [RecordingActivityState] values in which live PCM should still be fed to STT. */
         private val STT_ACTIVE_STATES = setOf(RecordingActivityState.SPEAKING, RecordingActivityState.QUIET)
+
+        /**
+         * Bead asn-o63: consecutive speaking [MicLevelMeter] windows (~100ms
+         * each) required before an auto-pause resumes -- see
+         * [VoiceActivityDetector.consecutiveSpeechWindows]'s KDoc for the
+         * live-test bug this fixes (a single blip window resuming a
+         * 323ms-long auto-pause). 3 windows == ~300ms of sustained speech.
+         */
+        private const val RESUME_HYSTERESIS_WINDOWS = 3
 
         fun startIntent(context: Context, injectAudio: String? = null): Intent =
             Intent(context, RecordingService::class.java).setAction(ACTION_START).apply {
@@ -275,24 +288,22 @@ class RecordingService : LifecycleService() {
     private val sttTimelineTracker = SttTimelineTracker()
 
     /**
-     * Bead asn-r60: the on-screen big timer + foreground notification's
-     * elapsed-time basis -- paused only across [RecordingActivityState.USER_PAUSED]
-     * spans (auto-pause deliberately leaves this running; see
-     * [PausableElapsedClock]'s KDoc for the full rationale). Driven from
-     * [startTicker].
-     */
-    private val visibleClock = PausableElapsedClock()
-
-    /**
-     * Bead asn-r60: the trimmed-audio-timeline basis for `live-transcript.jsonl`'s
-     * `mode`/`pause`/`resume` event `t_ms` values and for `meta.json`'s new
-     * `recorded_ms` field -- paused across BOTH [RecordingActivityState.USER_PAUSED]
-     * and [RecordingActivityState.AUTO_PAUSED] spans, matching exactly what
+     * Bead asn-r60 (re-anchored by asn-o63): the trimmed-audio-timeline
+     * basis for `live-transcript.jsonl`'s `mode`/`pause`/`resume` event
+     * `t_ms` values, for `meta.json`'s `recorded_ms` field, AND (bead
+     * asn-o63) for the on-screen big timer + foreground notification text --
+     * paused across BOTH [RecordingActivityState.USER_PAUSED] and
+     * [RecordingActivityState.AUTO_PAUSED] spans, matching exactly what
      * [audioEngine] actually persists to `audio.ogg` (see [AudioEngine]'s
-     * cumulative-fed-bytes presentation timestamps). Deliberately NOT applied
-     * to the pre-existing `tags` event line's own tick timestamp -- bead
-     * asn-k7i owns that timing surface concurrently; see this service's
-     * `startTicker` KDoc.
+     * cumulative-fed-bytes presentation timestamps). Bead asn-o63's live-test
+     * feedback: the visible timer must show real recorded *content* time (10
+     * min wall-clock with 2 min of actual speech reads "2:00"), not a clock
+     * that only freezes for a hard pause -- so the UI timer now shares this
+     * exact clock instead of a separate `visibleClock` that used to leave
+     * auto-pause spans ticking. Deliberately NOT applied to the pre-existing
+     * `tags`/summary event lines' own tick timestamp -- bead asn-k7i owns
+     * that timing surface concurrently; see this service's `startTicker`
+     * KDoc.
      */
     private val audioTimelineClock = PausableElapsedClock()
 
@@ -337,7 +348,6 @@ class RecordingService : LifecycleService() {
         // discipline as the Bluetooth-route reset below.
         voiceActivityDetector.reset()
         sttTimelineTracker.reset()
-        visibleClock.reset()
         audioTimelineClock.reset()
         RecordingActivityStateHolder.reset()
         // Bead vn-edu.2: a previous session's Bluetooth route/warning/loss
@@ -370,7 +380,12 @@ class RecordingService : LifecycleService() {
             // write below so quietDurationMs reflects this window already.
             voiceActivityDetector.onWindow(level, MicLevelMeter.DEFAULT_WINDOW_MS.toLong())
             TranscriptStateHolder.update {
-                it.copy(micLevel = level, silenceHintVisible = silent, quietDurationMs = voiceActivityDetector.continuousQuietMs)
+                it.copy(
+                    micLevel = level,
+                    silenceHintVisible = silent,
+                    quietDurationMs = voiceActivityDetector.continuousQuietMs,
+                    autoPauseFillFraction = currentAutoPauseFillFraction(),
+                )
             }
             onVadWindow()
         }
@@ -557,14 +572,35 @@ class RecordingService : LifecycleService() {
     }
 
     /**
+     * Bead asn-o63: current 0f..1f progress toward auto-pause -- thin
+     * wrapper around the pure [com.montauk.voicecapture.audio.autoPauseFillFraction]
+     * (see its own KDoc for the math and why it's a standalone testable
+     * function) fed from this session's live [voiceActivityDetector] reading
+     * and the current settings. Named distinctly from the top-level function
+     * it wraps so an unqualified call here can't accidentally resolve to
+     * itself instead of the pure function.
+     */
+    private fun currentAutoPauseFillFraction(): Float {
+        val app = application as VoiceCaptureApp
+        return autoPauseFillFraction(
+            continuousQuietMs = voiceActivityDetector.continuousQuietMs,
+            totalThresholdMs = app.secretsStore.autoPauseSilenceThresholdMs,
+            fillDurationMs = AppSecretsStore.AUTO_PAUSE_FILL_DURATION_MS,
+            enabled = app.secretsStore.autoPauseEnabled,
+        )
+    }
+
+    /**
      * Bead asn-r60: VAD-driven activity-state machine, called from every RMS
      * window regardless of pause state (see [MicLevelMeter]'s callback in
      * [beginRecording], which updates [voiceActivityDetector] itself just
      * before calling this). Three cases:
      *  - [RecordingActivityState.USER_PAUSED]: VAD never auto-transitions out
      *    of a manual pause -- only an explicit resume tap does.
-     *  - [RecordingActivityState.AUTO_PAUSED]: the moment VAD reads speech,
-     *    auto-resume.
+     *  - [RecordingActivityState.AUTO_PAUSED]: resumes once
+     *    [RESUME_HYSTERESIS_WINDOWS] consecutive windows have read speech
+     *    (bead asn-o63 -- see [VoiceActivityDetector.consecutiveSpeechWindows]'s
+     *    KDoc for the single-window resume bug this replaces).
      *  - [RecordingActivityState.SPEAKING]/[RecordingActivityState.QUIET]:
      *    publish whichever VAD currently says, and fire auto-pause once
      *    [VoiceActivityDetector.continuousQuietMs] clears the (settings-tunable,
@@ -575,7 +611,9 @@ class RecordingService : LifecycleService() {
         when (RecordingActivityStateHolder.state.value) {
             RecordingActivityState.USER_PAUSED -> Unit
             RecordingActivityState.AUTO_PAUSED -> {
-                if (voiceActivityDetector.isSpeaking) resumeFromAutoPause(session)
+                if (voiceActivityDetector.consecutiveSpeechWindows >= RESUME_HYSTERESIS_WINDOWS) {
+                    resumeFromAutoPause(session)
+                }
             }
             RecordingActivityState.SPEAKING, RecordingActivityState.QUIET -> {
                 val speaking = voiceActivityDetector.isSpeaking
@@ -617,11 +655,15 @@ class RecordingService : LifecycleService() {
      * Handles [ACTION_PAUSE]: hard mute (bead asn-r60) -- stop persisting,
      * retain no buffer, and actually close the STT stream rather than merely
      * muting it (frees the connection while paused, matches the bead's
-     * literal "close/stop the AssemblyAI stream" wording). Reachable from
-     * [RecordingActivityState.AUTO_PAUSED] too (escalating a soft pause to a
-     * hard one): [AudioPauseMode]'s SOFT->HARD transition discards the
-     * tentative ring buffer rather than persisting it -- see
-     * [com.montauk.voicecapture.audio.CapturePauseGate]'s KDoc.
+     * literal "close/stop the AssemblyAI stream" wording). Still reachable
+     * from [RecordingActivityState.AUTO_PAUSED] (escalating a soft pause to
+     * a hard one) at this action/intent level -- [AudioPauseMode]'s
+     * SOFT->HARD transition discards the tentative ring buffer rather than
+     * persisting it, see [com.montauk.voicecapture.audio.CapturePauseGate]'s
+     * KDoc -- though bead asn-o63's single pause/resume button no longer
+     * triggers that path itself (tapping while auto-paused now always
+     * resumes, matching its "Resume" label); this stays available for any
+     * future UI that wants an explicit escalate affordance.
      */
     private fun pauseManually() {
         val session = currentSession ?: return
@@ -629,7 +671,6 @@ class RecordingService : LifecycleService() {
         val now = SystemClock.elapsedRealtime()
         RecordingActivityStateHolder.set(RecordingActivityState.USER_PAUSED)
         audioEngine.setPauseMode(AudioPauseMode.HARD)
-        visibleClock.pause(now)
         audioTimelineClock.pause(now)
 
         val oldStt = sttClient
@@ -646,9 +687,9 @@ class RecordingService : LifecycleService() {
 
     /**
      * Handles [ACTION_RESUME]: a single explicit "resume" tap (the pause
-     * button while paused, or the auto-pause banner's own "tap to resume"
-     * affordance -- bead asn-r60's spec offers both) routed to whichever kind
-     * of pause is actually active. A no-op while not paused at all.
+     * button, now reading "Resume", while either kind of pause is active --
+     * bead asn-o63) routed to whichever kind of pause is actually active. A
+     * no-op while not paused at all.
      */
     private fun resumeTapped() {
         val session = currentSession ?: return
@@ -669,7 +710,6 @@ class RecordingService : LifecycleService() {
     private fun resumeManually(session: SessionHandle) {
         val now = SystemClock.elapsedRealtime()
         audioEngine.setPauseMode(AudioPauseMode.ACTIVE)
-        visibleClock.resume(now)
         audioTimelineClock.resume(now)
         sttTimelineTracker.onReconnect()
 
@@ -905,11 +945,16 @@ class RecordingService : LifecycleService() {
      * counter freezing mid-recording and never advancing again) must never
      * be able to silently kill this loop for the rest of the session.
      *
-     * Bead asn-r60: the big timer / notification text is [visibleClock]'s
-     * reading (frozen across a manual pause -- see that field's KDoc), NOT
-     * the raw wall-clock `elapsed` below. [TagPumpEvent.Tick] deliberately
-     * keeps using raw `elapsed` unchanged -- that timestamp is bead asn-k7i's
-     * concurrently-owned tag-pump timing surface, out of scope here.
+     * Bead asn-o63: the big timer / notification text is [audioTimelineClock]'s
+     * reading -- real recorded *content* time (paused across both hard and
+     * soft pauses, matching `recorded_ms`), NOT the raw wall-clock `elapsed`
+     * below. Live-test feedback on the original asn-r60 design (a separate
+     * `visibleClock` that only froze for a hard pause) was that 10 minutes of
+     * wall-clock with 2 minutes of actual content needs to read "2:00", not
+     * a number that keeps ticking through auto-paused spans. [TagPumpEvent.Tick]
+     * deliberately keeps using raw `elapsed` unchanged -- that timestamp is
+     * bead asn-k7i's concurrently-owned tag-pump timing surface, out of
+     * scope here.
      */
     private fun startTicker() {
         lifecycleScope.launch {
@@ -921,10 +966,10 @@ class RecordingService : LifecycleService() {
             ) {
                 val now = SystemClock.elapsedRealtime()
                 val elapsed = now - startElapsedRealtimeMs
-                val visibleElapsed = visibleClock.elapsedMs(now, elapsed)
-                RecordingStateHolder.update { it.copy(elapsedMs = visibleElapsed) }
+                val contentElapsed = audioTimelineClock.elapsedMs(now, elapsed)
+                RecordingStateHolder.update { it.copy(elapsedMs = contentElapsed) }
                 getSystemService(NotificationManager::class.java)
-                    ?.notify(NOTIFICATION_ID, buildNotification(visibleElapsed))
+                    ?.notify(NOTIFICATION_ID, buildNotification(contentElapsed))
                 tagLineChannel?.trySend(TagPumpEvent.Tick(TranscriptStateHolder.state.value.currentPartial, elapsed))
                 summaryTickChannel?.trySend(elapsed)
             }

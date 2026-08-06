@@ -11,6 +11,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.montauk.voicecapture.VoiceCaptureApp
+import com.montauk.voicecapture.service.RecordingActivityStateHolder
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
 import com.montauk.voicecapture.service.TagsStateHolder
@@ -71,6 +72,7 @@ class RecordingScreenTranscriptSlotTest {
         com.montauk.voicecapture.service.SummaryStateHolder.reset()
         com.montauk.voicecapture.service.LatencyBadgeStateHolder.reset()
         TagsStateHolder.reset()
+        RecordingActivityStateHolder.reset()
         app.secretsStore.userAssemblyAiKey = null
         // isSignedOut = true forces AppSecretsStore.effectiveAssemblyKey() to ""
         // unconditionally (same guard KeyScreensScreenshotTest uses) --

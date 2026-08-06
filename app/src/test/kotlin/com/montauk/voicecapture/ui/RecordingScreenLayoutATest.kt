@@ -11,11 +11,14 @@ import com.montauk.voicecapture.duck.NOTES_CARD_TEST_TAG
 import com.montauk.voicecapture.service.LatencyBadgeStateHolder
 import com.montauk.voicecapture.service.LatencyBadgeUiState
 import com.montauk.voicecapture.service.LatencySeverity
+import com.montauk.voicecapture.service.RecordingActivityStateHolder
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
 import com.montauk.voicecapture.service.SummaryStateHolder
 import com.montauk.voicecapture.service.SummaryUiState
 import com.montauk.voicecapture.service.TagApprovalStateHolder
+import com.montauk.voicecapture.service.TagRailStateHolder
+import com.montauk.voicecapture.service.TagTreeStateHolder
 import com.montauk.voicecapture.service.TagsStateHolder
 import com.montauk.voicecapture.service.TranscriptStateHolder
 import com.montauk.voicecapture.session.RecordingMode
@@ -50,6 +53,9 @@ class RecordingScreenLayoutATest {
         TagApprovalStateHolder.reset()
         SummaryStateHolder.reset()
         LatencyBadgeStateHolder.reset()
+        TagRailStateHolder.reset()
+        TagTreeStateHolder.reset()
+        RecordingActivityStateHolder.reset()
         app.secretsStore.isSignedOut = true
     }
 

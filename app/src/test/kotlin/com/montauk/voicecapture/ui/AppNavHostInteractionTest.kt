@@ -70,12 +70,20 @@ class AppNavHostInteractionTest {
         // them explicitly rather than depending on that isolation.
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
-        // Bead asn-3sm: RecordingScreen now also reads these three
-        // singletons -- reset so an earlier test class's state (approvals,
-        // a fake summary, a latency badge) never leaks into this one.
+        // Bead asn-3sm: RecordingScreen now also reads these singletons --
+        // reset so an earlier test class's state (approvals, a fake summary,
+        // a latency badge, a stale tag rail/tree, a paused activity state)
+        // never leaks into this one. Also protects the *next* class in the
+        // same JVM fork from inheriting whatever this class's own tests set
+        // (e.g. a real RecordingScreen render can leave RecordingActivityStateHolder
+        // non-default) -- see RecordingScreenPauseTest's own tearDown for the
+        // exact flakiness this was chasing.
         com.montauk.voicecapture.service.TagApprovalStateHolder.reset()
         com.montauk.voicecapture.service.SummaryStateHolder.reset()
         com.montauk.voicecapture.service.LatencyBadgeStateHolder.reset()
+        com.montauk.voicecapture.service.TagRailStateHolder.reset()
+        com.montauk.voicecapture.service.TagTreeStateHolder.reset()
+        com.montauk.voicecapture.service.RecordingActivityStateHolder.reset()
         // Bead vn-edu.54: SessionListScreen now fetches vault-integration
         // status on every mount. connectedToGithubShowsLogOutTab below sets a
         // (fake) non-blank GitHub token while rendering Routes.SESSIONS, which

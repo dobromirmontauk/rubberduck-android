@@ -1,16 +1,9 @@
 package com.montauk.voicecapture.duck
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
@@ -56,18 +49,7 @@ private fun Zzz(
     reducedMotion: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val riseT = if (reducedMotion) {
-        0f
-    } else {
-        val infiniteTransition = rememberInfiniteTransition(label = "zz-$text-$fontSizeSp")
-        val animated by infiniteTransition.animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(periodMs, easing = LinearEasing), RepeatMode.Restart),
-            label = "zz-rise-$text-$fontSizeSp",
-        )
-        animated
-    }
+    val riseT = if (reducedMotion) 0f else rememberLoopingPhase(periodMs = periodMs, key = "$text-$fontSizeSp")
     // Rises and fades out as it climbs -- a "steam" float, not a hard cut
     // back to the start when the loop restarts.
     val alpha = if (reducedMotion) baseAlpha else baseAlpha * (1f - riseT).coerceIn(0f, 1f)

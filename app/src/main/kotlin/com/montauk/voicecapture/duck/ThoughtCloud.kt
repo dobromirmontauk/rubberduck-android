@@ -2,12 +2,8 @@ package com.montauk.voicecapture.duck
 
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -202,19 +198,9 @@ private fun rememberWordMotion(seed: String, reducedMotion: Boolean): WordMotion
     val driftPeriodMs = DRIFT_PERIOD_BASE_MS + variant * DRIFT_PERIOD_STEP_MS
     val shimmerPeriodMs = SHIMMER_PERIOD_BASE_MS + variant * SHIMMER_PERIOD_STEP_MS
 
-    val infiniteTransition = rememberInfiniteTransition(label = "thought-word-motion-$seed")
-    val driftT by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(driftPeriodMs, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "drift-$seed",
-    )
-    val shimmerAlpha by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = SHIMMER_MIN_ALPHA,
-        animationSpec = infiniteRepeatable(tween(shimmerPeriodMs, easing = LinearEasing), RepeatMode.Reverse),
-        label = "shimmer-$seed",
-    )
+    val driftT = rememberLoopingPhase(periodMs = driftPeriodMs, repeatMode = RepeatMode.Reverse, easing = FastOutSlowInEasing, key = "drift-$seed")
+    val shimmerT = rememberLoopingPhase(periodMs = shimmerPeriodMs, repeatMode = RepeatMode.Reverse, key = "shimmer-$seed")
+    val shimmerAlpha = 1f + (SHIMMER_MIN_ALPHA - 1f) * shimmerT
     return WordMotion(
         driftYPx = -driftT * DRIFT_TRANSLATE_Y_PX,
         driftRotationDeg = driftT * DRIFT_ROTATE_DEG,

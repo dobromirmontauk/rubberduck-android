@@ -12,6 +12,7 @@ import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.duck.APPROVED_WORD_TEST_TAG_PREFIX
 import com.montauk.voicecapture.duck.EXISTING_WORD_TEST_TAG_PREFIX
 import com.montauk.voicecapture.duck.PROPOSED_WORD_TEST_TAG_PREFIX
+import com.montauk.voicecapture.service.RecordingActivityStateHolder
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
 import com.montauk.voicecapture.service.TagRailStateHolder
@@ -63,6 +64,7 @@ class RecordingScreenTagsSlotTest {
         TranscriptStateHolder.reset()
         TagRailStateHolder.reset()
         TagTreeStateHolder.reset()
+        RecordingActivityStateHolder.reset()
         // Bead asn-3sm: RecordingScreen now also reads these three
         // singletons -- reset so an earlier test class's state (a stale
         // approval set, a fake summary, a latency badge) never leaks into

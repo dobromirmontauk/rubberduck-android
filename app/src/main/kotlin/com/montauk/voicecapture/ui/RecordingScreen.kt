@@ -11,6 +11,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -52,6 +53,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -294,8 +296,9 @@ fun RecordingScreen(
                             controls = {
                                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     PauseResumeChip(
-                                        isUserPaused = activityState == RecordingActivityState.USER_PAUSED,
-                                        onClick = { onSetPaused(activityState != RecordingActivityState.USER_PAUSED) },
+                                        activityState = activityState,
+                                        fillFraction = transcript.autoPauseFillFraction,
+                                        onSetPaused = onSetPaused,
                                     )
                                     StopBar(onClick = onStopRecording, floating = true)
                                 }
@@ -1086,41 +1089,128 @@ private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit, floating
 }
 
 /**
- * Bead asn-r60's state machine, asn-3sm's presentation (team-lead's v2 pause
- * redesign supersedes asn-r60's own `PauseBanner`/`BottomActionsBar` UI
- * outright -- see [RecordingScreen]'s `controls` slot): a small floating
- * pill next to the floating STOP pill, same visual language
- * ([FLOATING_BUTTON_ELEVATION] shadow, fully rounded, >= 48dp touch target).
- * [isUserPaused] is [RecordingActivityState.USER_PAUSED] specifically, not
- * "any paused state" -- tapping while [RecordingActivityState.AUTO_PAUSED]
- * escalates to a hard pause (see [RecordingScreen]'s `onSetPaused` call
- * site), so the label still reads "PAUSE" there, not "RESUME". No gradient
- * fill yet -- bead asn-o63 owns the auto-pause countdown-fill visual and
- * hasn't landed; this renders a plain pill until that state is available to
- * consume.
+ * Bead asn-r60's state machine, asn-o63's bug fix, asn-3sm's presentation
+ * (team-lead's v2 pause redesign supersedes asn-r60/asn-o63's own
+ * `PauseBanner`/`BottomActionsBar` UI outright -- see [RecordingScreen]'s
+ * `controls` slot): a small floating pill next to the floating STOP pill,
+ * same visual language ([FLOATING_BUTTON_ELEVATION] shadow, fully rounded,
+ * >= 48dp touch target).
+ *
+ * [isPaused] is [RecordingActivityState.USER_PAUSED] OR
+ * [RecordingActivityState.AUTO_PAUSED] -- asn-o63's live-test fix: the
+ * original asn-r60 build only flipped the label for the manual/hard case, so
+ * a tester saw it stay "PAUSE" through an entire auto-pause. Tapping while
+ * either kind of pause is active now always resumes (there is no other
+ * pause UI left to offer an escalate-to-hard-pause affordance -- asn-o63
+ * dropped the separate auto-pause banner entirely, "no need for any other
+ * UI, keep it minimal", which is exactly this bead's own v2 direction too).
+ *
+ * [fillFraction] (asn-o63's [com.montauk.voicecapture.service.TranscriptUiState.autoPauseFillFraction])
+ * drives [AutoPauseFillOverlay]'s moving-gradient warning, shown only while
+ * NOT already paused.
  */
 @Composable
-private fun PauseResumeChip(isUserPaused: Boolean, onClick: () -> Unit) {
+private fun PauseResumeChip(activityState: RecordingActivityState, fillFraction: Float, onSetPaused: (Boolean) -> Unit) {
+    val isPaused = activityState == RecordingActivityState.USER_PAUSED || activityState == RecordingActivityState.AUTO_PAUSED
     Button(
-        onClick = onClick,
+        onClick = { onSetPaused(!isPaused) },
         modifier = Modifier
             .heightIn(min = FLOATING_BUTTON_MIN_HEIGHT)
             .shadow(FLOATING_BUTTON_ELEVATION, RoundedCornerShape(999.dp))
             .testTag(PAUSE_RESUME_BUTTON_TEST_TAG),
         shape = RoundedCornerShape(999.dp),
         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        // Deliberately keeps Button's default contentPadding rather than
+        // zeroing it out (matches BottomActionsBar's own rationale before
+        // this bead superseded it): the fill overlay is inset by that same
+        // padding, matching the label's own inset, instead of running
+        // edge-to-edge.
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
     ) {
-        Text(
-            text = if (isUserPaused) "▶ RESUME" else "⏸ PAUSE",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSecondaryContainer,
-            fontWeight = FontWeight.Bold,
+        Box(contentAlignment = Alignment.Center) {
+            if (!isPaused) {
+                AutoPauseFillOverlay(fillFraction = fillFraction, modifier = Modifier.align(Alignment.CenterStart))
+            }
+            Text(
+                text = if (isPaused) "▶ RESUME" else "⏸ PAUSE",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+/**
+ * Bead asn-o63: the Pause pill's interim "closing window" warning -- a
+ * moving gradient sweep, clipped to [fillFraction] of the pill's width (0f
+ * renders nothing, 1f fills the whole pill right as auto-pause fires).
+ * [fillFraction] comes straight from [com.montauk.voicecapture.service.TranscriptUiState.autoPauseFillFraction] --
+ * see that field's KDoc for the settings-aware math this doesn't need to
+ * know about. Deliberately simple: a linear-gradient sweep, re-paced every
+ * [AUTO_PAUSE_FILL_SHIMMER_PERIOD_MS] by a plain [delay] loop, is enough to
+ * read as "something is progressing" without a bespoke shader.
+ *
+ * Ported from asn-o63's `BottomActionsBar` version onto this bead's
+ * floating pill with one deliberate change: asn-o63's original paced the
+ * sweep with `rememberInfiniteTransition`/`infiniteRepeatable`, which drives
+ * Compose's own animation clock -- for a continuous animation expected to
+ * run for the whole time this pill is paused-and-filling (not a brief,
+ * finite transition), that clock never "finishes" the way
+ * `ComposeTestRule.waitForIdle()` expects an animation to, and it left a
+ * stuck idling resource that leaked into whichever test class happened to
+ * run next in the same JVM fork (confirmed empirically: [RecordingScreenPauseTest]
+ * alone was clean, but running it immediately before [RecordingScreenTagRailTest]
+ * broke that class's clicks/double-taps). [DuckAnimator]'s own KDoc
+ * documents this exact hazard and its fix -- pace off a plain [delay] loop,
+ * same as here, not Compose's frame/animation clock.
+ */
+@Composable
+private fun AutoPauseFillOverlay(fillFraction: Float, modifier: Modifier = Modifier) {
+    if (fillFraction <= 0f) return
+    var phase by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) {
+        val startMs = System.currentTimeMillis()
+        while (true) {
+            val elapsedMs = System.currentTimeMillis() - startMs
+            phase = (elapsedMs % AUTO_PAUSE_FILL_SHIMMER_PERIOD_MS).toFloat() / AUTO_PAUSE_FILL_SHIMMER_PERIOD_MS
+            delay(AUTO_PAUSE_FILL_SHIMMER_TICK_MS)
+        }
+    }
+    val colorA = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+    val colorB = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+    // BoxWithConstraints (rather than Modifier.fillMaxWidth(fraction)) reads
+    // this composable's own resolved incoming width explicitly, so the
+    // fractional fill width is computed from a definite Dp regardless of how
+    // Material3's Button content slot happens to propagate constraints to a
+    // plain Box child.
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val fillWidth = maxWidth * fillFraction.coerceIn(0f, 1f)
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .fillMaxHeight()
+                .width(fillWidth)
+                .testTag(AUTO_PAUSE_FILL_OVERLAY_TEST_TAG)
+                .drawWithContent {
+                    drawRect(
+                        brush = Brush.linearGradient(
+                            colors = listOf(colorA, colorB, colorA),
+                            start = Offset(size.width * (phase - 1f), 0f),
+                            end = Offset(size.width * phase, size.height),
+                        ),
+                    )
+                },
         )
     }
 }
 
-/** Test-only anchor for [PauseResumeChip] (bead asn-r60's state, asn-3sm's presentation). */
+/** Test-only anchor for [AutoPauseFillOverlay] (bead asn-o63). */
+const val AUTO_PAUSE_FILL_OVERLAY_TEST_TAG = "recording_auto_pause_fill_overlay"
+private const val AUTO_PAUSE_FILL_SHIMMER_PERIOD_MS = 1200L
+private const val AUTO_PAUSE_FILL_SHIMMER_TICK_MS = 16L
+
+/** Test-only anchor for [PauseResumeChip] (bead asn-r60/asn-o63's state, asn-3sm's presentation). */
 const val PAUSE_RESUME_BUTTON_TEST_TAG = "recording_pause_resume_button"
 
 private val FLOATING_BUTTON_MIN_HEIGHT = 48.dp

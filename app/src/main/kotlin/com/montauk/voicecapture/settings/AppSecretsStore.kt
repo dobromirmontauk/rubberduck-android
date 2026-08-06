@@ -82,7 +82,26 @@ class AppSecretsStore(context: Context) {
         get() = prefs.getBoolean(KEY_AUTO_PAUSE_ENABLED, true)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_PAUSE_ENABLED, value).apply()
 
-    /** Bead asn-r60: how long a continuous quiet span must run before auto-pause fires; settings-tunable, defaults to 30s. */
+    /**
+     * How long a continuous quiet span must run before auto-pause fires;
+     * settings-tunable, defaults to 10s (bead asn-o63 -- re-anchored down
+     * from bead asn-r60's original 30s default after live testing).
+     *
+     * Re-anchored semantics (bead asn-o63): this is still the TOTAL
+     * silence-to-autopause duration, but the trailing [AUTO_PAUSE_FILL_DURATION_MS]
+     * of it is now a visible warning -- the pause button fills with a moving
+     * gradient during that trailing window, so the user sees auto-pause
+     * coming and can cancel it by simply talking. The leading
+     * `this - AUTO_PAUSE_FILL_DURATION_MS` span stays invisible (same as
+     * before). At the 10s default that's 5s invisible + 5s visible fill,
+     * matching the bead's spec exactly; a larger threshold (e.g. the 30s/60s
+     * options) keeps the fill window fixed at [AUTO_PAUSE_FILL_DURATION_MS]
+     * and only the invisible leading span grows -- the fill is meant to be a
+     * consistent-length "closing window" warning regardless of the total
+     * threshold chosen, not a duration that scales with it. Every option
+     * offered in Settings is `>= AUTO_PAUSE_FILL_DURATION_MS` so the leading
+     * invisible span is never negative.
+     */
     var autoPauseSilenceThresholdMs: Long
         get() = prefs.getLong(KEY_AUTO_PAUSE_THRESHOLD_MS, DEFAULT_AUTO_PAUSE_THRESHOLD_MS)
         set(value) = prefs.edit().putLong(KEY_AUTO_PAUSE_THRESHOLD_MS, value).apply()
@@ -134,6 +153,15 @@ class AppSecretsStore(context: Context) {
         private const val KEY_SETUP_WIZARD_COMPLETED = "setup_wizard_completed"
         private const val KEY_AUTO_PAUSE_ENABLED = "auto_pause_enabled"
         private const val KEY_AUTO_PAUSE_THRESHOLD_MS = "auto_pause_threshold_ms"
-        const val DEFAULT_AUTO_PAUSE_THRESHOLD_MS = 30_000L
+        const val DEFAULT_AUTO_PAUSE_THRESHOLD_MS = 10_000L
+
+        /**
+         * Bead asn-o63: fixed length of the pause button's gradient-fill
+         * warning -- the trailing slice of [autoPauseSilenceThresholdMs]'s
+         * total, regardless of which threshold option is selected. See
+         * [autoPauseSilenceThresholdMs]'s KDoc for the full re-anchored
+         * semantics.
+         */
+        const val AUTO_PAUSE_FILL_DURATION_MS = 5_000L
     }
 }

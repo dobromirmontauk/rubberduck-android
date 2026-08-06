@@ -309,8 +309,15 @@ private fun AutoPauseThresholdChip(label: String, selected: Boolean, onClick: ()
     }
 }
 
-/** Bead asn-r60: the three silence-threshold choices offered in Settings -- 30s matches [com.montauk.voicecapture.settings.AppSecretsStore.DEFAULT_AUTO_PAUSE_THRESHOLD_MS]. */
-internal val AUTO_PAUSE_THRESHOLD_OPTIONS_MS = listOf(15_000L, 30_000L, 60_000L)
+/**
+ * The silence-threshold choices offered in Settings -- 10s matches
+ * [com.montauk.voicecapture.settings.AppSecretsStore.DEFAULT_AUTO_PAUSE_THRESHOLD_MS]
+ * (bead asn-o63 re-anchored the default down from 30s after live testing;
+ * see that field's KDoc for the fill-window split this now implies). Every
+ * option here is `>= AppSecretsStore.AUTO_PAUSE_FILL_DURATION_MS` so the
+ * leading invisible span is never negative.
+ */
+internal val AUTO_PAUSE_THRESHOLD_OPTIONS_MS = listOf(10_000L, 15_000L, 30_000L, 60_000L)
 
 /** Test-only anchor for [AutoPauseSection]'s toggle (bead asn-r60). */
 const val AUTO_PAUSE_TOGGLE_TEST_TAG = "settings_auto_pause_toggle"

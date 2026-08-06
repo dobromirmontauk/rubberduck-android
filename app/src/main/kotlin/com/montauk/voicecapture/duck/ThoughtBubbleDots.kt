@@ -1,17 +1,11 @@
 package com.montauk.voicecapture.duck
 
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
@@ -37,14 +31,8 @@ private fun Dot(sizeDp: androidx.compose.ui.unit.Dp, reducedMotion: Boolean, per
     val alphaValue = if (reducedMotion) {
         DOT_BASE_ALPHA
     } else {
-        val infiniteTransition = rememberInfiniteTransition(label = "thought-dot")
-        val animated by infiniteTransition.animateFloat(
-            initialValue = DOT_BASE_ALPHA,
-            targetValue = DOT_PEAK_ALPHA,
-            animationSpec = infiniteRepeatable(tween(periodMs, easing = LinearEasing), RepeatMode.Reverse),
-            label = "thought-dot-alpha",
-        )
-        animated
+        val phase = rememberLoopingPhase(periodMs = periodMs, repeatMode = RepeatMode.Reverse, key = periodMs)
+        DOT_BASE_ALPHA + (DOT_PEAK_ALPHA - DOT_BASE_ALPHA) * phase
     }
     Box(
         modifier = modifier

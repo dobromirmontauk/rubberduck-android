@@ -45,6 +45,9 @@ class RecordingScreenDuckToggleTest {
         com.montauk.voicecapture.service.TagApprovalStateHolder.reset()
         com.montauk.voicecapture.service.SummaryStateHolder.reset()
         com.montauk.voicecapture.service.LatencyBadgeStateHolder.reset()
+        com.montauk.voicecapture.service.TagRailStateHolder.reset()
+        com.montauk.voicecapture.service.TagTreeStateHolder.reset()
+        com.montauk.voicecapture.service.RecordingActivityStateHolder.reset()
         TagsStateHolder.reset()
         // A configured AssemblyAI key (rather than the keyless default) so the
         // debug view renders LiveTranscriptPane's keyed LazyColumn --
