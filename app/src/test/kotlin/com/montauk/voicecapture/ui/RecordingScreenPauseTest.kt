@@ -24,11 +24,14 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Bead asn-r60: the pause button next to Stop, and the auto-pause banner --
- * see [RecordingScreen]'s `PauseBanner`/`BottomActionsBar` KDoc. Drives the
- * real nav graph ([AppNavHost]), same pattern as
- * [RecordingScreenTagsSlotTest]/[RecordingScreenTranscriptSlotTest], since
- * `onSetPaused` threads through it to [RecordingScreen].
+ * Bead asn-r60 (reworked by asn-o63): the single pause/resume button next to
+ * Stop. There is no other pause UI -- bead asn-o63 dropped the separate
+ * auto-pause banner entirely ("no need for any other UI, keep it minimal"),
+ * so this is the only paused-state coverage; behavior-only (no
+ * `captureRoboImage`), per asn-o63's explicit preference for semantics-only
+ * Compose tests over new goldens. Drives the real nav graph ([AppNavHost]),
+ * same pattern as [RecordingScreenTagsSlotTest]/[RecordingScreenTranscriptSlotTest],
+ * since `onSetPaused` threads through it to [RecordingScreen].
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -81,7 +84,7 @@ class RecordingScreenPauseTest {
     }
 
     @Test
-    fun `pause button shows RESUME and the manual-paused banner while USER_PAUSED, and a tap calls onSetPaused(false)`() {
+    fun `pause button shows RESUME while USER_PAUSED, and a tap calls onSetPaused(false)`() {
         RecordingActivityStateHolder.set(RecordingActivityState.USER_PAUSED)
         val pausedCalls = mutableListOf<Boolean>()
 
@@ -96,16 +99,21 @@ class RecordingScreenPauseTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("RESUME").assertIsDisplayed()
-        composeTestRule.onNodeWithTag(USER_PAUSE_BANNER_TEST_TAG).assertIsDisplayed()
+        composeTestRule.onNodeWithText("PAUSE").assertDoesNotExist()
         composeTestRule.onNodeWithTag(PAUSE_RESUME_BUTTON_TEST_TAG).performClick()
 
         assertEquals(listOf(false), pausedCalls)
     }
 
+    /**
+     * Bead asn-o63's core bug fix: a live tester saw the button label NOT
+     * change while auto-paused. Asserts the label AND the tap semantics --
+     * tapping while auto-paused resumes (there's no other affordance left to
+     * offer an escalate-to-hard-pause path; see [BottomActionsBar]'s KDoc).
+     */
     @Test
-    fun `auto-pause banner shows the exact wording and quiet duration, and tapping it calls onSetPaused(false)`() {
+    fun `pause button shows RESUME while AUTO_PAUSED, and a tap calls onSetPaused(false)`() {
         RecordingActivityStateHolder.set(RecordingActivityState.AUTO_PAUSED)
-        TranscriptStateHolder.update { it.copy(quietDurationMs = 32_000L) }
         val pausedCalls = mutableListOf<Boolean>()
 
         composeTestRule.setContent {
@@ -118,27 +126,72 @@ class RecordingScreenPauseTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithText("Auto-paused (quiet 0:32) -- just start talking, or tap to resume").assertIsDisplayed()
-        // While auto-paused, the bottom pause button still reads PAUSE (a tap
-        // there would escalate to a hard pause, not resume) -- only the
-        // banner itself offers "tap to resume" for the soft pause.
-        composeTestRule.onNodeWithText("PAUSE").assertIsDisplayed()
-
-        composeTestRule.onNodeWithTag(AUTO_PAUSE_BANNER_TEST_TAG).performClick()
+        composeTestRule.onNodeWithText("RESUME").assertIsDisplayed()
+        composeTestRule.onNodeWithText("PAUSE").assertDoesNotExist()
+        composeTestRule.onNodeWithTag(PAUSE_RESUME_BUTTON_TEST_TAG).performClick()
 
         assertEquals(listOf(false), pausedCalls)
     }
 
+    /** Bead asn-o63: the fill overlay only ever shows while NOT already paused -- it's meaningless once auto-pause has actually fired. */
     @Test
-    fun `no pause banner at all while speaking or quiet`() {
-        RecordingActivityStateHolder.set(RecordingActivityState.SPEAKING)
+    fun `fill overlay is absent while AUTO_PAUSED or USER_PAUSED even if quietDurationMs is high`() {
+        RecordingActivityStateHolder.set(RecordingActivityState.AUTO_PAUSED)
+        TranscriptStateHolder.update { it.copy(autoPauseFillFraction = 1f) }
 
         composeTestRule.setContent {
             AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithTag(AUTO_PAUSE_BANNER_TEST_TAG).assertDoesNotExist()
-        composeTestRule.onNodeWithTag(USER_PAUSE_BANNER_TEST_TAG).assertDoesNotExist()
+        composeTestRule.onNodeWithTag(AUTO_PAUSE_FILL_OVERLAY_TEST_TAG, useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    /**
+     * Bead asn-o63: the fill overlay renders while QUIET and mid-fill, ahead
+     * of an eventual auto-pause. `useUnmergedTree = true` -- the overlay is
+     * a descendant of the Pause [Button], which merges its children's
+     * semantics into itself for accessibility, so the plain (merged) tree
+     * doesn't expose this tag as its own node. The fill's actual math is
+     * additionally covered directly by [com.montauk.voicecapture.audio.AutoPauseFillTest],
+     * a plain-JVM pure-function test with no Compose/layout dependency.
+     */
+    @Test
+    fun `fill overlay is present while QUIET with a positive fill fraction`() {
+        RecordingActivityStateHolder.set(RecordingActivityState.QUIET)
+        TranscriptStateHolder.update { it.copy(autoPauseFillFraction = 0.4f) }
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag(AUTO_PAUSE_FILL_OVERLAY_TEST_TAG, useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    /** Bead asn-o63: "no need for any other UI, keep it minimal" -- there is no leftover auto-pause banner text while AUTO_PAUSED. */
+    @Test
+    fun `no auto-pause banner text while AUTO_PAUSED`() {
+        RecordingActivityStateHolder.set(RecordingActivityState.AUTO_PAUSED)
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("just start talking, or tap to resume").assertDoesNotExist()
+    }
+
+    /** Bead asn-o63: same, for the manual-pause banner's old wording while USER_PAUSED. */
+    @Test
+    fun `no manual-pause banner text while USER_PAUSED`() {
+        RecordingActivityStateHolder.set(RecordingActivityState.USER_PAUSED)
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("tap Resume to keep recording").assertDoesNotExist()
     }
 }

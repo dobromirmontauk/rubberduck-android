@@ -32,17 +32,31 @@ data class TranscriptUiState(
     val silenceHintVisible: Boolean = false,
     /**
      * Bead asn-r60: [com.montauk.voicecapture.audio.VoiceActivityDetector.continuousQuietMs],
-     * mirrored here so the recording screen's auto-pause banner ("Auto-paused
-     * (quiet 0:32)...") can render a live-ticking duration without its own
-     * StateFlow -- updated from the same mic-level-meter callback that
-     * already writes [micLevel]/[silenceHintVisible], so all three stay
-     * consistent under the same CAS-safe [TranscriptStateHolder.update].
-     * Keeps growing through [com.montauk.voicecapture.service.RecordingActivityState.AUTO_PAUSED]
-     * (that's the point -- the banner's counter doesn't freeze when the
-     * pause it's counting toward actually fires) and resets to 0 the moment
-     * VAD reads speech again.
+     * mirrored here so the UI can render a live-ticking "how long quiet"
+     * duration without its own StateFlow -- updated from the same
+     * mic-level-meter callback that already writes [micLevel]/[silenceHintVisible],
+     * so all three stay consistent under the same CAS-safe
+     * [TranscriptStateHolder.update]. Keeps growing through
+     * [com.montauk.voicecapture.service.RecordingActivityState.AUTO_PAUSED]
+     * and resets to 0 the moment VAD reads speech again. [autoPauseFillFraction]
+     * is derived from this same value; both are published together.
      */
     val quietDurationMs: Long = 0L,
+    /**
+     * Bead asn-o63: 0f..1f fill progress toward auto-pause, derived from
+     * [quietDurationMs] against the settings-tunable threshold's trailing
+     * [com.montauk.voicecapture.settings.AppSecretsStore.AUTO_PAUSE_FILL_DURATION_MS]
+     * window -- 0f for the leading (invisible) span of continuous quiet, then
+     * ramping 0f->1f as that trailing window elapses, reaching 1f exactly
+     * when auto-pause fires. Resets to 0f the instant [quietDurationMs] does
+     * (any speech cancels the fill), and stays 0f whenever auto-pause is
+     * disabled. Deliberately state-layer-only (bead asn-o63): the pause
+     * button's own gradient-fill rendering is one consumer, but this is
+     * exposed generically enough that a future re-skin (e.g. the duck
+     * restyle, bead asn-3sm) can render it without recomputing the
+     * settings-aware math itself.
+     */
+    val autoPauseFillFraction: Float = 0f,
     /**
      * [com.montauk.voicecapture.audio.AudioSource.deviceLabel] for the session
      * currently recording -- null before a session starts. RecordingScreen's

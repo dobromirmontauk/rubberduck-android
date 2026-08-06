@@ -33,6 +33,8 @@ class AutoPauseSectionTest {
         }
 
         composeTestRule.onNodeWithTag(AUTO_PAUSE_TOGGLE_TEST_TAG).assertIsDisplayed()
+        // Bead asn-o63: 10s is now the default option (re-anchored down from 30s).
+        composeTestRule.onNodeWithText("10s").assertIsDisplayed()
         composeTestRule.onNodeWithText("15s").assertIsDisplayed()
         composeTestRule.onNodeWithText("30s").assertIsDisplayed()
         composeTestRule.onNodeWithText("60s").assertIsDisplayed()

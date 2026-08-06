@@ -22,10 +22,24 @@ package com.montauk.voicecapture.audio
  * whether STT is even configured.
  *
  * No hysteresis on [isSpeaking] itself: a single loud window immediately
- * flips it true (auto-resume should feel instant -- the ring buffer already
- * covers the few seconds of onset before this fires) and any loud window
- * resets [continuousQuietMs] to zero (a real 30s-of-silence threshold should
- * mean *any* sound restarts the countdown, not just sustained loudness).
+ * flips it true and any loud window resets [continuousQuietMs] to zero (a
+ * real 10s-of-silence threshold should mean *any* sound restarts the
+ * countdown, not just sustained loudness). [isSpeaking] alone is still what
+ * drives the live SPEAKING/QUIET signal outside of any pause.
+ *
+ * [consecutiveSpeechWindows] (bead asn-o63) exists for a narrower purpose:
+ * resuming FROM an auto-pause must require a couple of consecutive speaking
+ * windows, not a single one. Live-test evidence (session 1458_reb8) showed
+ * a 323ms auto-pause -- entered, then immediately resumed on the very next
+ * ~100ms window -- because the original design gated the resume decision on
+ * bare [isSpeaking]. This counter increments only while consecutive windows
+ * are all speaking and resets to 0 on any quiet window, so a caller can
+ * require e.g. 3 consecutive windows (~300ms of sustained speech) before
+ * treating a blip as "actually resuming." The ring-buffer prepend this
+ * gates ([AudioEngine]'s soft-pause ring buffer) is unaffected by this
+ * delay: it keeps buffering every window regardless of hysteresis, so by
+ * the time the hysteresis threshold is satisfied, the buffer still holds
+ * audio from the *first* blip window onward -- nothing clips.
  */
 class VoiceActivityDetector(
     private val speechThreshold: Float = DEFAULT_SPEECH_THRESHOLD,
@@ -36,17 +50,27 @@ class VoiceActivityDetector(
     var continuousQuietMs: Long = 0L
         private set
 
+    var consecutiveSpeechWindows: Int = 0
+        private set
+
     /** Feed one normalized (0f..1f) RMS window, e.g. from [MicLevelMeter.onWindow]. */
     fun onWindow(rms: Float, windowMs: Long) {
         val speaking = rms >= speechThreshold
         isSpeaking = speaking
-        continuousQuietMs = if (speaking) 0L else continuousQuietMs + windowMs
+        if (speaking) {
+            continuousQuietMs = 0L
+            consecutiveSpeechWindows += 1
+        } else {
+            continuousQuietMs += windowMs
+            consecutiveSpeechWindows = 0
+        }
     }
 
     /** Call when a new recording session starts, so a previous session's state doesn't leak in. */
     fun reset() {
         isSpeaking = false
         continuousQuietMs = 0L
+        consecutiveSpeechWindows = 0
     }
 
     companion object {

@@ -1,6 +1,10 @@
 package com.montauk.voicecapture.ui
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -10,6 +14,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -49,6 +54,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -148,14 +154,6 @@ fun RecordingScreen(
                     Spacer(modifier = Modifier.height(16.dp))
                     ChipsRow(transcript = transcript, hasBluetoothMic = hasBluetoothMic, recordingState = recordingState)
                     Spacer(modifier = Modifier.height(10.dp))
-                    // Bead asn-r60: shown in place of nothing when SPEAKING/QUIET
-                    // (renders null), so it never shifts the layout below it when
-                    // there's nothing to say.
-                    PauseBanner(
-                        activityState = activityState,
-                        quietDurationMs = transcript.quietDurationMs,
-                        onResumeTapped = { onSetPaused(false) },
-                    )
                     LoudnessMeterBar(level = transcript.micLevel, sessionId = recordingState.sessionId)
                     Spacer(modifier = Modifier.height(16.dp))
                     ModeSwitcher(currentMode = recordingState.mode, onSelect = onSetMode)
@@ -188,7 +186,8 @@ fun RecordingScreen(
                 BottomActionsBar(
                     modifier = Modifier.weight(1f),
                     activityState = activityState,
-                    onPauseToggle = { onSetPaused(activityState != RecordingActivityState.USER_PAUSED) },
+                    fillFraction = transcript.autoPauseFillFraction,
+                    onSetPaused = onSetPaused,
                     onStop = onStopRecording,
                 )
             }
@@ -214,69 +213,6 @@ fun RecordingScreen(
 private sealed interface TagPickerRequest {
     object Add : TagPickerRequest
     data class Swap(val oldTag: String) : TagPickerRequest
-}
-
-/**
- * Bead asn-r60's spec, verbatim: 'Auto-paused (quiet 0:32) -- just start
- * talking, or tap to resume' for the soft/VAD-driven pause; a plainer
- * "Paused" indicator for the hard/manual one (the spec's "timer freezes with
- * explicit paused indicator" -- [BigTimer] above already freezes via
- * [RecordingUiState.elapsedMs]; this is the "indicator" half). Renders
- * nothing at all -- not even a zero-height placeholder -- for
- * [RecordingActivityState.SPEAKING]/[RecordingActivityState.QUIET], so the
- * layout doesn't reserve dead space while recording normally.
- */
-@Composable
-private fun PauseBanner(activityState: RecordingActivityState, quietDurationMs: Long, onResumeTapped: () -> Unit) {
-    when (activityState) {
-        RecordingActivityState.AUTO_PAUSED -> {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 10.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .clickable(onClick = onResumeTapped)
-                    .testTag(AUTO_PAUSE_BANNER_TEST_TAG),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-            ) {
-                Text(
-                    text = "Auto-paused (quiet ${formatMinutesSeconds(quietDurationMs)}) -- just start talking, or tap to resume",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                )
-            }
-        }
-        RecordingActivityState.USER_PAUSED -> {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 10.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .testTag(USER_PAUSE_BANNER_TEST_TAG),
-                color = MaterialTheme.colorScheme.errorContainer,
-            ) {
-                Text(
-                    text = "Paused -- tap Resume to keep recording",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                )
-            }
-        }
-        RecordingActivityState.SPEAKING, RecordingActivityState.QUIET -> Unit
-    }
-}
-
-/** Test-only anchors for [PauseBanner] (bead asn-r60). */
-const val AUTO_PAUSE_BANNER_TEST_TAG = "recording_auto_pause_banner"
-const val USER_PAUSE_BANNER_TEST_TAG = "recording_user_pause_banner"
-
-private fun formatMinutesSeconds(ms: Long): String {
-    val totalSeconds = ms / 1000
-    val minutes = totalSeconds / 60
-    val seconds = totalSeconds % 60
-    return String.format("%d:%02d", minutes, seconds)
 }
 
 /**
@@ -925,20 +861,27 @@ private fun FilingDestinationRibbon(destination: String) {
  * [STOP_BUTTON_HORIZONTAL_MARGIN] side margins and [navigationBarsPadding]
  * plus a small bottom margin keep the whole row clear of the gesture-nav
  * inset, same as the old single-button [STOP_BUTTON_MIN_HEIGHT]-tall bar.
- * The Pause button's label flips to "RESUME" while
- * [RecordingActivityState.USER_PAUSED] -- see [RecordingScreen]'s
- * `onPauseToggle` for why that's the only state this label depends on
- * (tapping while auto-paused escalates to a hard pause, so it still reads
- * "PAUSE" there, not "RESUME").
+ *
+ * Bead asn-o63 (fixing a live-test bug): the Pause button's label reads
+ * "RESUME" while EITHER [RecordingActivityState.USER_PAUSED] OR
+ * [RecordingActivityState.AUTO_PAUSED] is active -- the original asn-r60
+ * build only flipped it for the manual/hard case, so a live tester saw the
+ * label stay "PAUSE" through an entire auto-pause. Tapping while either kind
+ * of pause is active now always resumes (there is no other pause UI left to
+ * offer an escalate-to-hard-pause affordance -- bead asn-o63 dropped the
+ * separate auto-pause banner entirely, "no need for any other UI, keep it
+ * minimal"). [fillFraction] drives [AutoPauseFillOverlay]'s moving-gradient
+ * warning, shown only while NOT already paused.
  */
 @Composable
 private fun BottomActionsBar(
     modifier: Modifier = Modifier,
     activityState: RecordingActivityState,
-    onPauseToggle: () -> Unit,
+    fillFraction: Float,
+    onSetPaused: (Boolean) -> Unit,
     onStop: () -> Unit,
 ) {
-    val isUserPaused = activityState == RecordingActivityState.USER_PAUSED
+    val isPaused = activityState == RecordingActivityState.USER_PAUSED || activityState == RecordingActivityState.AUTO_PAUSED
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -948,7 +891,7 @@ private fun BottomActionsBar(
     ) {
         Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(
-                onClick = onPauseToggle,
+                onClick = { onSetPaused(!isPaused) },
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
@@ -957,11 +900,23 @@ private fun BottomActionsBar(
                 shape = RoundedCornerShape(STOP_BUTTON_CORNER_RADIUS),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
             ) {
-                Text(
-                    text = if (isUserPaused) "RESUME" else "PAUSE",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
+                // Deliberately keeps Button's default contentPadding rather
+                // than zeroing it out -- the fill overlay below is inset by
+                // that same padding (matching the label's own inset) instead
+                // of running edge-to-edge, and this avoids changing the
+                // button's appearance (label position) in the common
+                // not-paused, no-fill case relative to the existing
+                // recording_full_stack.png golden.
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    if (!isPaused) {
+                        AutoPauseFillOverlay(fillFraction = fillFraction, modifier = Modifier.align(Alignment.CenterStart))
+                    }
+                    Text(
+                        text = if (isPaused) "RESUME" else "PAUSE",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
             }
             Button(
                 onClick = onStop,
@@ -985,6 +940,59 @@ const val PAUSE_RESUME_BUTTON_TEST_TAG = "recording_pause_resume_button"
 private val STOP_BUTTON_HORIZONTAL_MARGIN = 16.dp
 private val STOP_BUTTON_CORNER_RADIUS = 20.dp
 private val STOP_BUTTON_MIN_HEIGHT = 72.dp
+
+/**
+ * Bead asn-o63: the Pause button's interim "closing window" warning -- a
+ * moving gradient sweep, clipped to [fillFraction] of the button's width
+ * (0f renders nothing, 1f fills the whole button right as auto-pause
+ * fires). [fillFraction] comes straight from [TranscriptUiState.autoPauseFillFraction]
+ * -- see that field's KDoc for the settings-aware math this doesn't need to
+ * know about. Deliberately simple (this button/row is expected to be
+ * replaced by the duck restyle, bead asn-3sm) -- an infinitely-repeating
+ * linear-gradient sweep is enough to read as "something is progressing"
+ * without a bespoke shader.
+ */
+@Composable
+private fun AutoPauseFillOverlay(fillFraction: Float, modifier: Modifier = Modifier) {
+    if (fillFraction <= 0f) return
+    val infiniteTransition = rememberInfiniteTransition(label = "auto-pause-fill-shimmer")
+    val phase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(animation = tween(AUTO_PAUSE_FILL_SHIMMER_PERIOD_MS, easing = LinearEasing)),
+        label = "shimmer-phase",
+    )
+    val colorA = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+    val colorB = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+    // BoxWithConstraints (rather than Modifier.fillMaxWidth(fraction)) reads
+    // this composable's own resolved incoming width explicitly, so the
+    // fractional fill width is computed from a definite Dp regardless of how
+    // Material3's Button content slot happens to propagate constraints to a
+    // plain Box child.
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val fillWidth = maxWidth * fillFraction.coerceIn(0f, 1f)
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .fillMaxHeight()
+                .width(fillWidth)
+                .testTag(AUTO_PAUSE_FILL_OVERLAY_TEST_TAG)
+                .drawWithContent {
+                    drawRect(
+                        brush = Brush.linearGradient(
+                            colors = listOf(colorA, colorB, colorA),
+                            start = Offset(size.width * (phase - 1f), 0f),
+                            end = Offset(size.width * phase, size.height),
+                        ),
+                    )
+                },
+        )
+    }
+}
+
+/** Test-only anchor for [AutoPauseFillOverlay] (bead asn-o63). */
+const val AUTO_PAUSE_FILL_OVERLAY_TEST_TAG = "recording_auto_pause_fill_overlay"
+private const val AUTO_PAUSE_FILL_SHIMMER_PERIOD_MS = 1200
 
 /**
  * Deterministic stand-in for real speech, used only by the previews below:
@@ -1057,7 +1065,8 @@ private fun StopBarPreview() {
             BottomActionsBar(
                 modifier = Modifier.weight(1f),
                 activityState = RecordingActivityState.SPEAKING,
-                onPauseToggle = {},
+                fillFraction = 0f,
+                onSetPaused = {},
                 onStop = {},
             )
         }
