@@ -219,4 +219,107 @@ class TagChipRailTest {
 
         assertEquals("first", rail.primary()?.tag)
     }
+
+    // --- Bead asn-0jk: EXISTING/PROPOSED_NEW status, approved, onApprove ---
+
+    @Test
+    fun `a chip with a tagId is EXISTING regardless of source`() {
+        val rail = TagChipRail()
+        rail.onSuggested(listOf(tag("kitchen remodel", tagId = "t_kitchen")))
+        rail.onAdd("mashgin", tagId = "t_mashgin")
+
+        assertTrue(rail.chips().all { it.status == TagStatus.EXISTING })
+    }
+
+    @Test
+    fun `a chip with no tagId is PROPOSED_NEW regardless of source`() {
+        val rail = TagChipRail()
+        rail.onSuggested(listOf(tag("gardening")))
+        rail.onAdd("landscaping")
+
+        assertTrue(rail.chips().all { it.status == TagStatus.PROPOSED_NEW })
+    }
+
+    @Test
+    fun `approved is exactly source == USER -- true for any user chip, false for any still-suggested chip`() {
+        val rail = TagChipRail()
+        rail.onSuggested(listOf(tag("gardening", tagId = "t_garden"), tag("nutrition", rank = 2)))
+        rail.onAdd("kitchen remodel", tagId = "t_kitchen")
+
+        val chips = rail.chips().associateBy { it.tag }
+        assertTrue(chips.getValue("kitchen remodel").approved)
+        assertFalse(chips.getValue("gardening").approved)
+        assertFalse(chips.getValue("nutrition").approved)
+    }
+
+    @Test
+    fun `onApprove promotes a still-suggested PROPOSED_NEW chip to a USER chip, same tag and null tagId`() {
+        val rail = TagChipRail()
+        rail.onSuggested(listOf(tag("gardening")))
+
+        val changed = rail.onApprove("gardening")
+
+        assertTrue(changed)
+        val chip = rail.chips().single()
+        assertEquals("gardening", chip.tag)
+        assertNull(chip.tagId)
+        assertEquals(RailChipSource.USER, chip.source)
+        assertEquals(TagStatus.PROPOSED_NEW, chip.status)
+        assertTrue(chip.approved)
+    }
+
+    @Test
+    fun `onApprove is a no-op for a tag that was never suggested at all`() {
+        assertFalse(TagChipRail().onApprove("nonexistent"))
+    }
+
+    @Test
+    fun `onApprove is a no-op for an EXISTING (tree-matched) suggested tag -- nothing to approve`() {
+        val rail = TagChipRail()
+        rail.onSuggested(listOf(tag("kitchen remodel", tagId = "t_kitchen")))
+
+        assertFalse(rail.onApprove("kitchen remodel"))
+        assertEquals(RailChipSource.SUGGESTED, rail.chips().single().source)
+    }
+
+    @Test
+    fun `onApprove is a no-op for a proposal already approved (already a user chip)`() {
+        val rail = TagChipRail()
+        rail.onSuggested(listOf(tag("gardening")))
+        rail.onApprove("gardening")
+
+        val secondApprove = rail.onApprove("gardening")
+
+        assertFalse(secondApprove)
+    }
+
+    @Test
+    fun `an approved proposal never resurrects as an unapproved suggested duplicate on a later onSuggested re-feed`() {
+        val rail = TagChipRail()
+        rail.onSuggested(listOf(tag("gardening")))
+        rail.onApprove("gardening")
+
+        rail.onSuggested(listOf(tag("gardening")))
+
+        val chips = rail.chips()
+        assertEquals(1, chips.size)
+        assertTrue(chips.single().approved)
+    }
+
+    @Test
+    fun `approvedKeys reflects only currently-approved (USER) chips, normalized`() {
+        val rail = TagChipRail()
+        rail.onSuggested(listOf(tag("gardening"), tag("nutrition", rank = 2)))
+        rail.onApprove("gardening")
+
+        assertEquals(setOf("gardening"), rail.approvedKeys())
+    }
+
+    @Test
+    fun `approvedKeys is empty for a fresh rail with only unapproved suggestions`() {
+        val rail = TagChipRail()
+        rail.onSuggested(listOf(tag("gardening")))
+
+        assertTrue(rail.approvedKeys().isEmpty())
+    }
 }

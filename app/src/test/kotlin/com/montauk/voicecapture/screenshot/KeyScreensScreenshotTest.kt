@@ -212,15 +212,20 @@ class KeyScreensScreenshotTest {
         // RecordingService's TagCoordinator/TagChipRail pipeline populates.
         // No such pipeline runs in this Robolectric render, so this golden
         // seeds the rail directly, matching the transcript fixture above.
-        // Bead asn-45m: one USER (filled) chip and one SUGGESTED (outlined)
-        // chip -- shows both rail states, plus the ribbon underneath deriving
-        // from the USER chip (the rail's primary) since it's a free-form tag
-        // (no tagId, no vault configured in this golden -- see setUp's
-        // isSignedOut = true) it slugifies straight to "notes/kitchen-remodel.md".
+        // Bead asn-45m/asn-0jk: all three rail chip states in one golden --
+        // "kitchen remodel" is a USER chip (filled/green), "budget" an
+        // EXISTING (tree-matched, tagId set) SUGGESTED chip (plain
+        // outlined/white), "gardening" a still-unapproved PROPOSED_NEW (no
+        // tagId) SUGGESTED chip (tertiary-outlined/purple). The ribbon
+        // underneath derives from the rail's primary ("kitchen remodel",
+        // free-form/no tagId, no vault configured in this golden -- see
+        // setUp's isSignedOut = true) so it slugifies straight to
+        // "notes/kitchen-remodel.md".
         TagRailStateHolder.update(
             listOf(
                 TagRailChip("kitchen remodel", source = RailChipSource.USER),
-                TagRailChip("budget", source = RailChipSource.SUGGESTED),
+                TagRailChip("budget", tagId = "t_budget", source = RailChipSource.SUGGESTED),
+                TagRailChip("gardening", source = RailChipSource.SUGGESTED),
             ),
         )
 

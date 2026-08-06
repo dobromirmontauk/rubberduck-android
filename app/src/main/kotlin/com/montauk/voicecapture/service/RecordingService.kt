@@ -78,6 +78,10 @@ class RecordingService : LifecycleService() {
         const val ACTION_TAG_ADD = "com.montauk.voicecapture.action.TAG_ADD"
         const val ACTION_TAG_REMOVE = "com.montauk.voicecapture.action.TAG_REMOVE"
         const val ACTION_TAG_SWAP = "com.montauk.voicecapture.action.TAG_SWAP"
+        // Bead asn-0jk: a single tap on a still-unapproved PROPOSED_NEW chip
+        // approves it in place -- distinct action from ACTION_TAG_SWAP (which
+        // still opens the picker for an already-EXISTING chip).
+        const val ACTION_TAG_APPROVE = "com.montauk.voicecapture.action.TAG_APPROVE"
         const val EXTRA_TAG_NAME = "tag_name"
         const val EXTRA_TAG_ID = "tag_id"
         const val EXTRA_OLD_TAG_NAME = "old_tag_name"
@@ -135,6 +139,10 @@ class RecordingService : LifecycleService() {
         fun swapTagIntent(context: Context, oldTag: String, newTag: String, newTagId: String?): Intent =
             Intent(context, RecordingService::class.java).setAction(ACTION_TAG_SWAP)
                 .putExtra(EXTRA_OLD_TAG_NAME, oldTag).putExtra(EXTRA_TAG_NAME, newTag).putExtra(EXTRA_TAG_ID, newTagId)
+
+        /** Bead asn-0jk: the user tapped a still-unapproved PROPOSED_NEW chip's body to approve [tag] in place. */
+        fun approveTagIntent(context: Context, tag: String): Intent =
+            Intent(context, RecordingService::class.java).setAction(ACTION_TAG_APPROVE).putExtra(EXTRA_TAG_NAME, tag)
     }
 
     private lateinit var audioEngine: AudioEngine
@@ -177,7 +185,7 @@ class RecordingService : LifecycleService() {
      * -- owned here alongside [tagCoordinator] (same session-scoped
      * lifetime: created in [beginRecording], cleared in [endRecording]).
      * [startTagPipeline]'s pump feeds it every new suggested-tags set;
-     * [handleTagAdd]/[handleTagRemove]/[handleTagSwap] feed it the user's
+     * [handleTagAdd]/[handleTagRemove]/[handleTagSwap]/[handleTagApprove] feed it the user's
      * own edits. Either path republishes [TagChipRail.chips] to
      * [TagRailStateHolder] and, for a user edit only, appends a
      * user-attributed tags event line to `live-transcript.jsonl`.
@@ -216,6 +224,7 @@ class RecordingService : LifecycleService() {
             ACTION_TAG_ADD -> handleTagAdd(intent)
             ACTION_TAG_REMOVE -> handleTagRemove(intent)
             ACTION_TAG_SWAP -> handleTagSwap(intent)
+            ACTION_TAG_APPROVE -> handleTagApprove(intent)
         }
         return START_NOT_STICKY
     }
@@ -387,6 +396,16 @@ class RecordingService : LifecycleService() {
         writeUserTagEvent(session, added = listOf(UserTagRef(newTag, newTagId)), removed = listOf(UserTagRef(oldTag)))
     }
 
+    /** Handles [ACTION_TAG_APPROVE] (bead asn-0jk): a single tap on a still-unapproved PROPOSED_NEW chip's body approves it in place, no picker involved. */
+    private fun handleTagApprove(intent: Intent) {
+        val session = currentSession ?: return
+        val rail = tagChipRail ?: return
+        val tag = intent.getStringExtra(EXTRA_TAG_NAME)?.takeIf { it.isNotBlank() } ?: return
+        if (!rail.onApprove(tag)) return
+        TagRailStateHolder.update(rail.chips())
+        writeUserTagEvent(session, added = listOf(UserTagRef(tag, tagId = null, approved = true)), removed = emptyList())
+    }
+
     /**
      * Appends a user-attributed tags event line (bead asn-45m) --
      * [TagsEventWriter.encodeUserEditLine]'s two-array shape, timestamped the
@@ -527,11 +546,16 @@ class RecordingService : LifecycleService() {
                     }
                 }.getOrNull() ?: continue
                 TagsStateHolder.update(changed)
-                app.sessionStore.transcriptFile(session.dir).appendText(TagsEventWriter.encodeLine(event.atMs, changed) + "\n")
                 // Feeds the rail's suggested side -- sticky-removed tags stay
                 // excluded from TagChipRail.chips() even though this always
-                // hands the tracker's raw output through unfiltered.
+                // hands the tracker's raw output through unfiltered. Done
+                // before encodeLine below so a proposal the user already
+                // approved (bead asn-0jk) is reflected in this exact
+                // snapshot line, not one tick later.
                 rail.onSuggested(changed)
+                val approvedKeys = rail.approvedKeys()
+                app.sessionStore.transcriptFile(session.dir)
+                    .appendText(TagsEventWriter.encodeLine(event.atMs, changed, approvedKeys) + "\n")
                 TagRailStateHolder.update(rail.chips())
             }
         }

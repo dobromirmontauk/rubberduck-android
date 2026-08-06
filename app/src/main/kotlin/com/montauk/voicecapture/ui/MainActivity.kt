@@ -45,6 +45,7 @@ class MainActivity : ComponentActivity() {
                 onAddTag = ::addRecordingTag,
                 onRemoveTag = ::removeRecordingTag,
                 onSwapTag = ::swapRecordingTag,
+                onApproveTag = ::approveRecordingTag,
             )
         }
     }
@@ -124,5 +125,10 @@ class MainActivity : ComponentActivity() {
     /** Bead asn-45m: the recording screen's picker confirmed a replacement for an existing chip. */
     private fun swapRecordingTag(oldTag: String, newTag: String, newTagId: String?) {
         ContextCompat.startForegroundService(this, RecordingService.swapTagIntent(this, oldTag, newTag, newTagId))
+    }
+
+    /** Bead asn-0jk: the recording screen's tap-to-approve on a still-unapproved PROPOSED_NEW chip. */
+    private fun approveRecordingTag(tag: String) {
+        ContextCompat.startForegroundService(this, RecordingService.approveTagIntent(this, tag))
     }
 }

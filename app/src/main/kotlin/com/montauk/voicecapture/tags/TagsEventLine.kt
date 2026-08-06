@@ -40,6 +40,18 @@ import kotlinx.serialization.json.Json
  * branches on whether `source` is present (absent/anything else => model
  * snapshot; `"user"` => edit) rather than needing a separate `event` value.
  * See [TagsEventWriter.encodeLine] vs. [TagsEventWriter.encodeUserEditLine].
+ *
+ * **Bead asn-0jk** (locked tag-colors design) adds `status` and `approved` to
+ * both variants' tag references: `status` is always present, `"existing"`
+ * when [tagId] is non-null or `"proposed_new"` otherwise (see [TagStatus]/
+ * [TagStatus.wireValue]) -- the same rule [TagRailChip.status] uses, so a
+ * [TagChipRail]-driven UI and the wire event agree by construction. `approved`
+ * is present (non-null) only when `status` is `"proposed_new"`: `false` for
+ * an untouched model proposal (every snapshot line keeps reporting this until
+ * the user acts, so a reader of only the latest snapshot -- not the full
+ * event history -- still knows an offline organizer must not create that tag
+ * yet), `true` once approved. Omitted entirely for `"existing"`, where
+ * approval has no meaning -- the tag already exists.
  */
 @Serializable
 data class TagEventEntry(
@@ -47,6 +59,8 @@ data class TagEventEntry(
     @SerialName("tag_id") val tagId: String? = null,
     val confidence: Double,
     val rank: Int,
+    val status: String,
+    val approved: Boolean? = null,
 )
 
 /**
@@ -54,9 +68,13 @@ data class TagEventEntry(
  * (bead asn-45m) -- deliberately lighter than [TagEventEntry]: a user's pick
  * carries neither a scorer confidence nor a rank, only which tag (and, when
  * it's a tree-matched node, its permanent [tagId]) the user added or removed.
+ * [approved] (bead asn-0jk) is set only on an `added` entry representing an
+ * approval of a previously-[TagStatus.PROPOSED_NEW] tag (see
+ * [TagChipRail.onApprove]) -- null/omitted for every other add and for every
+ * `removed` entry, where it has no meaning.
  */
 @Serializable
-data class UserTagRef(val tag: String, @SerialName("tag_id") val tagId: String? = null)
+data class UserTagRef(val tag: String, @SerialName("tag_id") val tagId: String? = null, val approved: Boolean? = null)
 
 @Serializable
 data class TagsEventLine(
@@ -86,10 +104,32 @@ object TagsEventWriter {
     // model-snapshot ones and the new user-edit ones.
     private val json = Json { encodeDefaults = true; explicitNulls = false }
 
-    fun encodeLine(tMs: Long, displayed: List<DisplayedTag>): String {
+    /**
+     * [approvedKeys] (bead asn-0jk, from [TagChipRail.approvedKeys]) is a set
+     * of normalized (trim+lowercase) tag text the user has already approved
+     * -- an entry's `status`/`approved` are derived independently of
+     * [DisplayedTag] itself (which knows nothing about user approval): a
+     * [DisplayedTag] with a non-null [DisplayedTag.tagId] is always
+     * `"existing"` (approval doesn't apply, `approved` omitted); one with a
+     * null [DisplayedTag.tagId] is `"proposed_new"`, `approved` true iff its
+     * normalized [DisplayedTag.tag] is in [approvedKeys]. Defaults to empty
+     * so existing callers/tests that don't care about approval can omit it.
+     */
+    fun encodeLine(tMs: Long, displayed: List<DisplayedTag>, approvedKeys: Set<String> = emptySet()): String {
         val line = TagsEventLine(
             tMs = tMs,
-            tags = displayed.map { TagEventEntry(tag = it.tag, tagId = it.tagId, confidence = it.confidence, rank = it.rank) },
+            tags = displayed.map { d ->
+                val status = if (d.tagId != null) TagStatus.EXISTING else TagStatus.PROPOSED_NEW
+                val approved = if (status == TagStatus.PROPOSED_NEW) d.tag.trim().lowercase() in approvedKeys else null
+                TagEventEntry(
+                    tag = d.tag,
+                    tagId = d.tagId,
+                    confidence = d.confidence,
+                    rank = d.rank,
+                    status = status.wireValue,
+                    approved = approved,
+                )
+            },
         )
         return json.encodeToString(TagsEventLine.serializer(), line)
     }

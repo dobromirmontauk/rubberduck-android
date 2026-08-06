@@ -82,10 +82,17 @@ class RecordingScreenTagRailTest {
         onAddTag: (String, String?) -> Unit = { _, _ -> },
         onRemoveTag: (String) -> Unit = {},
         onSwapTag: (String, String, String?) -> Unit = { _, _, _ -> },
+        onApproveTag: (String) -> Unit = {},
     ) {
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-06_0900_ab12", mode = RecordingMode.LISTEN) }
         composeTestRule.setContent {
-            RecordingScreen(onStopRecording = {}, onAddTag = onAddTag, onRemoveTag = onRemoveTag, onSwapTag = onSwapTag)
+            RecordingScreen(
+                onStopRecording = {},
+                onAddTag = onAddTag,
+                onRemoveTag = onRemoveTag,
+                onSwapTag = onSwapTag,
+                onApproveTag = onApproveTag,
+            )
         }
         composeTestRule.waitForIdle()
     }
@@ -138,12 +145,30 @@ class RecordingScreenTagRailTest {
         TagRailStateHolder.update(
             listOf(
                 TagRailChip("kitchen remodel", source = RailChipSource.USER),
-                TagRailChip("budget", source = RailChipSource.SUGGESTED),
+                // tagId set -- EXISTING, so this renders as a plain outlined
+                // SUGGESTED chip rather than the PROPOSED_NEW purple variant.
+                TagRailChip("budget", tagId = "t_budget", source = RailChipSource.SUGGESTED),
             ),
         )
         setContent()
 
         composeTestRule.onNodeWithTag(TAG_RAIL_CHIP_USER_TEST_TAG).assertIsDisplayed()
+        composeTestRule.onNodeWithTag(TAG_RAIL_CHIP_SUGGESTED_TEST_TAG).assertIsDisplayed()
+    }
+
+    @Test
+    fun `an unapproved PROPOSED_NEW chip renders in the PROPOSED test tag, distinct from an EXISTING suggested chip`() {
+        app.secretsStore.isSignedOut = false
+        app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
+        TagRailStateHolder.update(
+            listOf(
+                TagRailChip("gardening", tagId = null, source = RailChipSource.SUGGESTED),
+                TagRailChip("budget", tagId = "t_budget", source = RailChipSource.SUGGESTED),
+            ),
+        )
+        setContent()
+
+        composeTestRule.onNodeWithTag(TAG_RAIL_CHIP_PROPOSED_TEST_TAG).assertIsDisplayed()
         composeTestRule.onNodeWithTag(TAG_RAIL_CHIP_SUGGESTED_TEST_TAG).assertIsDisplayed()
     }
 
@@ -208,7 +233,9 @@ class RecordingScreenTagRailTest {
     fun `tapping an existing chip's body opens the picker in swap mode, picking a result invokes onSwapTag`() {
         app.secretsStore.isSignedOut = false
         app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
-        TagRailStateHolder.update(listOf(TagRailChip("budget", source = RailChipSource.SUGGESTED)))
+        // tagId set -- EXISTING, so a body tap opens the picker (swap) rather
+        // than approving in place (that's the PROPOSED_NEW-only interaction).
+        TagRailStateHolder.update(listOf(TagRailChip("budget", tagId = "t_budget", source = RailChipSource.SUGGESTED)))
         var swap: Triple<String, String, String?>? = null
         setContent(onSwapTag = { oldTag, newTag, newTagId -> swap = Triple(oldTag, newTag, newTagId) })
 
@@ -218,5 +245,21 @@ class RecordingScreenTagRailTest {
         composeTestRule.onNodeWithText("work/mashgin").performClick()
 
         assertEquals(Triple("budget", "mashgin", "t_mashgin"), swap)
+    }
+
+    @Test
+    fun `tapping a still-unapproved PROPOSED_NEW chip's body approves it directly, no picker involved`() {
+        app.secretsStore.isSignedOut = false
+        app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
+        // No tagId -- PROPOSED_NEW and still SUGGESTED (unapproved).
+        TagRailStateHolder.update(listOf(TagRailChip("gardening", tagId = null, source = RailChipSource.SUGGESTED)))
+        var approved: String? = null
+        setContent(onApproveTag = { approved = it })
+
+        composeTestRule.onNodeWithText("gardening").performClick()
+        composeTestRule.waitForIdle()
+
+        assertEquals("gardening", approved)
+        composeTestRule.onNodeWithTag(TAG_PICKER_SHEET_TEST_TAG).assertDoesNotExist()
     }
 }
