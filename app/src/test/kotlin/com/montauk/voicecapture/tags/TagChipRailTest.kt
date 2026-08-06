@@ -29,6 +29,22 @@ class TagChipRailTest {
     }
 
     @Test
+    fun `a SUGGESTED chip carries the scorer's confidence through -- for a word-cloud view to size or color by`() {
+        val rail = TagChipRail()
+        rail.onSuggested(listOf(tag("marathon training", confidence = 0.87)))
+
+        assertEquals(0.87, rail.chips().single().confidence)
+    }
+
+    @Test
+    fun `a USER chip's confidence is always null -- a user pick has no scorer confidence`() {
+        val rail = TagChipRail()
+        rail.onAdd("kitchen remodel")
+
+        assertNull(rail.chips().single().confidence)
+    }
+
+    @Test
     fun `onAdd inserts a filled USER chip ahead of the suggested chips`() {
         val rail = TagChipRail()
         rail.onSuggested(listOf(tag("marathon training")))
