@@ -49,12 +49,28 @@ data class AudioRoute(
  * this warning since it's wideband by design.
  */
 object AudioRouteSelector {
-    fun selectRoute(devices: List<RouteCandidate>): AudioRoute {
+    /**
+     * [bluetoothConnectGranted] gates [AudioRouteType.BLUETOOTH_SCO] only --
+     * bead asn-b8u: [MicAudioSource][com.montauk.voicecapture.audio.MicAudioSource]'s
+     * `AudioManager.startBluetoothSco()` call is `@RequiresPermission(BLUETOOTH_CONNECT)`
+     * on API 31+ (this app's minSdk), so picking that route without the
+     * permission granted would mean "the chip says BLUETOOTH but the SCO
+     * link call throws every time and no real audio ever flows over it" --
+     * worse than just treating the device as absent and using the phone mic.
+     * [AudioRouteType.BLE_HEADSET] is untouched by this gate: LE Audio
+     * routes purely via `AudioRecord.setPreferredDevice`, never
+     * `startBluetoothSco()`, matching [AudioRoute.needsBluetoothSco]'s
+     * existing true-only-for-SCO boundary. Defaults to `true` so every
+     * existing caller/test keeps today's ungated behavior.
+     */
+    fun selectRoute(devices: List<RouteCandidate>, bluetoothConnectGranted: Boolean = true): AudioRoute {
         devices.firstOrNull { it.type == AudioRouteType.BLE_HEADSET }?.let { ble ->
             return AudioRoute(AudioRouteType.BLE_HEADSET, ble.deviceId, needsBluetoothSco = false, scoNarrowbandWarning = false)
         }
-        devices.firstOrNull { it.type == AudioRouteType.BLUETOOTH_SCO }?.let { sco ->
-            return AudioRoute(AudioRouteType.BLUETOOTH_SCO, sco.deviceId, needsBluetoothSco = true, scoNarrowbandWarning = true)
+        if (bluetoothConnectGranted) {
+            devices.firstOrNull { it.type == AudioRouteType.BLUETOOTH_SCO }?.let { sco ->
+                return AudioRoute(AudioRouteType.BLUETOOTH_SCO, sco.deviceId, needsBluetoothSco = true, scoNarrowbandWarning = true)
+            }
         }
         return AudioRoute(AudioRouteType.BUILTIN_MIC, deviceId = null, needsBluetoothSco = false, scoNarrowbandWarning = false)
     }
@@ -101,11 +117,12 @@ class AudioRouteController {
      * Returns null when the decision is unchanged (caller should do
      * nothing -- no redundant `setPreferredDevice` calls, no redundant UI
      * update); otherwise returns the new route plus whether this transition
-     * is a Bluetooth device-loss fallback.
+     * is a Bluetooth device-loss fallback. [bluetoothConnectGranted] is
+     * forwarded to [AudioRouteSelector.selectRoute] as-is -- see its KDoc.
      */
-    fun onDevicesChanged(devices: List<RouteCandidate>): RouteTransition? {
+    fun onDevicesChanged(devices: List<RouteCandidate>, bluetoothConnectGranted: Boolean = true): RouteTransition? {
         val previous = currentRoute
-        val next = AudioRouteSelector.selectRoute(devices)
+        val next = AudioRouteSelector.selectRoute(devices, bluetoothConnectGranted)
         currentRoute = next
         if (previous == next) return null
         val wasBluetooth = previous != null && previous.type != AudioRouteType.BUILTIN_MIC

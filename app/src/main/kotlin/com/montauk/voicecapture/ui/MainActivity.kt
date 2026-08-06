@@ -53,7 +53,12 @@ class MainActivity : ComponentActivity() {
      * null for the normal live-mic tap.
      */
     private fun onRecordTapped(injectAssetFileName: String? = null) {
-        if (hasRecordAudioPermission()) {
+        // Bead asn-b8u: re-request whenever EITHER permission is still
+        // missing, not just RECORD_AUDIO -- an install that granted
+        // RECORD_AUDIO before this fix shipped would otherwise never see the
+        // BLUETOOTH_CONNECT prompt at all, since this check alone gated
+        // whether the system dialog runs.
+        if (hasRecordAudioPermission() && hasBluetoothConnectPermission()) {
             startRecordingService(injectAssetFileName)
         } else {
             pendingInjectAsset = injectAssetFileName
@@ -64,12 +69,27 @@ class MainActivity : ComponentActivity() {
     private fun hasRecordAudioPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-    private fun permissionsToRequest(): Array<String> =
+    private fun hasBluetoothConnectPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * BLUETOOTH_CONNECT is requested alongside RECORD_AUDIO on every device
+     * this app runs on (minSdk 31 == the permission's own minimum API), not
+     * gated behind an SDK check the way POST_NOTIFICATIONS is -- see bead
+     * asn-b8u: [MicAudioSource][com.montauk.voicecapture.audio.MicAudioSource]
+     * needs it to actually start a Bluetooth SCO link rather than have that
+     * call throw SecurityException every time. A denial here is not fatal --
+     * [requestPermissions]'s callback only gates on RECORD_AUDIO -- it just
+     * means Bluetooth routing degrades to the phone mic instead of blocking
+     * recording, same as MicAudioSource's own permission check.
+     */
+    private fun permissionsToRequest(): Array<String> {
+        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.BLUETOOTH_CONNECT)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            arrayOf(Manifest.permission.RECORD_AUDIO)
+            permissions += Manifest.permission.POST_NOTIFICATIONS
         }
+        return permissions.toTypedArray()
+    }
 
     private fun startRecordingService(injectAssetFileName: String? = null) {
         // Called only from this direct user tap (or the bottom nav's "New

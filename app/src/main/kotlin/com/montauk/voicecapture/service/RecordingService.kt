@@ -1,16 +1,19 @@
 package com.montauk.voicecapture.service
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.montauk.voicecapture.BuildConfig
@@ -246,7 +249,21 @@ class RecordingService : LifecycleService() {
      */
     private fun createAudioSource(injectAudioSpec: String?): AudioSource {
         if (!BuildConfig.DEBUG || injectAudioSpec.isNullOrBlank()) {
-            val mic = MicAudioSource(audioManager = getSystemService(AudioManager::class.java))
+            val mic = MicAudioSource(
+                audioManager = getSystemService(AudioManager::class.java),
+                // Bead asn-b8u: lets MicAudioSource (a) watch for the real
+                // SCO-connect broadcast with a bounded timeout instead of
+                // optimistically assuming the link is live the instant
+                // startBluetoothSco() returns, and (b) gate route selection
+                // on BLUETOOTH_CONNECT actually being granted -- checked
+                // live on every route evaluation rather than once at session
+                // start, so a grant from Settings mid-session (or a denial
+                // that only shows up later) is picked up immediately.
+                context = this,
+                hasBluetoothConnectPermission = {
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                },
+            )
             // Bead vn-edu.2: publish every routing decision (initial pick,
             // Bluetooth upgrade/downgrade, or a mid-session device-loss
             // fallback to the phone mic) to the recording screen. Onto

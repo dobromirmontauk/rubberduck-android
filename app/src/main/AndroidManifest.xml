@@ -2,6 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Bead asn-b8u: minSdk 31 means BLUETOOTH_CONNECT always exists at runtime on
+         this app's devices. MicAudioSource calls AudioManager#startBluetoothSco(),
+         which is @RequiresPermission(BLUETOOTH_CONNECT) on API 31+, without this
+         declaration that call threw SecurityException on every real Bluetooth
+         headset, every time (silently swallowed downstream, but the classic SCO
+         audio link never actually came up). -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
