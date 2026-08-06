@@ -31,6 +31,23 @@ jobs:
       - name: Unit tests + screenshot verification
         run: ./gradlew test verifyRoborazziDebug --stacktrace
 
+      # SCRATCH STEP (asn-3sm, not for merge): DuckScreenshotTest's goldens
+      # don't exist yet, so the verify step above only exercises the
+      # existing 5 goldens. Record the new duck goldens here on this Linux
+      # runner and upload them so they can be downloaded and committed as
+      # the real (Linux-rendered) goldens -- see README's "Screenshot tests
+      # (Roborazzi)" section on why goldens can't be recorded locally on
+      # macOS. This step and its upload-artifact step are reverted before
+      # this branch lands.
+      - name: "[asn-3sm scratch] record duck goldens"
+        run: ./gradlew recordRoborazziDebug --tests "com.montauk.voicecapture.screenshot.DuckScreenshotTest" --stacktrace
+
+      - name: "[asn-3sm scratch] upload duck goldens"
+        uses: actions/upload-artifact@v4
+        with:
+          name: duck-goldens
+          path: app/src/test/screenshot/goldens/duck_*.png
+
       # integrationTest (AssemblyAiLiveStreamingTest) hits the real AssemblyAI
       # streaming endpoint (~$0.01/run) and needs ASSEMBLYAI_API_KEY, so it is
       # intentionally excluded from the default job above. To wire it up as a
