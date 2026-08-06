@@ -13,6 +13,9 @@ import com.montauk.voicecapture.stt.SttClientFactory
 import com.montauk.voicecapture.stt.StreamingSttClient
 import com.montauk.voicecapture.tags.TagScorer
 import com.montauk.voicecapture.tags.TagScorerFactory
+import com.montauk.voicecapture.tags.TagTree
+import com.montauk.voicecapture.tags.TagTreeCache
+import com.montauk.voicecapture.tags.TagTreeRepository
 import com.montauk.voicecapture.upload.BundleUploader
 import com.montauk.voicecapture.upload.BundleUploaderFactory
 import java.io.File
@@ -51,10 +54,19 @@ class VoiceCaptureApp : Application() {
     var bundleUploader: BundleUploader = BundleUploaderFactory.create(token = "", owner = "", repo = "")
         private set
 
+    /**
+     * Bead vn-edu.47: fetch/cache/daily-refresh policy for the vault's
+     * `tags.yaml` -- owned at the application level (like [bundleUploader])
+     * since its on-disk cache should outlive any single recording session.
+     * See [currentTagTree].
+     */
+    private lateinit var tagTreeRepository: TagTreeRepository
+
     override fun onCreate() {
         super.onCreate()
         sessionStore = SessionStore(File(filesDir, "sessions"))
         secretsStore = AppSecretsStore(this)
+        tagTreeRepository = TagTreeRepository(TagTreeCache(File(filesDir, "tag-tree-cache")))
         refreshBundleUploader()
         recoverUnfinalizedSessions()
     }
@@ -75,6 +87,22 @@ class VoiceCaptureApp : Application() {
      * heuristic guess, just no tags; see [isAnthropicKeyConfigured]).
      */
     fun newTagScorer(): TagScorer = TagScorerFactory.create(secretsStore.effectiveAnthropicKey(BuildConfig.ANTHROPIC_API_KEY))
+
+    /**
+     * The vault's current tag tree (bead vn-edu.47), resolved via
+     * [tagTreeRepository]'s fetch/cache/daily-refresh policy against the
+     * same effective GitHub token/owner/repo [refreshBundleUploader] uses.
+     * A blank effective token (never signed in, or signed out) resolves to
+     * [TagTree.EMPTY] inside the repository itself -- today's free-form
+     * fallback -- without this call site needing its own blank-token check.
+     * Never throws; a fetch failure degrades to the last on-disk cache, or
+     * to [TagTree.EMPTY] if there's no cache yet either.
+     */
+    suspend fun currentTagTree(): TagTree = tagTreeRepository.currentTree(
+        token = secretsStore.effectiveGithubToken(BuildConfig.GITHUB_TOKEN),
+        owner = secretsStore.selectedVaultOwner ?: BuildConfig.VAULT_OWNER,
+        repo = secretsStore.selectedVaultRepo ?: BuildConfig.VAULT_REPO,
+    )
 
     /**
      * Null when the effective Anthropic key isn't configured (bead

@@ -26,7 +26,7 @@ class TagScorerFactoryTest {
         // still HeuristicTagScorer under a new name.
         val tail = "Marathon training update. Marathon training has been going well. Marathon training is the whole focus this month."
 
-        val result = scorer.score(tail, emptyList())
+        val result = scorer.score(tail, emptyList(), TagTree.EMPTY)
 
         assertTrue("keyless scorer must never compute tags", result.isEmpty())
     }

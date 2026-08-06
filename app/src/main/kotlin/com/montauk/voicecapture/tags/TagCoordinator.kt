@@ -16,11 +16,24 @@ class TagCoordinator(
     private val scorer: TagScorer,
     private val tracker: TagTracker = TagTracker(),
     private val rollingTailWindowMs: Long = DEFAULT_ROLLING_TAIL_WINDOW_MS,
+    // Bead vn-edu.47: resolves the vault's current tag tree (fetch/cache/
+    // daily-refresh policy lives in TagTreeRepository, one layer up --
+    // see com.montauk.voicecapture.VoiceCaptureApp.currentTagTree) without
+    // TagCoordinator itself knowing anything about GitHub, caching, or
+    // refresh cadence. Called at most once per coordinator instance (i.e.
+    // once per recording session -- see [resolveTree]), never on every
+    // scorer call, so a slow/failing fetch can only ever delay this
+    // session's first score, not every one of them.
+    private val treeProvider: suspend () -> TagTree = { TagTree.EMPTY },
 ) {
     private data class TimedText(val text: String, val endMs: Long)
 
     private val lines = mutableListOf<TimedText>()
     private var lastScoredAtMs: Long? = null
+    private var resolvedTree: TagTree? = null
+
+    /** Resolves [treeProvider] once and caches it for this coordinator's lifetime -- see the constructor KDoc. */
+    private suspend fun resolveTree(): TagTree = resolvedTree ?: treeProvider().also { resolvedTree = it }
 
     /** The tracker's current displayed set, e.g. to re-render after a UI recreation without waiting on the next scorer call. */
     fun currentDisplayed(): List<DisplayedTag> = tracker.current()
@@ -102,7 +115,8 @@ class TagCoordinator(
 
         val before = tracker.current()
         val currentTags = before.map { it.tag }
-        val scored = runCatching { scorer.score(tail, currentTags) }.getOrDefault(emptyList())
+        val tree = runCatching { resolveTree() }.getOrDefault(TagTree.EMPTY)
+        val scored = runCatching { scorer.score(tail, currentTags, tree) }.getOrDefault(emptyList())
         val after = tracker.onScored(scored, nowMs)
         return after.takeIf { it != before }
     }

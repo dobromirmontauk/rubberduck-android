@@ -36,7 +36,13 @@ class HeuristicTagScorer : TagScorer {
     // it a little just to avoid pointless recompute on every single word.
     override val minIntervalMs: Long = 3_000L
 
-    override suspend fun score(transcriptTail: String, currentCandidates: List<String>): List<TagCandidate> {
+    // Bead vn-edu.47: [tree] is intentionally ignored -- this class is
+    // retired to a deterministic test fixture (see the class KDoc); it
+    // never ran tree-anchored matching in production, and giving it that
+    // behavior now would risk it drifting back into a real code path by
+    // accident. A test that wants tree-matching coverage exercises
+    // [AnthropicTagScorer], the only scorer that actually does it.
+    override suspend fun score(transcriptTail: String, currentCandidates: List<String>, tree: TagTree): List<TagCandidate> {
         val sentences = SENTENCE_SPLIT.split(transcriptTail).filter { it.isNotBlank() }
         val phraseScores = LinkedHashMap<String, Double>()
 

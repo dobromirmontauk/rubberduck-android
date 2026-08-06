@@ -24,5 +24,5 @@ package com.montauk.voicecapture.tags
 class NoOpTagScorer : TagScorer {
     override val minIntervalMs: Long = Long.MAX_VALUE
 
-    override suspend fun score(transcriptTail: String, currentCandidates: List<String>): List<TagCandidate> = emptyList()
+    override suspend fun score(transcriptTail: String, currentCandidates: List<String>, tree: TagTree): List<TagCandidate> = emptyList()
 }

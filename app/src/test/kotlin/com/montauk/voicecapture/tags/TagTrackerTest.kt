@@ -235,4 +235,67 @@ class TagTrackerTest {
     // sticky rank, exit threshold) passes unmodified with this feature
     // added -- none of them ever scores two overlapping candidate texts, so
     // suppression never activates for them.
+
+    // --- Bead vn-edu.47: tagId/isProposal survive the tracker's bookkeeping ---
+
+    @Test
+    fun `a tree-matched candidate's tagId is carried through to the displayed tag`() {
+        val tracker = TagTracker()
+
+        val displayed = tracker.onScored(listOf(TagCandidate("kitchen-remodel", 0.9, tagId = "t_kitchen")), nowMs = 0L)
+
+        assertEquals("t_kitchen", displayed.single().tagId)
+        assertEquals(false, displayed.single().isProposal)
+    }
+
+    @Test
+    fun `a proposal candidate's isProposal flag is carried through to the displayed tag`() {
+        val tracker = TagTracker()
+
+        val displayed = tracker.onScored(listOf(TagCandidate("gardening", 0.9, isProposal = true)), nowMs = 0L)
+
+        assertEquals(null, displayed.single().tagId)
+        assertEquals(true, displayed.single().isProposal)
+    }
+
+    @Test
+    fun `re-scoring the same tag text updates its tagId rather than keeping the stale one`() {
+        val tracker = TagTracker()
+        tracker.onScored(listOf(TagCandidate("kitchen-remodel", 0.9, isProposal = true)), nowMs = 0L)
+
+        // The tree caught up (e.g. the vault added a leaf for it) -- a later
+        // score for the exact same text now resolves to a real node.
+        val displayed = tracker.onScored(listOf(TagCandidate("kitchen-remodel", 0.9, tagId = "t_kitchen", isProposal = false)), nowMs = 1_000L)
+
+        assertEquals("t_kitchen", displayed.single().tagId)
+        assertEquals(false, displayed.single().isProposal)
+    }
+
+    @Test
+    fun `current() (no new score) still reflects the last-known tagId of a displayed tag`() {
+        val tracker = TagTracker()
+        tracker.onScored(listOf(TagCandidate("home", 0.9, tagId = "t_home")), nowMs = 0L)
+
+        assertEquals("t_home", tracker.current().single().tagId)
+    }
+
+    @Test
+    fun `decay (tick with no new score) preserves tagId on a still-displayed tag`() {
+        val tracker = TagTracker(minDwellMs = 0L, exitThreshold = 0.3, decayHalfLifeMs = 999_999_999L)
+        tracker.onScored(listOf(TagCandidate("home", 0.9, tagId = "t_home")), nowMs = 0L)
+
+        val displayed = tracker.tick(1_000L)
+
+        assertEquals("t_home", displayed.single().tagId)
+    }
+
+    @Test
+    fun `default TagCandidate and DisplayedTag construction (no tree involved) has a null tagId and isProposal false`() {
+        val tracker = TagTracker()
+
+        val displayed = tracker.onScored(listOf(TagCandidate("legacy free-form tag", 0.9)), nowMs = 0L)
+
+        assertEquals(null, displayed.single().tagId)
+        assertEquals(false, displayed.single().isProposal)
+    }
 }

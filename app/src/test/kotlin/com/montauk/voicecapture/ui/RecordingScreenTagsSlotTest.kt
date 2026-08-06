@@ -127,4 +127,49 @@ class RecordingScreenTagsSlotTest {
         assertTrue("STOP button should still render normally", true)
         composeTestRule.onNodeWithText("STOP").assertIsDisplayed()
     }
+
+    // --- Bead vn-edu.47: tree-anchored tags render distinctly from proposals ---
+
+    @Test
+    fun `a tree-matched tag renders as a matched (non-dashed) chip`() {
+        app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
+        RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
+        TagsStateHolder.update(listOf(DisplayedTag("kitchen-remodel", 0.9, rank = 1, tier = TagTier.PRIMARY, tagId = "t_kitchen")))
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag(MATCHED_TAG_CHIP_TEST_TAG).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a genuinely new proposal renders as the visually-subtle (dashed) proposal chip, not the matched chip`() {
+        app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
+        RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
+        TagsStateHolder.update(listOf(DisplayedTag("gardening", 0.6, rank = 1, tier = TagTier.SECONDARY, isProposal = true)))
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag(PROPOSAL_TAG_CHIP_TEST_TAG).assertIsDisplayed()
+        composeTestRule.onNodeWithText("gardening").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a legacy free-form tag (no tree, no proposal flag) renders as the matched (non-dashed) chip, not the proposal chip`() {
+        app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
+        RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
+        TagsStateHolder.update(listOf(DisplayedTag("marathon training", 0.9, rank = 1, tier = TagTier.PRIMARY)))
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag(MATCHED_TAG_CHIP_TEST_TAG).assertIsDisplayed()
+    }
 }

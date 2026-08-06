@@ -2,8 +2,16 @@ package com.montauk.voicecapture.tags
 
 import kotlin.math.pow
 
-/** One scored candidate topic, as returned by a [TagScorer]. Confidence is 0.0..1.0. */
-data class TagCandidate(val tag: String, val confidence: Double)
+/**
+ * One scored candidate topic, as returned by a [TagScorer]. Confidence is
+ * 0.0..1.0. Bead vn-edu.47: [tagId] is set when [tag] was matched to an
+ * existing node in the vault's tag tree (the vault's ULID-prefixed
+ * `tags.yaml` id) -- null for plain free-form text, either because no
+ * vault tree was available to match against or because the scorer is
+ * proposing a genuinely new tag ([isProposal] true) that clearly fits
+ * nothing in the tree.
+ */
+data class TagCandidate(val tag: String, val confidence: Double, val tagId: String? = null, val isProposal: Boolean = false)
 
 /** Rendered chip size class, driven purely by [DisplayedTag.confidence] -- see [TagTier.forConfidence]. */
 enum class TagTier {
@@ -25,8 +33,20 @@ enum class TagTier {
     }
 }
 
-/** One currently-displayed tag: 1-based [rank] (1 = most confident), [tier] for chip size. */
-data class DisplayedTag(val tag: String, val confidence: Double, val rank: Int, val tier: TagTier)
+/**
+ * One currently-displayed tag: 1-based [rank] (1 = most confident), [tier]
+ * for chip size. [tagId]/[isProposal] carry [TagCandidate]'s same-named
+ * fields through the tracker's hysteresis/decay bookkeeping unchanged --
+ * see [TagCandidate]'s KDoc for what they mean.
+ */
+data class DisplayedTag(
+    val tag: String,
+    val confidence: Double,
+    val rank: Int,
+    val tier: TagTier,
+    val tagId: String? = null,
+    val isProposal: Boolean = false,
+)
 
 /**
  * Confidence-ranked MAJOR-topic tracker (bead vn-edu.38, supersedes the v1
@@ -78,7 +98,13 @@ class TagTracker(
         }
     }
 
-    private data class Candidate(var tag: String, var confidence: Double, var lastUpdatedMs: Long)
+    private data class Candidate(
+        var tag: String,
+        var confidence: Double,
+        var lastUpdatedMs: Long,
+        var tagId: String? = null,
+        var isProposal: Boolean = false,
+    )
     private data class Displayed(var displayedSinceMs: Long)
 
     /** Keyed by normalized (trimmed, lowercased) tag text so scorer casing drift doesn't split one topic into two. */
@@ -106,11 +132,13 @@ class TagTracker(
             val confidence = candidate.confidence.coerceIn(0.0, 1.0)
             val existing = candidates[key]
             if (existing == null) {
-                candidates[key] = Candidate(text, confidence, nowMs)
+                candidates[key] = Candidate(text, confidence, nowMs, candidate.tagId, candidate.isProposal)
             } else {
                 existing.tag = text
                 existing.confidence = confidence
                 existing.lastUpdatedMs = nowMs
+                existing.tagId = candidate.tagId
+                existing.isProposal = candidate.isProposal
             }
         }
         decayUnseen(seenKeys, nowMs)
@@ -229,6 +257,8 @@ class TagTracker(
                 confidence = candidate.confidence,
                 rank = index + 1,
                 tier = TagTier.forConfidence(candidate.confidence),
+                tagId = candidate.tagId,
+                isProposal = candidate.isProposal,
             )
         }
     }
@@ -237,7 +267,14 @@ class TagTracker(
         displayed.keys.mapNotNull { key -> candidates[key]?.let { key to it } }
             .sortedByDescending { it.second.confidence }
             .mapIndexed { index, (_, candidate) ->
-                DisplayedTag(candidate.tag, candidate.confidence, index + 1, TagTier.forConfidence(candidate.confidence))
+                DisplayedTag(
+                    tag = candidate.tag,
+                    confidence = candidate.confidence,
+                    rank = index + 1,
+                    tier = TagTier.forConfidence(candidate.confidence),
+                    tagId = candidate.tagId,
+                    isProposal = candidate.isProposal,
+                )
             }
 
     private fun normalize(tag: String): String = tag.trim().lowercase()

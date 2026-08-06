@@ -47,6 +47,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -601,6 +604,16 @@ private const val TAG_CHIP_ENTER_MS = 220
 private const val TAG_CHIP_EXIT_MS = 160
 private const val TAG_CHIP_SCALE_FROM = 0.85f
 
+/**
+ * Bead vn-edu.47: a tree-anchored scorer's rare new-topic proposal
+ * ([DisplayedTag.isProposal]) renders visually subtle -- a dashed border
+ * rather than [TagChip]'s normal solid-fill chip -- so it reads as "not
+ * confirmed yet" without the STOP-adjacent glance screen needing any extra
+ * text to explain why. A tree-matched or legacy free-form tag (the vast
+ * majority) is unaffected. [PROPOSAL_TAG_CHIP_TEST_TAG]/[MATCHED_TAG_CHIP_TEST_TAG]
+ * let a Robolectric test assert on this distinction without needing pixel
+ * comparison of the dashed stroke itself.
+ */
 @Composable
 private fun TagChip(tag: DisplayedTag) {
     val (fontSize, verticalPadding) = when (tag.tier) {
@@ -608,9 +621,21 @@ private fun TagChip(tag: DisplayedTag) {
         TagTier.SECONDARY -> 15.sp to 8.dp
         TagTier.TERTIARY -> 13.sp to 6.dp
     }
+    val shape = RoundedCornerShape(999.dp)
+    val proposalBorderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+    val proposalBorder = Modifier.drawWithContent {
+        drawContent()
+        drawRoundRect(
+            color = proposalBorderColor,
+            cornerRadius = CornerRadius(size.minDimension / 2f),
+            style = Stroke(width = PROPOSAL_BORDER_WIDTH_DP.dp.toPx(), pathEffect = PathEffect.dashPathEffect(PROPOSAL_DASH_PATTERN)),
+        )
+    }
     Box(
         modifier = Modifier
-            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(999.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant, shape)
+            .then(if (tag.isProposal) proposalBorder else Modifier)
+            .testTag(if (tag.isProposal) PROPOSAL_TAG_CHIP_TEST_TAG else MATCHED_TAG_CHIP_TEST_TAG)
             .padding(horizontal = 14.dp, vertical = verticalPadding),
     ) {
         Text(
@@ -621,6 +646,12 @@ private fun TagChip(tag: DisplayedTag) {
         )
     }
 }
+
+/** Test-only anchors for [TagChip]'s proposal-vs-matched styling (bead vn-edu.47). */
+const val PROPOSAL_TAG_CHIP_TEST_TAG = "recording_tag_chip_proposal"
+const val MATCHED_TAG_CHIP_TEST_TAG = "recording_tag_chip_matched"
+private const val PROPOSAL_BORDER_WIDTH_DP = 1.5f
+private val PROPOSAL_DASH_PATTERN = floatArrayOf(9f, 6f)
 
 /**
  * Large, deep-red STOP control rendered as an inset rounded button rather

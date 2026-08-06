@@ -353,7 +353,11 @@ class RecordingService : LifecycleService() {
      * coroutine, matching [RecordingModeStateMachine]'s single-owner pattern.
      */
     private fun startTagPipeline(app: VoiceCaptureApp, session: SessionHandle) {
-        val coordinator = TagCoordinator(app.newTagScorer())
+        // Bead vn-edu.47: TagCoordinator resolves this lazily (at most once
+        // per session, on its first actual scorer call) rather than this
+        // method blocking session start on a network round-trip -- see
+        // TagCoordinator's treeProvider KDoc.
+        val coordinator = TagCoordinator(app.newTagScorer(), treeProvider = { app.currentTagTree() })
         tagCoordinator = coordinator
         val channel = Channel<TagPumpEvent>(capacity = TAG_LINE_CHANNEL_CAPACITY, onBufferOverflow = BufferOverflow.DROP_OLDEST)
         tagLineChannel = channel

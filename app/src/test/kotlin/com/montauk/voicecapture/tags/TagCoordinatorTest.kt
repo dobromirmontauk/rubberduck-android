@@ -13,10 +13,12 @@ class TagCoordinatorTest {
         private val resultsQueue: MutableList<List<TagCandidate>>,
     ) : TagScorer {
         val calls = mutableListOf<Pair<String, List<String>>>()
+        val treesSeen = mutableListOf<TagTree>()
         var throwOnNextCall = false
 
-        override suspend fun score(transcriptTail: String, currentCandidates: List<String>): List<TagCandidate> {
+        override suspend fun score(transcriptTail: String, currentCandidates: List<String>, tree: TagTree): List<TagCandidate> {
             calls += transcriptTail to currentCandidates
+            treesSeen += tree
             if (throwOnNextCall) {
                 throwOnNextCall = false
                 throw RuntimeException("boom")
@@ -24,6 +26,9 @@ class TagCoordinatorTest {
             return if (resultsQueue.isNotEmpty()) resultsQueue.removeAt(0) else emptyList()
         }
     }
+
+    /** Single-node fixture tree, just enough to prove a non-default treeProvider result actually reaches the scorer. */
+    private fun fixtureTree(): TagTree = TagTree(listOf(TagTreeNode("t_home", "home", null, "House stuff.")))
 
     @Test
     fun `first final line always scores immediately regardless of minIntervalMs`() = runBlocking {
@@ -265,6 +270,76 @@ class TagCoordinatorTest {
                 "monologue should surface a first heuristic tag within ~40s of defaults, got firstTagAtMs=$firstTagAtMs",
             firstTagAtMs!! <= 40_000L,
         )
+    }
+
+    // --- Bead vn-edu.47: treeProvider wiring ---
+
+    @Test
+    fun `with no treeProvider given, the scorer is called with TagTree EMPTY`() = runBlocking {
+        val scorer = StubScorer(minIntervalMs = 0L, resultsQueue = mutableListOf(listOf(TagCandidate("topic", 0.9))))
+        val coordinator = TagCoordinator(scorer)
+
+        coordinator.onFinalLine("first line", endMs = 0L)
+
+        assertTrue(scorer.treesSeen.single().isEmpty)
+    }
+
+    @Test
+    fun `a supplied treeProvider's tree is threaded through to every scorer call`() = runBlocking {
+        val scorer = StubScorer(
+            minIntervalMs = 0L,
+            resultsQueue = mutableListOf(listOf(TagCandidate("topic", 0.9)), listOf(TagCandidate("topic", 0.9))),
+        )
+        val tree = fixtureTree()
+        val coordinator = TagCoordinator(scorer, treeProvider = { tree })
+        coordinator.onFinalLine("first line", endMs = 0L)
+
+        coordinator.onFinalLine("second line", endMs = 1_000L)
+
+        assertEquals(listOf(tree, tree), scorer.treesSeen)
+    }
+
+    @Test
+    fun `treeProvider is resolved at most once per coordinator, not once per scorer call`() = runBlocking {
+        val scorer = StubScorer(
+            minIntervalMs = 0L,
+            resultsQueue = mutableListOf(listOf(TagCandidate("topic", 0.9)), listOf(TagCandidate("topic", 0.9))),
+        )
+        var provideCount = 0
+        val coordinator = TagCoordinator(scorer, treeProvider = { provideCount++; fixtureTree() })
+        coordinator.onFinalLine("first line", endMs = 0L)
+
+        coordinator.onFinalLine("second line", endMs = 1_000L)
+
+        assertEquals(1, provideCount)
+    }
+
+    @Test
+    fun `a tree-matched candidate's tagId and isProposal survive through to the displayed tag`() = runBlocking {
+        val scorer = StubScorer(
+            minIntervalMs = 0L,
+            resultsQueue = mutableListOf(listOf(TagCandidate("home", 0.9, tagId = "t_home", isProposal = false))),
+        )
+        val coordinator = TagCoordinator(scorer, treeProvider = { fixtureTree() })
+
+        val result = coordinator.onFinalLine("first line", endMs = 0L)
+
+        assertEquals("t_home", result?.single()?.tagId)
+        assertEquals(false, result?.single()?.isProposal)
+    }
+
+    @Test
+    fun `a proposal candidate's isProposal flag survives through to the displayed tag`() = runBlocking {
+        val scorer = StubScorer(
+            minIntervalMs = 0L,
+            resultsQueue = mutableListOf(listOf(TagCandidate("gardening", 0.9, tagId = null, isProposal = true))),
+        )
+        val coordinator = TagCoordinator(scorer, treeProvider = { fixtureTree() })
+
+        val result = coordinator.onFinalLine("first line", endMs = 0L)
+
+        assertNull(result?.single()?.tagId)
+        assertEquals(true, result?.single()?.isProposal)
     }
 
     private companion object {
