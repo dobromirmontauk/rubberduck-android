@@ -40,7 +40,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -422,16 +421,26 @@ class RecordingService : LifecycleService() {
      * partial text through a separate field -- that's already the single
      * source of truth [RecordingScreen][com.montauk.voicecapture.ui.RecordingScreen]
      * itself renders from.
+     *
+     * Bead asn-l34: the per-tick work runs through [runResilientTicker]
+     * rather than directly in a bare `while` loop -- see its KDoc for why.
+     * In short, a single tick throwing (observed on ae8ece8 as the elapsed
+     * counter freezing mid-recording and never advancing again) must never
+     * be able to silently kill this loop for the rest of the session.
      */
     private fun startTicker() {
         lifecycleScope.launch {
-            while (isActive && currentSession != null) {
+            runResilientTicker(
+                scope = this,
+                intervalMs = TICK_INTERVAL_MS,
+                continueCondition = { currentSession != null },
+                onTickFailure = { e -> Log.e(TAG, "ticker tick failed; elapsed clock keeps running", e) },
+            ) {
                 val elapsed = SystemClock.elapsedRealtime() - startElapsedRealtimeMs
                 RecordingStateHolder.update { it.copy(elapsedMs = elapsed) }
                 getSystemService(NotificationManager::class.java)
                     ?.notify(NOTIFICATION_ID, buildNotification(elapsed))
                 tagLineChannel?.trySend(TagPumpEvent.Tick(TranscriptStateHolder.state.value.currentPartial, elapsed))
-                delay(TICK_INTERVAL_MS)
             }
         }
     }
