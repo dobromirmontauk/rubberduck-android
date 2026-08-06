@@ -341,7 +341,21 @@ class RecordingService : LifecycleService() {
                     // KDoc. DROP_OLDEST means a saturated tag pump (e.g. a slow
                     // AnthropicTagScorer call) sheds old lines rather than ever
                     // making this collector wait.
-                    tagLineChannel?.trySend(TagPumpEvent.FinalLine(partial.text, partial.endMs))
+                    //
+                    // Bead asn-k7i cause C: this event's atMs is the
+                    // recording-elapsed clock (SystemClock.elapsedRealtime() -
+                    // startElapsedRealtimeMs), the same one startTicker's Tick
+                    // events use below -- NOT partial.endMs, which is
+                    // AssemblyAI's own socket-relative word timestamp (a
+                    // different clock, with a different zero point: it starts
+                    // counting from when the STT WebSocket connects, not when
+                    // this recording did). Feeding TagCoordinator's single
+                    // cadence gate two different clocks depending on which
+                    // event triggered it is exactly what let final lines rarely
+                    // satisfy the gate, or stamp it with a value already behind
+                    // where the ticker's own clock was.
+                    val recordingElapsedMs = SystemClock.elapsedRealtime() - startElapsedRealtimeMs
+                    tagLineChannel?.trySend(TagPumpEvent.FinalLine(partial.text, recordingElapsedMs))
                 }
             }
         }
@@ -373,6 +387,14 @@ class RecordingService : LifecycleService() {
         // TagCoordinator's treeProvider KDoc.
         val coordinator = TagCoordinator(app.newTagScorer(), treeProvider = { app.currentTagTree() })
         tagCoordinator = coordinator
+        // Bead asn-k7i cause D: fire the tree fetch now instead of waiting for
+        // the first real score call to discover it isn't resolved yet -- a
+        // slow GitHub fetch (10s connect/15s read) was otherwise adding up to
+        // 25s to the first tag of the day. prewarmTree is fire-and-forget
+        // (not suspend) so it can't delay this method itself, and the first
+        // real score call joins this exact same in-flight fetch rather than
+        // starting a second one -- see TagCoordinator.prewarmTree/resolveTree.
+        coordinator.prewarmTree(lifecycleScope)
         val channel = Channel<TagPumpEvent>(capacity = TAG_LINE_CHANNEL_CAPACITY, onBufferOverflow = BufferOverflow.DROP_OLDEST)
         tagLineChannel = channel
         tagPumpJob = lifecycleScope.launch(Dispatchers.IO) {

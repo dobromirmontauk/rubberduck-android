@@ -57,12 +57,17 @@ class AnthropicTagScorer(
     override suspend fun score(transcriptTail: String, currentCandidates: List<String>, tree: TagTree): List<TagCandidate> {
         if (!hasApiKey || transcriptTail.isBlank()) return fallback.score(transcriptTail, currentCandidates, tree)
 
-        val rawText = client.complete(
-            model,
-            maxTokens = 400,
-            systemPrompt = if (tree.isEmpty) LEGACY_SYSTEM_PROMPT else TREE_SYSTEM_PROMPT,
-            userContent = buildUserContent(transcriptTail, currentCandidates, tree),
-        )
+        val systemPrompt = if (tree.isEmpty) LEGACY_SYSTEM_PROMPT else TREE_SYSTEM_PROMPT
+        val userContent = buildUserContent(transcriptTail, currentCandidates, tree)
+        // Bead asn-k7i cause E: client.complete() returning null means the
+        // HTTP call itself failed (network error, non-200, or an
+        // unusable/empty response envelope -- see AnthropicClient's KDoc),
+        // which at this ~5s cadence is often just one transient blip. A
+        // single immediate retry -- no backoff, no third attempt -- recovers
+        // that cycle instead of silently costing it; a second failure still
+        // degrades to fallback exactly as before.
+        val rawText = client.complete(model, maxTokens = 400, systemPrompt = systemPrompt, userContent = userContent)
+            ?: client.complete(model, maxTokens = 400, systemPrompt = systemPrompt, userContent = userContent)
         val result = rawText?.let { parseCandidates(it, tree) }
 
         if (result == null) {
@@ -162,10 +167,11 @@ class AnthropicTagScorer(
     private companion object {
         const val TAG = "AnthropicTagScorer"
 
-        // Every ~25s per spec: frequent enough that tag chips feel live,
-        // infrequent enough that even a 30-60 minute session costs pennies
-        // on Haiku pricing -- see README's cost note.
-        const val DEFAULT_MIN_INTERVAL_MS = 25_000L
+        // Bead asn-k7i cause B: every ~5s (was 25s) -- 400 max_tokens on Haiku
+        // still costs pennies even at this cadence (see README's cost note),
+        // and this is the sole cadence knob TagCoordinator's gate reads via
+        // TagScorer.minIntervalMs.
+        const val DEFAULT_MIN_INTERVAL_MS = 5_000L
 
         /** Bead vn-edu.47: byte-identical to this class's pre-vn-edu.47 prompt -- the no-vault free-form path. */
         val LEGACY_SYSTEM_PROMPT = """

@@ -1,5 +1,10 @@
 package com.montauk.voicecapture.tags
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+
 /**
  * Owns the rolling-transcript-tail bookkeeping and scorer-cadence timing
  * around a [TagTracker], so [com.montauk.voicecapture.service.RecordingService]
@@ -31,16 +36,46 @@ class TagCoordinator(
     private val lines = mutableListOf<TimedText>()
     private var lastScoredAtMs: Long? = null
     private var resolvedTree: TagTree? = null
+    private var treeJob: Deferred<TagTree>? = null
 
-    /** Resolves [treeProvider] once and caches it for this coordinator's lifetime -- see the constructor KDoc. */
-    private suspend fun resolveTree(): TagTree = resolvedTree ?: treeProvider().also { resolvedTree = it }
+    /**
+     * Bead asn-k7i cause D: kicks [treeProvider] off right now on [scope]
+     * (fire-and-forget -- this is deliberately not `suspend`, so it can
+     * never block the caller) rather than waiting for the first real score
+     * call to discover the tree isn't resolved yet. A slow GitHub fetch
+     * (10s connect/15s read) is then already in flight by the time
+     * [resolveTree] needs it, instead of only starting then. A no-op if
+     * called more than once, or after the tree has already resolved.
+     */
+    fun prewarmTree(scope: CoroutineScope) {
+        if (treeJob == null && resolvedTree == null) treeJob = scope.async(Dispatchers.IO) { treeProvider() }
+    }
+
+    /**
+     * Resolves [treeProvider] once and caches it for this coordinator's
+     * lifetime -- see the constructor KDoc. Joins [treeJob] (started by
+     * [prewarmTree]) when one is already in flight rather than calling
+     * [treeProvider] a second time; falls back to calling it directly here
+     * when nothing prewarmed it (e.g. a caller/test that never calls
+     * [prewarmTree]).
+     */
+    private suspend fun resolveTree(): TagTree =
+        resolvedTree ?: (treeJob?.await() ?: treeProvider()).also { resolvedTree = it }
 
     /** The tracker's current displayed set, e.g. to re-render after a UI recreation without waiting on the next scorer call. */
     fun currentDisplayed(): List<DisplayedTag> = tracker.current()
 
     /**
-     * Feeds one newly-finalized transcript line ending at [endMs] (session-
-     * elapsed ms, matching [com.montauk.voicecapture.service.TranscriptLine.endMs]).
+     * Feeds one newly-finalized transcript line ending at [endMs]. Bead
+     * asn-k7i cause C: [endMs] must be the same recording-elapsed clock
+     * [onTick]'s [nowMs] uses, NOT [com.montauk.voicecapture.service.TranscriptLine.endMs]'s
+     * AssemblyAI socket-relative word timestamp -- [maybeScore]'s cadence
+     * gate compares whatever it's given here against whatever it was last
+     * given by either caller, so feeding it a different clock than [onTick]
+     * silently corrupts that comparison (a final line can look "already
+     * due" or "not due for a while yet" for reasons that have nothing to do
+     * with real elapsed time). The caller ([com.montauk.voicecapture.service.RecordingService])
+     * is responsible for converting to recording-elapsed before calling this.
      * Returns the new displayed-tags set if the scorer ran *and* the
      * displayed set changed as a result; null otherwise (scorer's cadence
      * not due yet, or it ran but nothing about the display changed).
@@ -104,14 +139,21 @@ class TagCoordinator(
      * skip (return null) if not due yet or if [tail] is blank, otherwise
      * score and feed [tracker], returning the new displayed set only if it
      * actually changed.
+     *
+     * Bead asn-k7i cause A: [lastScoredAtMs] is only stamped once we know a
+     * scorer call is actually about to happen -- i.e. after the blank-tail
+     * check, not before it. Stamping it unconditionally on every call let a
+     * blank-tail tick (silence, no final line yet) burn the cadence slot on
+     * its own, pushing the *real* first score out by a full [due] from
+     * whatever moment that blank tick happened to land on, and every
+     * following blank tick re-burned it the same way.
      */
     private suspend fun maybeScore(tail: String, nowMs: Long): List<DisplayedTag>? {
         val due = scorer.minIntervalMs
         val last = lastScoredAtMs
         if (last != null && nowMs - last < due) return null
-        lastScoredAtMs = nowMs
-
         if (tail.isBlank()) return null
+        lastScoredAtMs = nowMs
 
         val before = tracker.current()
         val currentTags = before.map { it.tag }

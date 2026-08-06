@@ -1,5 +1,9 @@
 package com.montauk.voicecapture.tags
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -340,6 +344,95 @@ class TagCoordinatorTest {
 
         assertNull(result?.single()?.tagId)
         assertEquals(true, result?.single()?.isProposal)
+    }
+
+    // --- Bead asn-k7i: time-to-first-tag fix (causes A, C, D) ---
+
+    @Test
+    fun `a blank-tail tick does not consume a cadence slot`() = runBlocking {
+        val scorer = StubScorer(minIntervalMs = 10_000L, resultsQueue = mutableListOf(listOf(TagCandidate("topic", 0.9))))
+        val coordinator = TagCoordinator(scorer)
+
+        // t=0: nothing said yet -- no final lines, no partial text, so the
+        // rolling tail is blank. Before the fix, maybeScore stamped
+        // lastScoredAtMs here regardless, burning this cadence slot on
+        // nothing.
+        coordinator.onTick(nowMs = 0L)
+        // t=1s: real speech arrives. If the blank tick above had wrongly
+        // consumed the slot, this wouldn't score for another ~9s.
+        val result = coordinator.onFinalLine("finally some speech", endMs = 1_000L)
+
+        assertEquals(listOf("topic"), result?.map { it.tag })
+        assertEquals(1, scorer.calls.size)
+    }
+
+    @Test
+    fun `any number of blank ticks before real speech never burns the cadence clock`() = runBlocking {
+        val scorer = StubScorer(minIntervalMs = 25_000L, resultsQueue = mutableListOf(listOf(TagCandidate("topic", 0.9))))
+        val coordinator = TagCoordinator(scorer)
+
+        repeat(5) { i -> coordinator.onTick(nowMs = i * 1_000L) } // t=0..4000ms, all blank
+
+        val result = coordinator.onFinalLine("now speaking", endMs = 5_000L)
+
+        assertEquals(1, scorer.calls.size)
+        assertEquals(listOf("topic"), result?.map { it.tag })
+    }
+
+    @Test
+    fun `interleaved ticks and final lines share one cadence clock -- no double-firing across event types`() = runBlocking {
+        val scorer = StubScorer(
+            minIntervalMs = 5_000L,
+            resultsQueue = mutableListOf(
+                listOf(TagCandidate("topic", 0.9)),
+                listOf(TagCandidate("topic", 0.9), TagCandidate("more", 0.8)),
+            ),
+        )
+        val coordinator = TagCoordinator(scorer)
+
+        coordinator.onFinalLine("first line", endMs = 0L) // due (no prior score) -> scores
+        coordinator.onTick(nowMs = 2_000L, currentPartialText = "first line continuing") // 2s < 5s -> not due
+        coordinator.onTick(nowMs = 4_000L, currentPartialText = "first line continuing more") // 4s < 5s -> not due
+        coordinator.onFinalLine("second line", endMs = 6_000L) // 6s >= 5s -> due, scores again
+
+        assertEquals(2, scorer.calls.size)
+    }
+
+    @Test
+    fun `prewarmTree kicks off the provider once, and a later score call reuses that same resolution`() = runBlocking {
+        var provideCount = 0
+        val scorer = StubScorer(minIntervalMs = 0L, resultsQueue = mutableListOf(listOf(TagCandidate("topic", 0.9))))
+        val coordinator = TagCoordinator(scorer, treeProvider = { provideCount++; fixtureTree() })
+
+        coordinator.prewarmTree(this)
+        coordinator.onFinalLine("first line", endMs = 0L)
+
+        assertEquals(1, provideCount)
+    }
+
+    @Test
+    fun `a score call started while the prewarmed fetch is still in flight awaits that same fetch, not TagTree EMPTY`() = runBlocking {
+        val scorer = StubScorer(minIntervalMs = 0L, resultsQueue = mutableListOf(listOf(TagCandidate("topic", 0.9))))
+        val tree = fixtureTree()
+        val coordinator = TagCoordinator(scorer, treeProvider = { delay(20); tree })
+
+        coordinator.prewarmTree(this) // fetch is still resolving (20ms delay) when...
+        coordinator.onFinalLine("first line", endMs = 0L) // ...this suspends until it's done
+
+        assertEquals(tree, scorer.treesSeen.single())
+    }
+
+    @Test
+    fun `prewarmTree is a plain function -- calling it never suspends the caller`() {
+        // Compile-time proof as much as a runtime one: prewarmTree has no
+        // `suspend` modifier, so it's called here from a non-suspend test
+        // with a treeProvider that would hang forever if actually awaited.
+        val scorer = StubScorer(minIntervalMs = 0L, resultsQueue = mutableListOf())
+        val coordinator = TagCoordinator(scorer, treeProvider = { awaitCancellation() })
+        val scope = CoroutineScope(Dispatchers.Unconfined)
+
+        coordinator.prewarmTree(scope)
+        // Reaching this line at all (no timeout, no hang) is the proof.
     }
 
     private companion object {

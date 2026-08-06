@@ -68,6 +68,11 @@ class AnthropicTagScorerTest {
         )
 
     @Test
+    fun `minIntervalMs is 5 seconds -- bead asn-k7i cause B, was 25s`() {
+        assertEquals(5_000L, scorer().minIntervalMs)
+    }
+
+    @Test
     fun `parses a well-formed tags response into TagCandidates in order`() = runBlocking {
         val body = messageResponseBody("""{"tags":[{"tag":"marathon training","confidence":0.9},{"tag":"nutrition","confidence":0.6}]}""")
         server.enqueue(MockResponse().setResponseCode(200).setBody(body))
@@ -150,8 +155,13 @@ class AnthropicTagScorerTest {
         assertEquals(1, fallback.callCount)
     }
 
+    // --- Bead asn-k7i cause E: single immediate retry on a failed HTTP call ---
+
     @Test
-    fun `a non-200 response degrades silently to the fallback scorer`() = runBlocking {
+    fun `a non-200 response is retried once immediately, and a second failure degrades to the fallback scorer`() = runBlocking {
+        // Both attempts fail -- the retry (bead asn-k7i cause E) doesn't
+        // change the outcome here, only how many requests it took to get there.
+        server.enqueue(MockResponse().setResponseCode(500).setBody("internal error"))
         server.enqueue(MockResponse().setResponseCode(500).setBody("internal error"))
         val fallback = RecordingFallback(listOf(TagCandidate("heuristic result", 0.4)))
 
@@ -159,13 +169,27 @@ class AnthropicTagScorerTest {
 
         assertEquals(listOf(TagCandidate("heuristic result", 0.4)), result)
         assertEquals(1, fallback.callCount)
+        assertEquals(2, server.requestCount)
     }
 
     @Test
-    fun `a network failure (server unreachable) degrades silently to the fallback scorer`() = runBlocking {
+    fun `a non-200 response followed by a successful retry recovers the cycle -- no fallback needed`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(500).setBody("internal error"))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(messageResponseBody("""{"tags":[{"tag":"topic","confidence":0.9}]}""")))
+        val fallback = RecordingFallback(listOf(TagCandidate("should not be used", 1.0)))
+
+        val result = scorer(fallback).score("tail", emptyList(), TagTree.EMPTY)
+
+        assertEquals(listOf(TagCandidate("topic", 0.9)), result)
+        assertEquals(0, fallback.callCount)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `a network failure (server unreachable) is retried once, then degrades silently to the fallback scorer`() = runBlocking {
         val fallback = RecordingFallback(listOf(TagCandidate("heuristic result", 0.4)))
         val unreachable = scorer(fallback)
-        server.shutdown() // guarantees the connection attempt fails
+        server.shutdown() // guarantees every connection attempt fails, including the retry
 
         val result = unreachable.score("tail", emptyList(), TagTree.EMPTY)
 
