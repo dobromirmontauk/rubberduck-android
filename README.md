@@ -132,6 +132,19 @@ runtime; see `AppSecretsStore.effectiveGithubToken()`. The same precedence
 rule applies to `assemblyai.apiKey`/`anthropic.apiKey` and their in-app
 Settings equivalents.
 
+**Debug-only embedding (bead vn-edu.53):** the `local.properties`/env
+convenience above is wired into the **debug** build type only. Release
+builds always get `""` for `ASSEMBLYAI_API_KEY`/`ANTHROPIC_API_KEY`/
+`GITHUB_TOKEN` in `app/build.gradle.kts`, regardless of what's on the
+building machine -- so a release APK never carries real credentials, and
+anyone running it must configure keys in-app. Two checks guard this:
+`ReleaseSecretsBlankTest` (`app/src/testRelease/`, runs under
+`./gradlew test`) asserts the release variant's `BuildConfig` fields are
+blank, and `./gradlew checkReleaseSecretsAbsent` assembles a release APK and
+string-scans its contents for whatever secrets are actually configured
+locally, skipping gracefully when none are (e.g. CI, which never checks in
+`local.properties`).
+
 ## Architecture
 
 ```

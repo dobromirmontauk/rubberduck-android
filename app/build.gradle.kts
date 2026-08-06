@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.util.zip.ZipFile
 
 plugins {
     alias(libs.plugins.android.application)
@@ -38,13 +39,13 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField("String", "ASSEMBLYAI_API_KEY", "\"${localProperty("assemblyai.apiKey", "ASSEMBLYAI_API_KEY")}\"")
-        // Live tags v2 (bead vn-edu.38): same secret pattern as
-        // assemblyai.apiKey above. Blank means "not configured" --
-        // TagScorerFactory falls back to the keyless HeuristicTagScorer
-        // rather than the app failing to build or crashing at runtime.
-        buildConfigField("String", "ANTHROPIC_API_KEY", "\"${localProperty("anthropic.apiKey", "ANTHROPIC_API_KEY")}\"")
-        buildConfigField("String", "GITHUB_TOKEN", "\"${localProperty("github.token", "GITHUB_TOKEN")}\"")
+        // ASSEMBLYAI_API_KEY / ANTHROPIC_API_KEY / GITHUB_TOKEN are NOT set
+        // here (bead vn-edu.53): a defaultConfig buildConfigField applies to
+        // every variant, which meant a release APK built on a machine with a
+        // populated local.properties shipped real credentials. They're set
+        // per build type below instead -- debug keeps today's
+        // local.properties/env convenience, release is hardcoded to "" so no
+        // secret can ever reach a release build regardless of environment.
         buildConfigField("String", "VAULT_OWNER", "\"${localProperty("vault.owner").ifBlank { "dobromirmontauk" }}\"")
         buildConfigField("String", "VAULT_REPO", "\"${localProperty("vault.repo").ifBlank { "voice-vault" }}\"")
         // GitHub OAuth App client id for the login screen's device flow (bead
@@ -65,9 +66,26 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Dev convenience only (bead vn-edu.53): a fresh `./gradlew
+            // assembleDebug` picks up local.properties/env secrets so the
+            // emulator/device harness works with zero in-app setup. See
+            // README's "Configuring secrets for the live demo".
+            buildConfigField("String", "ASSEMBLYAI_API_KEY", "\"${localProperty("assemblyai.apiKey", "ASSEMBLYAI_API_KEY")}\"")
+            buildConfigField("String", "ANTHROPIC_API_KEY", "\"${localProperty("anthropic.apiKey", "ANTHROPIC_API_KEY")}\"")
+            buildConfigField("String", "GITHUB_TOKEN", "\"${localProperty("github.token", "GITHUB_TOKEN")}\"")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Always blank, independent of local.properties/env (bead
+            // vn-edu.53) -- release ships with no baked secrets; users
+            // configure keys in-app instead (AppSecretsStore, vn-edu.48).
+            // ReleaseSecretsBlankTest and the checkReleaseSecretsAbsent task
+            // below both guard against this regressing.
+            buildConfigField("String", "ASSEMBLYAI_API_KEY", "\"\"")
+            buildConfigField("String", "ANTHROPIC_API_KEY", "\"\"")
+            buildConfigField("String", "GITHUB_TOKEN", "\"\"")
         }
     }
 
@@ -115,6 +133,15 @@ android {
             // vn-edu.21) -- kept under integrationTest/ rather than
             // test/resources so they read as fixtures, not ordinary test data.
             resources.srcDirs("src/integrationTest/resources")
+        }
+        // Release-only unit tests (bead vn-edu.53): testReleaseUnitTest
+        // compiles against the *release* variant's generated BuildConfig, so
+        // a test that only makes sense for that variant (secrets must be
+        // blank) lives here instead of src/test, which is shared by every
+        // variant's unit-test task including testDebugUnitTest, where the
+        // same assertion would legitimately fail.
+        getByName("testRelease") {
+            kotlin.srcDirs("src/testRelease/kotlin")
         }
     }
 }
@@ -191,6 +218,58 @@ afterEvaluate {
             events("passed", "skipped", "failed", "standard_out")
             showStandardStreams = true
         }
+    }
+}
+
+// Bead vn-edu.53: ReleaseSecretsBlankTest (app/src/testRelease) already
+// guards BuildConfig itself, but this task inspects the actual built
+// artifact -- belt-and-suspenders against anything (a proguard/R8 rule, a
+// resource merge, a future secret added elsewhere) re-embedding a real
+// secret value in the bytes that ship. It reads expected values from
+// local.properties at runtime rather than inlining them here, so no secret
+// is ever committed. On a machine with no secrets configured (e.g. CI,
+// which never checks in local.properties) there's nothing to look for, so
+// the task skips rather than false-passing on an empty comparison.
+tasks.register("checkReleaseSecretsAbsent") {
+    group = "verification"
+    description = "Assembles release and asserts secrets configured in local.properties/env do not appear in the output APK. Skips gracefully if none are configured (e.g. CI). See README's secrets section."
+    dependsOn("assembleRelease")
+    doLast {
+        val secretKeys = mapOf(
+            "assemblyai.apiKey" to "ASSEMBLYAI_API_KEY",
+            "anthropic.apiKey" to "ANTHROPIC_API_KEY",
+            "github.token" to "GITHUB_TOKEN",
+        )
+        val secrets = secretKeys.map { (fileKey, envFallback) -> localProperty(fileKey, envFallback) }
+            .filter { it.isNotBlank() }
+            .toSet()
+        if (secrets.isEmpty()) {
+            logger.lifecycle("checkReleaseSecretsAbsent: no secrets configured in local.properties/env; nothing to scan for, skipping.")
+            return@doLast
+        }
+        val apkDir = layout.buildDirectory.dir("outputs/apk/release").get().asFile
+        val apk = apkDir.listFiles { f -> f.extension == "apk" }?.firstOrNull()
+            ?: throw GradleException("checkReleaseSecretsAbsent: no release APK found under $apkDir")
+        val leakedIn = mutableListOf<String>()
+        ZipFile(apk).use { zip ->
+            for (entry in zip.entries()) {
+                if (entry.isDirectory) continue
+                // Secrets here are ASCII API keys/tokens; ISO-8859-1 maps
+                // bytes 1:1 to chars so a raw substring search works
+                // regardless of the entry's actual encoding (dex, arsc, etc).
+                val text = zip.getInputStream(entry).use { it.readBytes() }
+                    .toString(Charsets.ISO_8859_1)
+                if (secrets.any { text.contains(it) }) {
+                    leakedIn += entry.name
+                }
+            }
+        }
+        if (leakedIn.isNotEmpty()) {
+            throw GradleException(
+                "Release APK ${apk.name} leaked a configured secret in: ${leakedIn.joinToString(", ")}",
+            )
+        }
+        logger.lifecycle("checkReleaseSecretsAbsent: verified ${secrets.size} configured secret(s) absent from ${apk.name}.")
     }
 }
 
