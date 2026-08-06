@@ -56,6 +56,18 @@ no Android framework dependency — it operates on plain `java.io` streams — s
 framing logic is covered by plain JVM unit tests (`OpusFrameWalTest`) without
 needing Robolectric or an emulator.
 
+**`timestampUs`'s basis (bead asn-r60).** Before pause/auto-pause existed,
+`AudioEngine` derived each frame's presentation timestamp from wall-clock time
+since `start()`. Once a paused span can exist -- and drop-at-source means a
+paused span is never written to this WAL at all -- a wall-clock basis would
+leave a real gap between the last pre-pause frame's timestamp and the first
+post-resume frame's, exactly the kind of discontinuity §"Why not MediaMuxer/OGG"
+above worries about for a *different* reason. `AudioEngine` now derives
+`timestampUs` from cumulative PCM bytes actually fed to the encoder instead,
+so the WAL's timestamps stay contiguous regardless of how many pauses happened
+along the way -- the recovered `audio.ogg`'s own duration is simply shorter,
+never gapped.
+
 ## Finalization
 
 On a clean `stop()`, `AudioEngine` reads the WAL back with `OpusFrameWal.Reader`

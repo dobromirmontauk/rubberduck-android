@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
                 onRemoveTag = ::removeRecordingTag,
                 onSwapTag = ::swapRecordingTag,
                 onApproveTag = ::approveRecordingTag,
+                onSetPaused = ::setRecordingPaused,
             )
         }
     }
@@ -130,5 +131,11 @@ class MainActivity : ComponentActivity() {
     /** Bead asn-0jk: the recording screen's tap-to-approve on a still-unapproved PROPOSED_NEW chip. */
     private fun approveRecordingTag(tag: String) {
         ContextCompat.startForegroundService(this, RecordingService.approveTagIntent(this, tag))
+    }
+
+    /** Bead asn-r60: the manual (hard) pause button next to Stop -- [paused] true pauses, false resumes. */
+    private fun setRecordingPaused(paused: Boolean) {
+        val intent = if (paused) RecordingService.pauseIntent(this) else RecordingService.resumeIntent(this)
+        ContextCompat.startForegroundService(this, intent)
     }
 }

@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.montauk.voicecapture.VoiceCaptureApp
+import com.montauk.voicecapture.service.RecordingActivityStateHolder
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
 import com.montauk.voicecapture.service.TagRailStateHolder
@@ -99,6 +100,10 @@ class KeyScreensScreenshotTest {
         // than relying on Robolectric's per-test static sandboxing, same
         // belt-and-suspenders as SessionSwipeInteractionTest.
         PendingRemovalHolder.flushAll()
+        // Bead asn-r60: a global singleton, same reset discipline as the
+        // three holders above -- a previous test's paused state must never
+        // leak into this one.
+        RecordingActivityStateHolder.reset()
         // See the class doc -- neutralizes AppSecretsStore's BuildConfig fallbacks
         // so goldens don't encode whichever machine happens to run this test.
         app.secretsStore.isSignedOut = true

@@ -30,6 +30,18 @@ data class SessionModeEntry(
  * class -- must treat null the same as "no title yet", not as a schema
  * violation. [SessionStore.listSessions] and the detail screen both prefer
  * this over [DerivedTitle]'s words when it's present and non-blank.
+ *
+ * `recorded_ms` (bead asn-r60) is a new contract-optional field: the actual
+ * duration of persisted audio in `audio.ogg`, which is `duration_ms` minus
+ * every hard- and soft-paused span (drop-at-source: neither is ever
+ * written). `duration_ms` deliberately keeps its pre-existing, wall-clock
+ * "start tap to stop tap" meaning rather than being redefined to mean
+ * captured duration -- it's an established ingest-contract field other
+ * readers already depend on, and [com.montauk.voicecapture.service.TooShortPolicy]'s
+ * "session ran under 10s" check is explicitly about wall-clock too. Null for
+ * every session recorded before this bead (no pause feature existed, so
+ * nothing was ever trimmed) -- readers must treat null as "not applicable",
+ * not as a schema violation, same as `title`/`modes`.
  */
 @Serializable
 data class SessionMeta(
@@ -41,5 +53,6 @@ data class SessionMeta(
     @SerialName("stt") val stt: String? = null,
     @SerialName("modes") val modes: List<SessionModeEntry>? = null,
     @SerialName("title") val title: String? = null,
+    @SerialName("recorded_ms") val recordedMs: Long? = null,
     @SerialName("schema_version") val schemaVersion: Int = 1,
 )

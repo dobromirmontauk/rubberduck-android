@@ -62,6 +62,28 @@ class SessionStoreTest {
     }
 
     @Test
+    fun `writeMeta round-trips recordedMs -- bead asn-r60's persisted-audio-duration field`() {
+        val handle = store.createSession(Date())
+        store.oggFile(handle.dir).writeText("fake-ogg-bytes")
+
+        store.writeMeta(handle, durationMs = 120_000L, deviceModel = "d", appVersion = "v", recordedMs = 90_000L)
+
+        val meta = store.readMeta(handle.sessionId)
+        assertEquals(120_000L, meta?.durationMs)
+        assertEquals(90_000L, meta?.recordedMs)
+    }
+
+    @Test
+    fun `writeMeta defaults recordedMs to null when not provided`() {
+        val handle = store.createSession(Date())
+        store.oggFile(handle.dir).writeText("fake-ogg-bytes")
+
+        store.writeMeta(handle, durationMs = 1_000L, deviceModel = "d", appVersion = "v")
+
+        assertNull(store.readMeta(handle.sessionId)?.recordedMs)
+    }
+
+    @Test
     fun `findUnfinalizedSessions finds a wal without a matching ogg`() {
         val orphaned = store.createSession(Date())
         store.walFile(orphaned.dir).writeText("partial-wal-bytes")

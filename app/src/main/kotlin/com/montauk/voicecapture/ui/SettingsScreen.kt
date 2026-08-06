@@ -1,6 +1,9 @@
 package com.montauk.voicecapture.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,8 +35,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.montauk.voicecapture.BuildConfig
 import com.montauk.voicecapture.VoiceCaptureApp
@@ -135,6 +140,15 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit, onConnectGithub: () -> Unit) {
                 }
                 Spacer(modifier = Modifier.height(20.dp))
                 SettingsSection {
+                    AutoPauseSection(
+                        enabled = app.secretsStore.autoPauseEnabled,
+                        onEnabledChange = { app.secretsStore.autoPauseEnabled = it },
+                        thresholdMs = app.secretsStore.autoPauseSilenceThresholdMs,
+                        onThresholdChange = { app.secretsStore.autoPauseSilenceThresholdMs = it },
+                    )
+                }
+                Spacer(modifier = Modifier.height(20.dp))
+                SettingsSection {
                     ToggleRow(label = "Upload on Wi-Fi only", initiallyOn = false)
                     ToggleRow(label = "Keep screen on while recording", initiallyOn = true)
                 }
@@ -217,6 +231,89 @@ internal fun UploadTokenRow(state: CredentialDisplayState) {
     }
     InfoRow(label = "Upload token", value = value)
 }
+
+/**
+ * Bead asn-r60: auto-pause on/off + its silence threshold, both wired to
+ * [com.montauk.voicecapture.settings.AppSecretsStore] (real persistence,
+ * unlike [ToggleRow]'s stubs below). Owns local `remember`ed copies of both
+ * values -- same reason as [ApiKeyManagementRow]'s `storedValue`: a plain
+ * `SharedPreferences`-backed store isn't Compose-observable, so this row
+ * needs its own state to reflect a change immediately rather than waiting on
+ * a recomposition trigger that will never come. `internal` for
+ * [AutoPauseSectionTest]-style direct test visibility, same convention as
+ * [ApiKeyManagementRow]. The threshold picker only shows while [enabled] --
+ * a disabled threshold has nothing to tune.
+ */
+@Composable
+internal fun AutoPauseSection(
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    thresholdMs: Long,
+    onThresholdChange: (Long) -> Unit,
+) {
+    var isEnabled by remember { mutableStateOf(enabled) }
+    var selectedThresholdMs by remember { mutableStateOf(thresholdMs) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Auto-pause when quiet",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Switch(
+                checked = isEnabled,
+                onCheckedChange = {
+                    isEnabled = it
+                    onEnabledChange(it)
+                },
+                modifier = Modifier.testTag(AUTO_PAUSE_TOGGLE_TEST_TAG),
+            )
+        }
+        if (isEnabled) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                AUTO_PAUSE_THRESHOLD_OPTIONS_MS.forEach { optionMs ->
+                    AutoPauseThresholdChip(
+                        label = "${optionMs / 1000}s",
+                        selected = optionMs == selectedThresholdMs,
+                        onClick = {
+                            selectedThresholdMs = optionMs
+                            onThresholdChange(optionMs)
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AutoPauseThresholdChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val backgroundColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+    val contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(backgroundColor)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    ) {
+        Text(text = label, style = MaterialTheme.typography.labelLarge, color = contentColor, fontWeight = FontWeight.Medium)
+    }
+}
+
+/** Bead asn-r60: the three silence-threshold choices offered in Settings -- 30s matches [com.montauk.voicecapture.settings.AppSecretsStore.DEFAULT_AUTO_PAUSE_THRESHOLD_MS]. */
+internal val AUTO_PAUSE_THRESHOLD_OPTIONS_MS = listOf(15_000L, 30_000L, 60_000L)
+
+/** Test-only anchor for [AutoPauseSection]'s toggle (bead asn-r60). */
+const val AUTO_PAUSE_TOGGLE_TEST_TAG = "settings_auto_pause_toggle"
 
 /** Stub toggle -- doesn't yet wire to any real behavior; fine for this wave per the brief. */
 @Composable

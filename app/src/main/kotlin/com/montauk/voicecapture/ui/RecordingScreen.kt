@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -79,6 +80,8 @@ import com.montauk.voicecapture.duck.rememberReducedMotionEnabled
 import com.montauk.voicecapture.duck.toDuckState
 import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.service.LatencyBadgeStateHolder
+import com.montauk.voicecapture.service.RecordingActivityState
+import com.montauk.voicecapture.service.RecordingActivityStateHolder
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
 import com.montauk.voicecapture.service.SummaryStateHolder
@@ -87,7 +90,6 @@ import com.montauk.voicecapture.service.TagTreeStateHolder
 import com.montauk.voicecapture.service.TranscriptLine
 import com.montauk.voicecapture.service.TranscriptStateHolder
 import com.montauk.voicecapture.service.TranscriptUiState
-import com.montauk.voicecapture.service.crudeRecordingActivity
 import com.montauk.voicecapture.stt.SttConnectionState
 import com.montauk.voicecapture.tags.RailChipSource
 import com.montauk.voicecapture.tags.TagFilingDestination
@@ -100,16 +102,20 @@ import kotlin.math.roundToInt
 
 /**
  * The full-glance recording screen. Bead asn-3sm's "layout A" (design board
- * section 2, the decided home state): minimal chrome -- a tiny rec/mode
- * indicator and the big timer up top, the animated duck stage filling the
- * rest, a large inset STOP button anchored to the bottom (bead vn-edu.32 --
- * a floating button with clear margins, not a full-bleed slab flush with
- * the screen edge). No bottom nav, no persistent notepad, no persistent
- * transcript -- this screen is meant to be readable at arm's length while
- * walking. (A "pause" control belongs in this same bottom chrome per the
- * design board, but bead asn-r60 owns that entire button + its pause/
- * auto-pause behavior on its own branch; this bead intentionally leaves it
- * out rather than build a second, conflicting one.)
+ * section 2, the decided home state): minimal chrome -- a tiny rec/mode/
+ * pause indicator and the big timer up top, the animated duck stage filling
+ * the rest, a large inset STOP button (plus, per team-lead's v2 pause
+ * redesign, a floating Pause/Resume pill next to it) anchored to the bottom
+ * (bead vn-edu.32 -- a floating button with clear margins, not a full-bleed
+ * slab flush with the screen edge). No bottom nav, no persistent notepad, no
+ * persistent transcript -- this screen is meant to be readable at arm's
+ * length while walking. Bead asn-r60 owns the pause STATE MACHINE
+ * ([RecordingActivityStateHolder]/[onSetPaused]); this bead owns all of the
+ * pause PRESENTATION on this screen, which supersedes asn-r60's own interim
+ * `PauseBanner`/`BottomActionsBar` UI outright (see [MinimalTopChrome] and
+ * [PauseResumeChip]) -- there is no separate banner anywhere on this screen
+ * by design; the duck falling asleep, the Z-trail, this pill, and the frozen
+ * big timer above are the entire pause presentation.
  *
  * **Duck view vs. debug transcript view (bead asn-3sm).** The duck stage is
  * the default; double-tapping it swaps in the old-style live transcript
@@ -121,18 +127,18 @@ import kotlin.math.roundToInt
  * rest of this screen's pre-asn-3sm debug chrome instead). Double-tapping
  * again returns to the duck. [showDebugView] is plain composable-local
  * state: it resets to the duck view every fresh visit to this screen, which
- * is the expected default.
+ * is the expected default. The pause pill lives only in the duck view's
+ * floating controls -- there is no pause affordance in the debug view.
  *
- * The duck's LISTENING/SLEEPY state is derived via [crudeRecordingActivity]
- * -- a crude stand-in (silence hint -> QUIET, else SPEAKING) for asn-r60's
- * real `StateFlow<RecordingActivityState>` ([com.montauk.voicecapture.service.RecordingActivityStateHolder]
- * on that branch), which hasn't landed on `main` yet; neither paused
- * activity (and therefore SLEEPING) is reachable until it does. THINKING
- * briefly overrides whichever of those is current for [THINKING_DISPLAY_MS]
- * every time [SummaryStateHolder] publishes a fresh summary (design board:
- * "duck plays 'taking notes', then the notes card slides up") -- the
- * closest real signal available today; there's no equivalent signal yet for
- * a tag-scorer LLM call in flight.
+ * The duck's LISTENING/SLEEPY/SLEEPING state is derived directly from
+ * [RecordingActivityStateHolder]'s real `StateFlow<RecordingActivityState>`
+ * (bead asn-r60) via [toDuckState] -- this superseded a crude
+ * transcript-derived stand-in (`crudeRecordingActivity`) once asn-r60 landed
+ * on `main`. THINKING briefly overrides whichever of those is current for
+ * [THINKING_DISPLAY_MS] every time [SummaryStateHolder] publishes a fresh
+ * summary (design board: "duck plays 'taking notes', then the notes card
+ * slides up") -- the closest real signal available today; there's no
+ * equivalent signal yet for a tag-scorer LLM call in flight.
  *
  * The thought cloud's BLUE/PURPLE/GREEN/WHITE split comes from
  * [ThoughtCloudWords.fromTagRailChips] over the same [rail][TagRailStateHolder]
@@ -161,12 +167,14 @@ fun RecordingScreen(
     onRemoveTag: (tag: String) -> Unit = {},
     onSwapTag: (oldTag: String, newTag: String, newTagId: String?) -> Unit = { _, _, _ -> },
     onApproveTag: (tag: String) -> Unit = {},
+    onSetPaused: (Boolean) -> Unit = {},
     onOpenSettings: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as VoiceCaptureApp
     val recordingState by RecordingStateHolder.state.collectAsStateWithLifecycle()
     val transcript by TranscriptStateHolder.state.collectAsStateWithLifecycle()
+    val activityState by RecordingActivityStateHolder.state.collectAsStateWithLifecycle()
     val hasBluetoothMic = remember { hasBluetoothInputDevice(context) }
     val rail by TagRailStateHolder.state.collectAsStateWithLifecycle()
     // Bead asn-45m: read-only here -- RecordingService is the only thing
@@ -196,7 +204,7 @@ fun RecordingScreen(
     LaunchedEffect(summary.updatedAtMs) {
         if (summary.bullets.isNotEmpty()) thinkingUntilMs = System.currentTimeMillis() + THINKING_DISPLAY_MS
     }
-    val baseDuckState = remember(transcript) { crudeRecordingActivity(transcript).toDuckState() }
+    val baseDuckState = remember(activityState) { activityState.toDuckState() }
     val duckState = if (nowMs < thinkingUntilMs) DuckState.THINKING else baseDuckState
 
     // Bead vn-edu.46's keyless guard, preserved: no key means NO word-cloud
@@ -212,7 +220,7 @@ fun RecordingScreen(
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(modifier = Modifier.fillMaxSize()) {
                 Spacer(modifier = Modifier.height(20.dp))
-                MinimalTopChrome(mode = recordingState.mode, modifier = Modifier.padding(horizontal = 24.dp))
+                MinimalTopChrome(mode = recordingState.mode, activityState = activityState, modifier = Modifier.padding(horizontal = 24.dp))
                 Spacer(modifier = Modifier.height(4.dp))
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     BigTimer(elapsedMs = recordingState.elapsedMs)
@@ -277,7 +285,21 @@ fun RecordingScreen(
                             // DuckStage places this slot itself. The debug view below
                             // renders the identical StopBar as a normal, non-overlapping
                             // bottom row instead (there's no duck to float over there).
-                            controls = { StopBar(onClick = onStopRecording, floating = true) },
+                            // Bead asn-r60/asn-3sm: pause presentation lives entirely
+                            // here now -- no separate banner (v2 dropped it outright;
+                            // the duck falling asleep + Z-trail + this button + the
+                            // frozen timer above is the whole story) and no non-
+                            // floating equivalent in the debug view (there is no other
+                            // pause UI anywhere on this screen by design).
+                            controls = {
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    PauseResumeChip(
+                                        isUserPaused = activityState == RecordingActivityState.USER_PAUSED,
+                                        onClick = { onSetPaused(activityState != RecordingActivityState.USER_PAUSED) },
+                                    )
+                                    StopBar(onClick = onStopRecording, floating = true)
+                                }
+                            },
                         )
                     }
                 }
@@ -335,19 +357,29 @@ private sealed interface TagPickerRequest {
 }
 
 /**
- * Layout A's minimal top chrome (design board section 2): a small "● REC"
- * indicator plus the current mode, replacing the pre-asn-3sm [ChipsRow] /
- * [LoudnessMeterBar] / [ModeSwitcher] row up here -- those move into the
- * double-tap debug view (see [RecordingScreen]) since the home state's
- * whole point is "duck + thought cloud, nothing else."
+ * Layout A's minimal top chrome (design board section 2): a small
+ * "● REC"/"⏸ auto"/"⏸ paused" indicator plus the current mode, replacing
+ * the pre-asn-3sm [ChipsRow] / [LoudnessMeterBar] / [ModeSwitcher] row up
+ * here -- those move into the double-tap debug view (see [RecordingScreen])
+ * since the home state's whole point is "duck + thought cloud, nothing
+ * else." [activityState] (bead asn-r60) drives which of the three the
+ * left-hand indicator shows -- team-lead's v2 pause redesign supersedes
+ * asn-r60's own `PauseBanner`/`BottomActionsBar` presentation entirely (see
+ * [PauseResumeChip]): no separate banner anywhere on this screen, just this
+ * label swap plus the floating pause/resume pill next to STOP.
  */
 @Composable
-private fun MinimalTopChrome(mode: RecordingMode, modifier: Modifier = Modifier) {
+private fun MinimalTopChrome(mode: RecordingMode, activityState: RecordingActivityState, modifier: Modifier = Modifier) {
     Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        val (label, color) = when (activityState) {
+            RecordingActivityState.AUTO_PAUSED -> "⏸ auto" to MaterialTheme.colorScheme.onSurfaceVariant
+            RecordingActivityState.USER_PAUSED -> "⏸ paused" to MaterialTheme.colorScheme.error
+            RecordingActivityState.SPEAKING, RecordingActivityState.QUIET -> "● REC" to MaterialTheme.colorScheme.error
+        }
         Text(
-            text = "● REC",
+            text = label,
             style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.error,
+            color = color,
             fontWeight = FontWeight.Bold,
         )
         Text(
@@ -1053,6 +1085,44 @@ private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit, floating
     }
 }
 
+/**
+ * Bead asn-r60's state machine, asn-3sm's presentation (team-lead's v2 pause
+ * redesign supersedes asn-r60's own `PauseBanner`/`BottomActionsBar` UI
+ * outright -- see [RecordingScreen]'s `controls` slot): a small floating
+ * pill next to the floating STOP pill, same visual language
+ * ([FLOATING_BUTTON_ELEVATION] shadow, fully rounded, >= 48dp touch target).
+ * [isUserPaused] is [RecordingActivityState.USER_PAUSED] specifically, not
+ * "any paused state" -- tapping while [RecordingActivityState.AUTO_PAUSED]
+ * escalates to a hard pause (see [RecordingScreen]'s `onSetPaused` call
+ * site), so the label still reads "PAUSE" there, not "RESUME". No gradient
+ * fill yet -- bead asn-o63 owns the auto-pause countdown-fill visual and
+ * hasn't landed; this renders a plain pill until that state is available to
+ * consume.
+ */
+@Composable
+private fun PauseResumeChip(isUserPaused: Boolean, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier
+            .heightIn(min = FLOATING_BUTTON_MIN_HEIGHT)
+            .shadow(FLOATING_BUTTON_ELEVATION, RoundedCornerShape(999.dp))
+            .testTag(PAUSE_RESUME_BUTTON_TEST_TAG),
+        shape = RoundedCornerShape(999.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+    ) {
+        Text(
+            text = if (isUserPaused) "▶ RESUME" else "⏸ PAUSE",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+/** Test-only anchor for [PauseResumeChip] (bead asn-r60's state, asn-3sm's presentation). */
+const val PAUSE_RESUME_BUTTON_TEST_TAG = "recording_pause_resume_button"
+
 private val FLOATING_BUTTON_MIN_HEIGHT = 48.dp
 private val FLOATING_BUTTON_ELEVATION = 10.dp
 
@@ -1114,8 +1184,9 @@ private fun syntheticRailChips(): List<TagRailChip> = listOf(
  * rendered standalone at phone-bottom proportions (bead vn-edu.32) so the
  * inset-rounded-button treatment (margins, corner radius, clearance from the
  * gesture-nav inset) can be inspected without needing the full recording
- * state or a device. The duck view's own STOP treatment (floating, over the
- * duck) has its own preview -- see `com.montauk.voicecapture.duck.DuckStagePreview`.
+ * state or a device. The duck view's own STOP + Pause/Resume treatment
+ * (floating, over the duck) has its own preview -- see
+ * `com.montauk.voicecapture.duck.DuckStagePreview`.
  */
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 280)
 @Composable

@@ -36,6 +36,9 @@ class SessionStore(private val baseDir: File) {
         const val AUDIO_OGG_FILENAME = "audio.ogg"
         const val META_FILENAME = "meta.json"
         const val TRANSCRIPT_FILENAME = "live-transcript.jsonl"
+        // Bead asn-evl: the live rolling bullet summary, rewritten whole
+        // each round by com.montauk.voicecapture.summary.SummaryMarkdownWriter.
+        const val SUMMARY_FILENAME = "summary.md"
         private const val UPLOAD_STATE_FILENAME = ".upload-state"
 
         private val ISO_FORMAT = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
@@ -63,6 +66,7 @@ class SessionStore(private val baseDir: File) {
     fun oggFile(dir: File): File = File(dir, AUDIO_OGG_FILENAME)
     fun metaFile(dir: File): File = File(dir, META_FILENAME)
     fun transcriptFile(dir: File): File = File(dir, TRANSCRIPT_FILENAME)
+    fun summaryFile(dir: File): File = File(dir, SUMMARY_FILENAME)
     private fun uploadStateFile(dir: File): File = File(dir, UPLOAD_STATE_FILENAME)
 
     /** Creates a fresh session directory and returns its id/handle. Does not touch audio files. */
@@ -86,6 +90,8 @@ class SessionStore(private val baseDir: File) {
         appVersion: String,
         modes: List<SessionModeEntry> = listOf(SessionModeEntry(0L, RecordingMode.DEFAULT.wireValue)),
         title: String? = null,
+        /** Bead asn-r60: actual persisted-audio duration, trimmed of every hard/soft-paused span -- see [SessionMeta]'s KDoc. Null for a session with no pause activity to report (or recorded before this bead). */
+        recordedMs: Long? = null,
     ) {
         val meta = SessionMeta(
             sessionId = handle.sessionId,
@@ -96,6 +102,7 @@ class SessionStore(private val baseDir: File) {
             stt = null,
             modes = modes,
             title = title,
+            recordedMs = recordedMs,
             schemaVersion = 1,
         )
         metaFile(handle.dir).writeText(json.encodeToString(meta))

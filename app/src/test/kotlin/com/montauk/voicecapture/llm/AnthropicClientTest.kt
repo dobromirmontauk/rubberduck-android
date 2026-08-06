@@ -6,6 +6,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -110,5 +111,84 @@ class AnthropicClientTest {
         server.shutdown()
 
         assertNull(unreachable.complete("model", 10, "sys", "user"))
+    }
+
+    // --- Bead asn-evl: completeWithCache / PromptBlock ---
+
+    @Test
+    fun `completeWithCache extracts the response's content text`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(messageResponseBody("hello from cache")))
+
+        val result = client().completeWithCache(
+            model = "claude-haiku-4-5-20251001",
+            maxTokens = 50,
+            systemBlocks = listOf(PromptBlock("sys")),
+            userBlocks = listOf(PromptBlock("user")),
+        )
+
+        assertEquals("hello from cache", result)
+    }
+
+    @Test
+    fun `completeWithCache renders system and content as block arrays with cache_control only where requested`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(messageResponseBody("ok")))
+
+        client().completeWithCache(
+            model = "claude-haiku-4-5-20251001",
+            maxTokens = 50,
+            systemBlocks = listOf(PromptBlock("be terse", cacheControl = true)),
+            userBlocks = listOf(PromptBlock("cached block", cacheControl = true), PromptBlock("uncached block")),
+        )
+
+        val request = server.takeRequest(5, TimeUnit.SECONDS)!!
+        val body = request.body.readUtf8()
+        assertTrue(body.contains("\"system\":["))
+        assertTrue(body.contains("be terse"))
+        assertTrue(body.contains("cached block"))
+        assertTrue(body.contains("uncached block"))
+        // Exactly two breakpoints: the system block and the first user block, not the second.
+        assertEquals(2, Regex("cache_control").findAll(body).count())
+    }
+
+    @Test
+    fun `completeWithCache omits cache_control entirely when no block requests it`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(messageResponseBody("ok")))
+
+        client().completeWithCache(
+            model = "model",
+            maxTokens = 10,
+            systemBlocks = listOf(PromptBlock("sys")),
+            userBlocks = listOf(PromptBlock("user")),
+        )
+
+        val request = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertFalse(request.body.readUtf8().contains("cache_control"))
+    }
+
+    @Test
+    fun `completeWithCache with a blank api key never calls the network`() = runBlocking {
+        val result = client(apiKey = "").completeWithCache(
+            model = "model",
+            maxTokens = 10,
+            systemBlocks = listOf(PromptBlock("sys")),
+            userBlocks = listOf(PromptBlock("user")),
+        )
+
+        assertNull(result)
+        assertNull(server.takeRequest(200, TimeUnit.MILLISECONDS))
+    }
+
+    @Test
+    fun `completeWithCache on a non-200 response yields null`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(500).setBody("internal error"))
+
+        val result = client().completeWithCache(
+            model = "model",
+            maxTokens = 10,
+            systemBlocks = listOf(PromptBlock("sys")),
+            userBlocks = listOf(PromptBlock("user")),
+        )
+
+        assertNull(result)
     }
 }

@@ -79,6 +79,11 @@ class GitHubBundleUploader(
             val metaFile = File(sessionDir, "meta.json")
             require(metaFile.exists()) { "meta.json missing from $sessionDir" }
             val transcriptFile = File(sessionDir, "live-transcript.jsonl").takeIf { it.exists() && it.length() > 0 }
+            // Bead asn-evl: summary.md only exists at all when the session
+            // ran with an Anthropic key configured AND the transcript grew
+            // enough for at least one summary round -- optional exactly like
+            // transcriptFile above, never required for the bundle to upload.
+            val summaryFile = File(sessionDir, "summary.md").takeIf { it.exists() && it.length() > 0 }
 
             val audioExt = audioFile.extension
             val useLfs = gitattributesTracksExtension(audioExt)
@@ -101,6 +106,7 @@ class GitHubBundleUploader(
                 audioBytes = audioBlobBytes,
                 metaBytes = metaFile.readBytes(),
                 transcriptBytes = transcriptFile?.readBytes(),
+                summaryBytes = summaryFile?.readBytes(),
             )
         }.fold(
             onSuccess = { Result.success(Unit) },
@@ -191,7 +197,14 @@ class GitHubBundleUploader(
         }
     }
 
-    private fun commitBundle(sessionId: String, audioPath: String, audioBytes: ByteArray, metaBytes: ByteArray, transcriptBytes: ByteArray?) {
+    private fun commitBundle(
+        sessionId: String,
+        audioPath: String,
+        audioBytes: ByteArray,
+        metaBytes: ByteArray,
+        transcriptBytes: ByteArray?,
+        summaryBytes: ByteArray? = null,
+    ) {
         var attempt = 0
         while (true) {
             attempt++
@@ -203,6 +216,10 @@ class GitHubBundleUploader(
                 TreeEntry(path = "inbox/$sessionId/meta.json", sha = createBlob(metaBytes)),
             )
             transcriptBytes?.let { entries += TreeEntry(path = "inbox/$sessionId/live-transcript.jsonl", sha = createBlob(it)) }
+            // Bead asn-evl: lands alongside live-transcript.jsonl so the
+            // vault's organize CI can reuse the live summary instead of
+            // re-deriving one from the raw transcript.
+            summaryBytes?.let { entries += TreeEntry(path = "inbox/$sessionId/summary.md", sha = createBlob(it)) }
 
             val newTreeSha = createTree(baseTreeSha, entries)
             val newCommitSha = createCommit("capture: session $sessionId lands in inbox", newTreeSha, listOf(headSha))
