@@ -5,13 +5,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Visibility
@@ -59,6 +62,15 @@ private sealed class LoginUiState {
     data object TokenEntry : LoginUiState()
     data object TokenValidating : LoginUiState()
     data class TokenError(val message: String) : LoginUiState()
+
+    /**
+     * Bead vn-edu.30: the token passed [GitHubAccountClient.validateForVault]
+     * (it's valid, and it can reach the vault repo) but its `/user` response
+     * carried an `X-OAuth-Scopes` header, meaning it's a classic PAT or OAuth
+     * token rather than the documented fine-grained-PAT path -- a gentle,
+     * skippable warning, not a hard block, since the token does work.
+     */
+    data class TokenOverScoped(val token: String, val identity: GitHubIdentity) : LoginUiState()
 }
 
 /**
@@ -73,13 +85,25 @@ private sealed class LoginUiState {
  * has been drained, see [completeSignIn]); [AppNavHost] decides whether that
  * lands on the setup wizard (first-ever connect) or straight back to
  * Sessions (repeat connect), via [AppEntryGating.postLoginDestination].
+ *
+ * [accountClient] defaults to the real [GitHubAccountClient]; overridable
+ * purely for test visibility -- same convention as [IntelligenceStep]'s
+ * `assemblyValidator`/`anthropicValidator` -- so `LoginScreenTest` can point
+ * it at a [okhttp3.mockwebserver.MockWebServer] instead of the real
+ * `api.github.com`.
  */
 @Composable
-fun LoginScreen(onSignedIn: () -> Unit) {
+fun LoginScreen(onSignedIn: () -> Unit, accountClient: GitHubAccountClient = GitHubAccountClient()) {
     val context = LocalContext.current
     val app = context.applicationContext as VoiceCaptureApp
     val scope = rememberCoroutineScope()
     var uiState by remember { mutableStateOf<LoginUiState>(LoginUiState.Initial) }
+    // Bead vn-edu.30: the repo a submitted PAT is validated against -- the
+    // wizard's vault picker can have already pointed this at a non-default
+    // repo on a repeat connect; falls back to the BuildConfig default on a
+    // first-ever connect, same precedence as SettingsScreen/VoiceCaptureApp.
+    val vaultOwner = app.secretsStore.selectedVaultOwner ?: BuildConfig.VAULT_OWNER
+    val vaultRepo = app.secretsStore.selectedVaultRepo ?: BuildConfig.VAULT_REPO
 
     fun completeSignIn(token: String, identity: GitHubIdentity?) {
         app.secretsStore.userGithubToken = token
@@ -102,7 +126,7 @@ fun LoginScreen(onSignedIn: () -> Unit) {
                     is DeviceFlowPhase.AwaitingUser ->
                         uiState = LoginUiState.DeviceCode(phase.userCode, phase.verificationUri)
                     is DeviceFlowPhase.Success -> {
-                        val identity = GitHubAccountClient().validateToken(phase.accessToken).getOrNull()
+                        val identity = accountClient.validateToken(phase.accessToken).getOrNull()
                         completeSignIn(phase.accessToken, identity)
                     }
                     DeviceFlowPhase.Idle -> Unit
@@ -113,12 +137,27 @@ fun LoginScreen(onSignedIn: () -> Unit) {
         }
     }
 
+    /**
+     * Bead vn-edu.30: validates against the configured vault repo, not just
+     * `/user` -- a token that can't reach [vaultOwner]/[vaultRepo] is
+     * rejected here (never persisted, never calls [completeSignIn]) instead
+     * of silently "signing in" and only failing on the first upload attempt.
+     * A token that passes but is over-scoped (see [GitHubIdentity.isOverScoped])
+     * doesn't persist immediately either -- it routes to
+     * [LoginUiState.TokenOverScoped] for a one-tap "use anyway" confirmation.
+     */
     fun submitToken(token: String) {
         uiState = LoginUiState.TokenValidating
         scope.launch {
-            GitHubAccountClient().validateToken(token).fold(
-                onSuccess = { identity -> completeSignIn(token, identity) },
-                onFailure = { e -> uiState = LoginUiState.TokenError(tokenErrorMessage(e)) },
+            accountClient.validateForVault(token, vaultOwner, vaultRepo).fold(
+                onSuccess = { identity ->
+                    if (identity.isOverScoped) {
+                        uiState = LoginUiState.TokenOverScoped(token, identity)
+                    } else {
+                        completeSignIn(token, identity)
+                    }
+                },
+                onFailure = { e -> uiState = LoginUiState.TokenError(tokenErrorMessage(e, vaultOwner, vaultRepo)) },
             )
         }
     }
@@ -138,33 +177,50 @@ fun LoginScreen(onSignedIn: () -> Unit) {
                     color = MaterialTheme.colorScheme.onBackground,
                 )
                 Spacer(modifier = Modifier.height(40.dp))
-                when (val state = uiState) {
-                    LoginUiState.Initial -> InitialButtons(
-                        githubOAuthConfigured = app.isGithubOAuthConfigured(),
-                        onGithubTapped = ::startDeviceFlow,
-                        onTokenTapped = { uiState = LoginUiState.TokenEntry },
-                    )
-                    is LoginUiState.DeviceCode -> DeviceCodeBlock(
-                        userCode = state.userCode,
-                        verificationUri = state.verificationUri,
-                        onCancel = { uiState = LoginUiState.Initial },
-                    )
-                    is LoginUiState.DeviceError -> RetryableError(
-                        message = state.message,
-                        onRetry = ::startDeviceFlow,
-                        onCancel = { uiState = LoginUiState.Initial },
-                    )
-                    LoginUiState.TokenEntry -> TokenEntryBlock(
-                        errorMessage = null,
-                        onSubmit = ::submitToken,
-                        onCancel = { uiState = LoginUiState.Initial },
-                    )
-                    LoginUiState.TokenValidating -> CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    is LoginUiState.TokenError -> TokenEntryBlock(
-                        errorMessage = state.message,
-                        onSubmit = ::submitToken,
-                        onCancel = { uiState = LoginUiState.Initial },
-                    )
+                // Bead vn-edu.30: bounded (weight(1f), not intrinsic) rather than
+                // just "however tall it wants to be" -- TokenEntryBlock's minting
+                // guidance made this slot tall enough to overflow a small/old
+                // device's screen, which (with no bound) silently collapsed the
+                // Continue/Cancel row to zero height instead of just scrolling.
+                // Every other state here is short enough that this box's
+                // Alignment.Center keeps it looking centered exactly as before.
+                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    when (val state = uiState) {
+                        LoginUiState.Initial -> InitialButtons(
+                            githubOAuthConfigured = app.isGithubOAuthConfigured(),
+                            onGithubTapped = ::startDeviceFlow,
+                            onTokenTapped = { uiState = LoginUiState.TokenEntry },
+                        )
+                        is LoginUiState.DeviceCode -> DeviceCodeBlock(
+                            userCode = state.userCode,
+                            verificationUri = state.verificationUri,
+                            onCancel = { uiState = LoginUiState.Initial },
+                        )
+                        is LoginUiState.DeviceError -> RetryableError(
+                            message = state.message,
+                            onRetry = ::startDeviceFlow,
+                            onCancel = { uiState = LoginUiState.Initial },
+                        )
+                        LoginUiState.TokenEntry -> TokenEntryBlock(
+                            vaultOwner = vaultOwner,
+                            vaultRepo = vaultRepo,
+                            errorMessage = null,
+                            onSubmit = ::submitToken,
+                            onCancel = { uiState = LoginUiState.Initial },
+                        )
+                        LoginUiState.TokenValidating -> CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                        is LoginUiState.TokenError -> TokenEntryBlock(
+                            vaultOwner = vaultOwner,
+                            vaultRepo = vaultRepo,
+                            errorMessage = state.message,
+                            onSubmit = ::submitToken,
+                            onCancel = { uiState = LoginUiState.Initial },
+                        )
+                        is LoginUiState.TokenOverScoped -> OverScopedWarningBlock(
+                            onUseAnyway = { completeSignIn(state.token, state.identity) },
+                            onEnterDifferentToken = { uiState = LoginUiState.TokenEntry },
+                        )
+                    }
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 Text(
@@ -266,11 +322,51 @@ private fun RetryableError(message: String, onRetry: () -> Unit, onCancel: () ->
     }
 }
 
+/**
+ * Bead vn-edu.30: names the feature ("Vault uploads"), not the vendor
+ * mechanics, per the app-wide copy rule (`PRD.md`'s "the app never narrates
+ * its own behavior") -- but a token *is* something the user has to go mint
+ * themselves outside the app, so the exact minting steps are spelled out
+ * here rather than left to a README only they might not read. Steers toward
+ * a fine-grained PAT scoped to just [vaultOwner]/[vaultRepo]'s Contents
+ * permission -- the only token shape [GitHubAccountClient.validateForVault]
+ * can't flag as over-scoped (see [LoginUiState.TokenOverScoped]).
+ */
 @Composable
-private fun TokenEntryBlock(errorMessage: String?, onSubmit: (String) -> Unit, onCancel: () -> Unit) {
+private fun TokenEntryBlock(vaultOwner: String, vaultRepo: String, errorMessage: String?, onSubmit: (String) -> Unit, onCancel: () -> Unit) {
     var token by remember { mutableStateOf("") }
     var revealed by remember { mutableStateOf(false) }
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+    // Bead vn-edu.30: the minting guidance above the field can be taller than
+    // the bounded slot this renders in on a small/old device -- scrolls
+    // rather than overflowing (see the weight(1f) Box in LoginScreen).
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxWidth().fillMaxHeight().verticalScroll(rememberScrollState()),
+    ) {
+        Text(
+            text = "Vault uploads need a GitHub token scoped to just this vault.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "On GitHub: Settings -> Developer settings -> Fine-grained tokens -> " +
+                "Generate new token. Resource owner: $vaultOwner. Repository access: Only " +
+                "select repositories -> $vaultRepo. Permissions -> Repository permissions -> " +
+                "Contents: Read and write.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Avoid a classic token -- it reaches every repo you own, not just this one.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
         OutlinedTextField(
             value = token,
             onValueChange = { token = it },
@@ -304,7 +400,35 @@ private fun TokenEntryBlock(errorMessage: String?, onSubmit: (String) -> Unit, o
     }
 }
 
-private fun tokenErrorMessage(e: Throwable): String = when (e) {
+/**
+ * Bead vn-edu.30: shown when a submitted token works (passed [GitHubAccountClient.validateForVault])
+ * but its `/user` response carried an `X-OAuth-Scopes` header -- a classic
+ * PAT or OAuth token, broader than the fine-grained PAT [TokenEntryBlock]
+ * steers toward. Deliberately not a hard block: the token does work, so
+ * "use anyway" completes sign-in with it exactly as if this screen weren't
+ * here.
+ */
+@Composable
+private fun OverScopedWarningBlock(onUseAnyway: () -> Unit, onEnterDifferentToken: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+        StatusChip(label = "BROADER ACCESS THAN NEEDED", color = MaterialTheme.colorScheme.error)
+        Spacer(modifier = Modifier.height(20.dp))
+        Text(
+            text = "This token can reach more than just this vault. Vault uploads only need " +
+                "a fine-grained token scoped to this one repo -- consider minting one of those instead.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Button(onClick = onUseAnyway, modifier = Modifier.fillMaxWidth()) { Text("Use anyway") }
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedButton(onClick = onEnterDifferentToken, modifier = Modifier.fillMaxWidth()) { Text("Enter a different token") }
+    }
+}
+
+private fun tokenErrorMessage(e: Throwable, vaultOwner: String, vaultRepo: String): String = when (e) {
     is GitHubAccountError.InvalidToken -> "That token didn't work"
+    is GitHubAccountError.RepoNotAccessible -> "That token can't reach $vaultOwner/$vaultRepo"
     else -> "Couldn't reach GitHub"
 }

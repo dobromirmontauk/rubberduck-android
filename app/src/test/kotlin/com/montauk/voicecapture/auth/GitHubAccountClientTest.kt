@@ -90,4 +90,101 @@ class GitHubAccountClientTest {
         assertTrue(result.isSuccess)
         assertFalse(result.getOrThrow())
     }
+
+    // Bead vn-edu.30 -- over-scope detection: GitHub sends X-OAuth-Scopes on
+    // classic PAT / OAuth App responses and omits it entirely for
+    // fine-grained PATs, so its presence is the only signal available here.
+
+    @Test
+    fun `validateToken flags isOverScoped when the response carries X-OAuth-Scopes (classic token)`() = runTest {
+        server.enqueue(
+            MockResponse().setResponseCode(200)
+                .addHeader("X-OAuth-Scopes", "repo")
+                .setBody("""{"login":"dobromirmontauk","avatar_url":null}"""),
+        )
+
+        val result = client().validateToken("classic-token")
+
+        assertTrue(result.isSuccess)
+        assertTrue(result.getOrThrow().isOverScoped)
+    }
+
+    @Test
+    fun `validateToken leaves isOverScoped false when no X-OAuth-Scopes header is present (fine-grained PAT)`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"login":"dobromirmontauk","avatar_url":null}"""))
+
+        val result = client().validateToken("fine-grained-token")
+
+        assertTrue(result.isSuccess)
+        assertFalse(result.getOrThrow().isOverScoped)
+    }
+
+    @Test
+    fun `hasRepoAccess is true on 200`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"name":"voice-vault"}"""))
+
+        val result = client().hasRepoAccess("fake-token", "dobromirmontauk", "voice-vault")
+
+        assertTrue(result.isSuccess)
+        assertTrue(result.getOrThrow())
+    }
+
+    @Test
+    fun `hasRepoAccess is false on 404 -- a scoped-elsewhere token can't see this repo`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(404))
+
+        val result = client().hasRepoAccess("fake-token", "dobromirmontauk", "voice-vault")
+
+        assertTrue(result.isSuccess)
+        assertFalse(result.getOrThrow())
+    }
+
+    @Test
+    fun `hasRepoAccess surfaces 401 as InvalidToken`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(401))
+
+        val result = client().hasRepoAccess("bad-token", "dobromirmontauk", "voice-vault")
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is GitHubAccountError.InvalidToken)
+    }
+
+    // Bead vn-edu.30 -- validateForVault: the combined gate the login screen's
+    // PAT entry runs before ever persisting a token.
+
+    @Test
+    fun `validateForVault succeeds when the token is valid and can reach the vault repo`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"login":"dobromirmontauk","avatar_url":null}"""))
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"name":"voice-vault"}"""))
+
+        val result = client().validateForVault("fake-token", "dobromirmontauk", "voice-vault")
+
+        assertTrue(result.isSuccess)
+        assertEquals("dobromirmontauk", result.getOrThrow().login)
+    }
+
+    @Test
+    fun `validateForVault fails with RepoNotAccessible when the token is valid but can't reach the vault repo`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"login":"dobromirmontauk","avatar_url":null}"""))
+        server.enqueue(MockResponse().setResponseCode(404))
+
+        val result = client().validateForVault("fake-token", "dobromirmontauk", "voice-vault")
+
+        assertTrue(result.isFailure)
+        val error = result.exceptionOrNull()
+        assertTrue(error is GitHubAccountError.RepoNotAccessible)
+        assertEquals("dobromirmontauk", (error as GitHubAccountError.RepoNotAccessible).owner)
+        assertEquals("voice-vault", error.repo)
+    }
+
+    @Test
+    fun `validateForVault fails with InvalidToken and never checks repo access when the token itself is bad`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(401))
+
+        val result = client().validateForVault("bad-token", "dobromirmontauk", "voice-vault")
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is GitHubAccountError.InvalidToken)
+        assertEquals(1, server.requestCount)
+    }
 }

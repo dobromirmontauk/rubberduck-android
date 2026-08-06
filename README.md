@@ -94,7 +94,7 @@ add these keys to `local.properties` (gitignored, never committed):
 sdk.dir=/path/to/android-sdk
 assemblyai.apiKey=<your AssemblyAI API key>
 anthropic.apiKey=<your Anthropic API key>
-github.token=<a token with repo access to dobromirmontauk/voice-vault>
+github.token=<a fine-grained PAT scoped to dobromirmontauk/voice-vault>
 # optional overrides, default to the values below:
 vault.owner=dobromirmontauk
 vault.repo=voice-vault
@@ -104,12 +104,33 @@ Each key also has an environment-variable fallback for one-off builds
 without writing a secret to disk (`local.properties` wins if both are set):
 
 ```
-ASSEMBLYAI_API_KEY=... ANTHROPIC_API_KEY=... GITHUB_TOKEN=$(gh auth token) ./gradlew assembleDebug
+ASSEMBLYAI_API_KEY=... ANTHROPIC_API_KEY=... GITHUB_TOKEN=<your fine-grained PAT> ./gradlew assembleDebug
 ```
 
-`github.token` needs `repo` scope on the private `dobromirmontauk/voice-vault`
-repo (a `gh auth token` from an account with access works for local testing;
-use a fine-grained PAT scoped to just that repo for anything longer-lived).
+**`github.token` (bead vn-edu.30): a fine-grained PAT scoped to just the
+vault repo is the only recommended token shape**, for this file and for the
+in-app "Use an access token" flow described below. A classic PAT or a broad
+OAuth token (e.g. `gh auth token`, which carries `repo` scope across every
+repo the account can see) still works -- the uploader only ever needs Git
+Data + LFS calls against one repo -- but it reaches far more than this app
+needs, and the app's login screen will flag one of those as over-scoped on
+sign-in. To mint the recommended token:
+
+1. github.com -> Settings -> Developer settings -> Personal access tokens ->
+   Fine-grained tokens -> Generate new token.
+2. Resource owner: `dobromirmontauk`.
+3. Repository access: Only select repositories -> `voice-vault`.
+4. Permissions -> Repository permissions -> Contents: **Read and write**.
+   Nothing else is needed.
+
+**Precedence (bead vn-edu.48):** `local.properties`/`BuildConfig.GITHUB_TOKEN`
+is a dev-build convenience only -- it's what a fresh `./gradlew assembleDebug`
+falls back to when nothing else is configured. Any token entered in the app
+itself (the login screen's device-flow or "Use an access token" path,
+persisted via `AppSecretsStore.userGithubToken`) always wins over it at
+runtime; see `AppSecretsStore.effectiveGithubToken()`. The same precedence
+rule applies to `assemblyai.apiKey`/`anthropic.apiKey` and their in-app
+Settings equivalents.
 
 ## Architecture
 

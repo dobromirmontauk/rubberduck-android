@@ -169,6 +169,7 @@ tasks.withType<Test>().configureEach {
         exclude("**/RecordingScreenTagsSlotTest.class")
         exclude("**/ApiKeyManagementRowTest.class")
         exclude("**/IntelligenceStepTest.class")
+        exclude("**/LoginScreenTest.class")
         exclude("**/screenshot/**")
     }
     if (!roborazziTaskRequested) {

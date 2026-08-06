@@ -7,14 +7,28 @@ import kotlinx.serialization.builtins.ListSerializer
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
-/** GitHub identity as shown by the login and wizard account step. */
-data class GitHubIdentity(val login: String, val avatarUrl: String?)
+/**
+ * GitHub identity as shown by the login and wizard account step.
+ * [isOverScoped] is true when the `/user` response carried an
+ * `X-OAuth-Scopes` header -- GitHub sends that header for classic PATs and
+ * OAuth App tokens (whatever scopes they were granted), and omits it
+ * entirely for fine-grained PATs and GitHub App tokens. Bead vn-edu.30: the
+ * app's documented, first-class token is a fine-grained PAT scoped to just
+ * the vault repo's Contents permission, so this flag is the one signal
+ * available to gently flag "this token can reach more than it needs to"
+ * without GitHub exposing the fine-grained permission set itself over the
+ * API.
+ */
+data class GitHubIdentity(val login: String, val avatarUrl: String?, val isOverScoped: Boolean = false)
 
 /** One row in the setup wizard's vault picker (step 2). */
 data class GitHubRepoOption(val fullName: String, val owner: String, val name: String)
 
 sealed class GitHubAccountError : Exception() {
     data object InvalidToken : GitHubAccountError()
+
+    /** The token is valid (passed `/user`) but can't reach the specific vault repo it will need to upload to. */
+    data class RepoNotAccessible(val owner: String, val repo: String) : GitHubAccountError()
     data class NetworkUnavailable(override val cause: Throwable?) : GitHubAccountError()
     data class Other(override val message: String) : GitHubAccountError()
 }
@@ -46,7 +60,11 @@ class GitHubAccountClient(
                             GitHubUserResponse.serializer(),
                             response.body?.string().orEmpty(),
                         )
-                        GitHubIdentity(login = user.login, avatarUrl = user.avatarUrl)
+                        GitHubIdentity(
+                            login = user.login,
+                            avatarUrl = user.avatarUrl,
+                            isOverScoped = response.header("X-OAuth-Scopes") != null,
+                        )
                     }
                     401, 403 -> throw GitHubAccountError.InvalidToken
                     else -> throw GitHubAccountError.Other("unexpected status ${response.code} validating token")
@@ -54,6 +72,46 @@ class GitHubAccountClient(
             }
         }.recoverCatching { e -> if (e is GitHubAccountError) throw e else throw GitHubAccountError.NetworkUnavailable(e) }
     }
+
+    /**
+     * Confirms [token] can reach [owner]/[repo] specifically -- the repo an
+     * upload will actually target -- via `GET /repos/{owner}/{repo}`.
+     * Distinct from [validateToken]: a token can be valid (pass `/user`)
+     * while still lacking access to *this* repo, e.g. a fine-grained PAT
+     * scoped to some other repository. GitHub 404s a private repo the token
+     * can't see rather than 403ing it, so 404 here means "not accessible,"
+     * not "doesn't exist."
+     */
+    suspend fun hasRepoAccess(token: String, owner: String, repo: String): Result<Boolean> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val request = authedRequest(token, "/repos/$owner/$repo").build()
+                httpClient.newCall(request).execute().use { response ->
+                    when (response.code) {
+                        200 -> true
+                        404 -> false
+                        401, 403 -> throw GitHubAccountError.InvalidToken
+                        else -> throw GitHubAccountError.Other("unexpected status ${response.code} checking $owner/$repo access")
+                    }
+                }
+            }.recoverCatching { e -> if (e is GitHubAccountError) throw e else throw GitHubAccountError.NetworkUnavailable(e) }
+        }
+
+    /**
+     * Combined check backing the login screen's PAT entry (bead vn-edu.30):
+     * [validateToken] plus [hasRepoAccess] against the vault repo the app is
+     * actually configured to upload to. A token that's valid but can't reach
+     * [owner]/[repo] fails here with [GitHubAccountError.RepoNotAccessible]
+     * instead of being accepted and only failing later, on the first real
+     * upload attempt.
+     */
+    suspend fun validateForVault(token: String, owner: String, repo: String): Result<GitHubIdentity> =
+        runCatching {
+            val identity = validateToken(token).getOrThrow()
+            val hasAccess = hasRepoAccess(token, owner, repo).getOrThrow()
+            if (!hasAccess) throw GitHubAccountError.RepoNotAccessible(owner, repo)
+            identity
+        }
 
     /** Sorted by most-recently-updated, matching the wizard's vault-picker order. */
     suspend fun listRepos(token: String, perPage: Int = 50): Result<List<GitHubRepoOption>> =
