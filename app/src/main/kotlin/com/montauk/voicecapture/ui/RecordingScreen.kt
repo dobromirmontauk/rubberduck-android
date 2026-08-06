@@ -1,17 +1,11 @@
 package com.montauk.voicecapture.ui
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,7 +32,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -47,13 +40,11 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -71,6 +62,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.audio.AudioRouteType
 import com.montauk.voicecapture.audio.LoudnessVisualizer
+import com.montauk.voicecapture.duck.DuckStage
+import com.montauk.voicecapture.duck.TopicWordCloudTopics
+import com.montauk.voicecapture.duck.toDuckState
 import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
@@ -78,29 +72,46 @@ import com.montauk.voicecapture.service.TagsStateHolder
 import com.montauk.voicecapture.service.TranscriptLine
 import com.montauk.voicecapture.service.TranscriptStateHolder
 import com.montauk.voicecapture.service.TranscriptUiState
+import com.montauk.voicecapture.service.crudeRecordingActivity
 import com.montauk.voicecapture.stt.SttConnectionState
 import com.montauk.voicecapture.tags.DisplayedTag
-import com.montauk.voicecapture.tags.TagTier
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
  * The full-glance recording screen: huge timer, LIVE/OFFLINE + Bluetooth
- * chips, a mic-level bar, the mode switcher, the last couple of transcript
- * lines, MAJOR-topic tag chips, and a large inset STOP button anchored to the bottom
- * (bead vn-edu.32 -- a floating button with clear margins, not a full-bleed
- * slab flush with the screen edge, which read as sitting exactly where the
- * app's own bottom nav normally lives). No bottom nav here -- this screen is
- * meant to be readable at arm's length while walking.
+ * chips, a mic-level bar, the mode switcher, the animated duck (bead
+ * asn-3sm, DEFAULT view) with its topic word cloud, and a large inset STOP
+ * button anchored to the bottom (bead vn-edu.32 -- a floating button with
+ * clear margins, not a full-bleed slab flush with the screen edge, which
+ * read as sitting exactly where the app's own bottom nav normally lives).
+ * No bottom nav here -- this screen is meant to be readable at arm's length
+ * while walking.
+ *
+ * **Duck view vs. debug transcript view (bead asn-3sm).** The duck +
+ * word-cloud stage is the default; double-tapping it swaps in the
+ * old-style live transcript pane instead (all pre-asn-3sm transcript
+ * functionality, including its own keyless message, lives there
+ * unchanged) -- double-tapping again returns to the duck. [showDebugView]
+ * is plain composable-local state: it resets to the duck view every fresh
+ * visit to this screen, which is the expected default.
+ *
+ * The duck's LISTENING/SLEEPY state is derived via [crudeRecordingActivity]
+ * -- a crude stand-in (silence hint -> QUIET, else SPEAKING) for asn-r60's
+ * real `StateFlow<RecordingActivity>`, which hasn't landed yet; neither
+ * paused activity (and therefore GONE_BRB) is reachable until it does. The
+ * topic word cloud's GREEN/WHITE split comes from [TopicWordCloudTopics.fromDisplayedTags],
+ * today's adapter over [TagsStateHolder]'s [DisplayedTag] output.
  *
  * [onOpenSettings] (bead vn-edu.46 superseding decision, extended by
  * vn-edu.66) is invoked when either keyless message is tapped: the tags-slot
- * message deep-links to Settings' "Word cloud & titles" key row
- * ([ANTHROPIC_KEY_ROW_TEST_TAG]), the transcript-pane message to its "Live
- * transcription" key row ([ASSEMBLYAI_KEY_ROW_TEST_TAG]) -- both just
- * navigate to [SettingsScreen] itself (no in-screen scroll target exists yet)
- * rather than opening any dialog on this glance-mode screen.
+ * message (visible directly on the duck view) deep-links to Settings' "Word
+ * cloud & titles" key row ([ANTHROPIC_KEY_ROW_TEST_TAG]), the
+ * transcript-pane message (in the debug view) to its "Live transcription"
+ * key row ([ASSEMBLYAI_KEY_ROW_TEST_TAG]) -- both just navigate to
+ * [SettingsScreen] itself (no in-screen scroll target exists yet) rather
+ * than opening any dialog on this glance-mode screen.
  */
 @Composable
 fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> Unit = {}, onOpenSettings: () -> Unit = {}) {
@@ -112,6 +123,15 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
     val tags by TagsStateHolder.state.collectAsStateWithLifecycle()
     val anthropicKeyConfigured = app.isAnthropicKeyConfigured()
     val assemblyKeyConfigured = app.isAssemblyKeyConfigured()
+    var showDebugView by remember { mutableStateOf(false) }
+    val duckState = remember(transcript) { crudeRecordingActivity(transcript).toDuckState() }
+    // Bead vn-edu.46's keyless guard, preserved: no key means NO word-cloud
+    // data at all, even if TagsStateHolder is stale/non-empty (shouldn't
+    // happen with NoOpTagScorer, but the UI gate must be on the key, not on
+    // "is the list empty") -- matches the pre-asn-3sm TagChipsRow early return.
+    val topics = remember(tags, anthropicKeyConfigured) {
+        if (anthropicKeyConfigured) TopicWordCloudTopics.fromDisplayedTags(tags) else TopicWordCloudTopics.EMPTY
+    }
 
     VoiceCaptureTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -132,16 +152,42 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
                     Spacer(modifier = Modifier.height(16.dp))
                     ModeSwitcher(currentMode = recordingState.mode, onSelect = onSetMode)
                     Spacer(modifier = Modifier.height(16.dp))
-                    LiveTranscriptPane(
-                        transcript = transcript,
-                        assemblyKeyConfigured = assemblyKeyConfigured,
-                        onOpenSettings = onOpenSettings,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    TagChipsRow(tags = tags, anthropicKeyConfigured = anthropicKeyConfigured, onRegisterKeyTapped = onOpenSettings)
-                    // Extra air below the chips row (bead vn-edu.32) so the inset STOP
-                    // button reads as floating above content, not touching the chips.
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .testTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG)
+                            .pointerInput(Unit) {
+                                detectTapGestures(onDoubleTap = { showDebugView = !showDebugView })
+                            },
+                    ) {
+                        if (showDebugView) {
+                            LiveTranscriptPane(
+                                transcript = transcript,
+                                assemblyKeyConfigured = assemblyKeyConfigured,
+                                onOpenSettings = onOpenSettings,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        } else {
+                            DuckStage(duckState = duckState, topics = topics, modifier = Modifier.fillMaxSize())
+                        }
+                    }
+                    // Keyless word-cloud message stays on the default duck view (not
+                    // gated behind the double-tap toggle) -- mirrors the pre-asn-3sm
+                    // TagChipsRow keyless message 1:1 (bead vn-edu.46), just relocated.
+                    if (!showDebugView && !anthropicKeyConfigured) {
+                        Text(
+                            text = "(register your API key to see the word cloud)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(onClick = onOpenSettings)
+                                .testTag(REGISTER_KEY_MESSAGE_TEST_TAG),
+                        )
+                    }
+                    // Extra air below (bead vn-edu.32) so the inset STOP button reads
+                    // as floating above content, not touching whatever's above it.
                     Spacer(modifier = Modifier.height(24.dp))
                 }
                 StopBar(modifier = Modifier.weight(1f), onClick = onStopRecording)
@@ -149,6 +195,9 @@ fun RecordingScreen(onStopRecording: () -> Unit, onSetMode: (RecordingMode) -> U
         }
     }
 }
+
+/** Test-only anchor for the duck-view/debug-transcript-view double-tap toggle (bead asn-3sm). */
+const val DUCK_TRANSCRIPT_TOGGLE_TEST_TAG = "recording_duck_transcript_toggle"
 
 /**
  * Glance-safe Listen / Converse / Challenge segmented control. Listen is the
@@ -444,10 +493,13 @@ private fun LazyListLayoutInfo.isScrolledToNewest(): Boolean {
  * so [transcript] never gains a final line, partial, or even a silence hint
  * from a live STT session) and this slot instead shows the exact string
  * "(no transcription key)", dimmed and tappable via [onOpenSettings] --
- * mirrors the tags-slot keyless message ([TagChipsRow]) so the reader
- * understands *why* nothing is transcribing, distinct from "recording, key
- * present, just no speech yet" (which still renders the normal
- * "Listening…"/"(silence)" rows below via the unchanged keyed path).
+ * mirrors the duck view's keyless word-cloud message (bead asn-3sm; see
+ * [RecordingScreen]'s own [REGISTER_KEY_MESSAGE_TEST_TAG] usage) so the
+ * reader understands *why* nothing is transcribing, distinct from
+ * "recording, key present, just no speech yet" (which still renders the
+ * normal "Listening…"/"(silence)" rows below via the unchanged keyed path).
+ * Bead asn-3sm: this whole pane now lives in the double-tap debug view
+ * rather than being always-visible -- unchanged otherwise.
  */
 @Composable
 private fun LiveTranscriptPane(
@@ -573,127 +625,8 @@ internal fun partialAnnotatedString(
     }
 }
 
-/**
- * Up to 3 confidence-ranked MAJOR-topic chips (bead vn-edu.38, supersedes
- * the v1 frequency-chip cloud) -- [tags] is [TagsStateHolder]'s current
- * displayed set, already ranked and size-classed by
- * [com.montauk.voicecapture.tags.TagTracker].
- *
- * Each of the 3 rank slots is its own [AnimatedContent] keyed on *what
- * currently occupies that slot* rather than on tag identity: a rank change
- * (a stronger candidate displacing a weaker one, or a tag simply climbing
- * from rank 2 to rank 1) reads as that slot's chip shrinking/fading out and
- * the new one growing/fading in, which is the "shrink away, replaced by a
- * stronger candidate" motion the spec asks for -- without needing a full
- * move-animation API for what is only ever a 3-item list. [Modifier.animateContentSize]
- * on the row absorbs the width change as chips of different size classes
- * enter/exit. Durations are short (160-220ms) and opacity/scale-only --
- * deliberately subtle rather than a bouncy/springy default, per the
- * reduced-motion guidance.
- *
- * Bead vn-edu.46 superseding decision (2026-08-05): when
- * [anthropicKeyConfigured] is false, no chips render at all -- not even an
- * empty row -- because [com.montauk.voicecapture.tags.NoOpTagScorer] never
- * computes any tags in that state (no heuristic guess). Instead this slot
- * shows the exact string "(register your API key to see the word cloud)",
- * dimmed and tappable, invoking [onRegisterKeyTapped] (deep-links to
- * Settings' "Word cloud & titles" key row) -- so a user always understands
- * *why* there's nothing here, distinct from "no topic has scored high
- * enough yet" (which, when keyed, still renders this same empty row via the
- * early return below).
- */
-@Composable
-private fun TagChipsRow(tags: List<DisplayedTag>, anthropicKeyConfigured: Boolean, onRegisterKeyTapped: () -> Unit = {}) {
-    if (!anthropicKeyConfigured) {
-        Text(
-            text = "(register your API key to see the word cloud)",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onRegisterKeyTapped)
-                .testTag(REGISTER_KEY_MESSAGE_TEST_TAG),
-        )
-        return
-    }
-    if (tags.isEmpty()) return
-    Row(
-        modifier = Modifier.fillMaxWidth().animateContentSize(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        for (slot in 0 until MAX_DISPLAYED_TAG_SLOTS) {
-            key(slot) {
-                AnimatedContent(
-                    targetState = tags.getOrNull(slot),
-                    transitionSpec = {
-                        (fadeIn(tween(TAG_CHIP_ENTER_MS)) + scaleIn(initialScale = TAG_CHIP_SCALE_FROM, animationSpec = tween(TAG_CHIP_ENTER_MS)))
-                            .togetherWith(fadeOut(tween(TAG_CHIP_EXIT_MS)) + scaleOut(targetScale = TAG_CHIP_SCALE_FROM, animationSpec = tween(TAG_CHIP_EXIT_MS)))
-                    },
-                    label = "tag-slot-$slot",
-                ) { tag ->
-                    if (tag != null) TagChip(tag)
-                }
-            }
-        }
-    }
-}
-
-/** Test-only anchor for the keyless tags-slot message (bead vn-edu.46). */
+/** Test-only anchor for the keyless word-cloud message (bead vn-edu.46, relocated onto the duck view by bead asn-3sm). */
 const val REGISTER_KEY_MESSAGE_TEST_TAG = "recording_register_key_message"
-
-private const val MAX_DISPLAYED_TAG_SLOTS = 3
-private const val TAG_CHIP_ENTER_MS = 220
-private const val TAG_CHIP_EXIT_MS = 160
-private const val TAG_CHIP_SCALE_FROM = 0.85f
-
-/**
- * Bead vn-edu.47: a tree-anchored scorer's rare new-topic proposal
- * ([DisplayedTag.isProposal]) renders visually subtle -- a dashed border
- * rather than [TagChip]'s normal solid-fill chip -- so it reads as "not
- * confirmed yet" without the STOP-adjacent glance screen needing any extra
- * text to explain why. A tree-matched or legacy free-form tag (the vast
- * majority) is unaffected. [PROPOSAL_TAG_CHIP_TEST_TAG]/[MATCHED_TAG_CHIP_TEST_TAG]
- * let a Robolectric test assert on this distinction without needing pixel
- * comparison of the dashed stroke itself.
- */
-@Composable
-private fun TagChip(tag: DisplayedTag) {
-    val (fontSize, verticalPadding) = when (tag.tier) {
-        TagTier.PRIMARY -> 18.sp to 10.dp
-        TagTier.SECONDARY -> 15.sp to 8.dp
-        TagTier.TERTIARY -> 13.sp to 6.dp
-    }
-    val shape = RoundedCornerShape(999.dp)
-    val proposalBorderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-    val proposalBorder = Modifier.drawWithContent {
-        drawContent()
-        drawRoundRect(
-            color = proposalBorderColor,
-            cornerRadius = CornerRadius(size.minDimension / 2f),
-            style = Stroke(width = PROPOSAL_BORDER_WIDTH_DP.dp.toPx(), pathEffect = PathEffect.dashPathEffect(PROPOSAL_DASH_PATTERN)),
-        )
-    }
-    Box(
-        modifier = Modifier
-            .background(MaterialTheme.colorScheme.surfaceVariant, shape)
-            .then(if (tag.isProposal) proposalBorder else Modifier)
-            .testTag(if (tag.isProposal) PROPOSAL_TAG_CHIP_TEST_TAG else MATCHED_TAG_CHIP_TEST_TAG)
-            .padding(horizontal = 14.dp, vertical = verticalPadding),
-    ) {
-        Text(
-            text = tag.tag,
-            fontSize = fontSize,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-/** Test-only anchors for [TagChip]'s proposal-vs-matched styling (bead vn-edu.47). */
-const val PROPOSAL_TAG_CHIP_TEST_TAG = "recording_tag_chip_proposal"
-const val MATCHED_TAG_CHIP_TEST_TAG = "recording_tag_chip_matched"
-private const val PROPOSAL_BORDER_WIDTH_DP = 1.5f
-private val PROPOSAL_DASH_PATTERN = floatArrayOf(9f, 6f)
 
 /**
  * Large, deep-red STOP control rendered as an inset rounded button rather
@@ -773,19 +706,15 @@ private fun LoudnessMeterBarPreviewLoud() {
     }
 }
 
-/** Synthetic tag chips, most confident first, for the bottom-of-screen preview below. */
-private fun syntheticTags(): List<DisplayedTag> = listOf(
-    DisplayedTag("budget", 0.9, rank = 1, tier = TagTier.PRIMARY),
-    DisplayedTag("timeline", 0.65, rank = 2, tier = TagTier.SECONDARY),
-    DisplayedTag("vendor", 0.55, rank = 3, tier = TagTier.SECONDARY),
-)
-
 /**
- * Preview-only: the bottom of [RecordingScreen] -- topic chips, the air gap
- * below them, and the STOP control -- rendered standalone at phone-bottom
- * proportions (bead vn-edu.32) so the inset-rounded-button treatment (margins,
- * corner radius, clearance from the gesture-nav inset) can be inspected
- * without needing the full recording state or a device.
+ * Preview-only: the air gap above the STOP control and the control itself,
+ * rendered standalone at phone-bottom proportions (bead vn-edu.32) so the
+ * inset-rounded-button treatment (margins, corner radius, clearance from the
+ * gesture-nav inset) can be inspected without needing the full recording
+ * state or a device. Pre-asn-3sm this also previewed the topic chips row
+ * directly above the button; that row is now the duck view's word cloud
+ * (see `com.montauk.voicecapture.duck.DuckStagePreview`), so nothing
+ * duck/word-cloud-related belongs in this bottom-of-screen preview anymore.
  */
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 280)
 @Composable
@@ -796,7 +725,6 @@ private fun StopBarPreview() {
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
                 verticalArrangement = Arrangement.Bottom,
             ) {
-                TagChipsRow(tags = syntheticTags(), anthropicKeyConfigured = true)
                 Spacer(modifier = Modifier.height(24.dp))
             }
             StopBar(modifier = Modifier.weight(1f), onClick = {})
@@ -830,11 +758,11 @@ private fun syntheticOverlongTranscript(): TranscriptUiState {
 }
 
 /**
- * Preview-only: mode switcher, the bounded [LiveTranscriptPane], and the
- * topic chips row rendered together with 30 finalized lines' worth of
- * overlong fixture text (bead vn-edu.37) -- demonstrates that the pane stays
- * pinned to the newest line, clips rather than overflows, and the chips row
- * underneath stays fully visible instead of being starved out of the layout.
+ * Preview-only: mode switcher and the bounded [LiveTranscriptPane] rendered
+ * together with 30 finalized lines' worth of overlong fixture text (bead
+ * vn-edu.37) -- demonstrates that the pane stays pinned to the newest line
+ * and clips rather than overflows (this is the debug-view rendering; see
+ * [RecordingScreen]'s KDoc for the duck-view/debug-view toggle).
  */
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 640)
 @Composable
@@ -846,8 +774,6 @@ private fun LiveTranscriptPaneOverlongPreview() {
             ModeSwitcher(currentMode = RecordingMode.LISTEN, onSelect = {})
             Spacer(modifier = Modifier.height(16.dp))
             LiveTranscriptPane(transcript = transcript, assemblyKeyConfigured = true, modifier = Modifier.weight(1f))
-            Spacer(modifier = Modifier.height(16.dp))
-            TagChipsRow(tags = syntheticTags(), anthropicKeyConfigured = true)
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
@@ -886,8 +812,6 @@ private fun LiveTranscriptPaneGiantPartialPreview() {
             ModeSwitcher(currentMode = RecordingMode.LISTEN, onSelect = {})
             Spacer(modifier = Modifier.height(16.dp))
             LiveTranscriptPane(transcript = transcript, assemblyKeyConfigured = true, modifier = Modifier.weight(1f))
-            Spacer(modifier = Modifier.height(16.dp))
-            TagChipsRow(tags = syntheticTags(), anthropicKeyConfigured = true)
             Spacer(modifier = Modifier.height(24.dp))
         }
     }

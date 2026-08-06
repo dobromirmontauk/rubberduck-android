@@ -8,6 +8,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import com.montauk.voicecapture.VoiceCaptureApp
+import com.montauk.voicecapture.duck.CANDIDATE_WORD_TEST_TAG_PREFIX
+import com.montauk.voicecapture.duck.CONFIRMED_WORD_TEST_TAG_PREFIX
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
 import com.montauk.voicecapture.service.TagsStateHolder
@@ -47,10 +49,16 @@ class RecordingScreenTagsSlotTest {
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
         TagsStateHolder.reset()
-        // Fresh Robolectric app: userAnthropicKey is null and there's no
-        // local.properties baked into this test JVM's BuildConfig, so the
-        // effective key is already blank -- explicit anyway for clarity/intent.
         app.secretsStore.userAnthropicKey = null
+        // isSignedOut = true forces AppSecretsStore.effectiveAnthropicKey() to
+        // "" unconditionally (same guard KeyScreensScreenshotTest uses) --
+        // userAnthropicKey = null alone is NOT enough for hermeticity: on a
+        // clone whose local.properties bakes a real anthropic.apiKey into
+        // BuildConfig.ANTHROPIC_API_KEY, effectiveAnthropicKey() falls back to
+        // that value and "keyless" silently becomes "keyed" depending on which
+        // machine runs this test. Every "configured key" test below explicitly
+        // flips this back off before setting its own test key.
+        app.secretsStore.isSignedOut = true
     }
 
     @Test
@@ -100,6 +108,7 @@ class RecordingScreenTagsSlotTest {
 
     @Test
     fun `a configured Anthropic key renders real tag chips, not the register-key message`() {
+        app.secretsStore.isSignedOut = false
         app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
         TagsStateHolder.update(listOf(DisplayedTag("kitchen remodel", 0.9, rank = 1, tier = TagTier.PRIMARY)))
@@ -115,6 +124,7 @@ class RecordingScreenTagsSlotTest {
 
     @Test
     fun `a configured Anthropic key with no tags yet shows neither chips nor the message`() {
+        app.secretsStore.isSignedOut = false
         app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
 
@@ -128,10 +138,15 @@ class RecordingScreenTagsSlotTest {
         composeTestRule.onNodeWithText("STOP").assertIsDisplayed()
     }
 
-    // --- Bead vn-edu.47: tree-anchored tags render distinctly from proposals ---
+    // --- Bead vn-edu.47 (superseded by asn-3sm's word cloud): a tree-anchored
+    // tag renders distinctly from a proposal. Pre-asn-3sm this was a
+    // dashed-vs-solid chip border; asn-3sm's word cloud expresses the same
+    // "not confirmed yet" distinction via GREEN (confirmed) vs. WHITE
+    // (candidate) word-cloud slots instead -- see TopicWordCloudTopics.fromDisplayedTags.
 
     @Test
-    fun `a tree-matched tag renders as a matched (non-dashed) chip`() {
+    fun `a tree-matched tag renders as a GREEN confirmed word, not a candidate`() {
+        app.secretsStore.isSignedOut = false
         app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
         TagsStateHolder.update(listOf(DisplayedTag("kitchen-remodel", 0.9, rank = 1, tier = TagTier.PRIMARY, tagId = "t_kitchen")))
@@ -141,11 +156,12 @@ class RecordingScreenTagsSlotTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithTag(MATCHED_TAG_CHIP_TEST_TAG).assertIsDisplayed()
+        composeTestRule.onNodeWithTag("${CONFIRMED_WORD_TEST_TAG_PREFIX}0").assertIsDisplayed()
     }
 
     @Test
-    fun `a genuinely new proposal renders as the visually-subtle (dashed) proposal chip, not the matched chip`() {
+    fun `a genuinely new proposal renders as a WHITE candidate word, not a confirmed one`() {
+        app.secretsStore.isSignedOut = false
         app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
         TagsStateHolder.update(listOf(DisplayedTag("gardening", 0.6, rank = 1, tier = TagTier.SECONDARY, isProposal = true)))
@@ -155,12 +171,13 @@ class RecordingScreenTagsSlotTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithTag(PROPOSAL_TAG_CHIP_TEST_TAG).assertIsDisplayed()
+        composeTestRule.onNodeWithTag("${CANDIDATE_WORD_TEST_TAG_PREFIX}0").assertIsDisplayed()
         composeTestRule.onNodeWithText("gardening").assertIsDisplayed()
     }
 
     @Test
-    fun `a legacy free-form tag (no tree, no proposal flag) renders as the matched (non-dashed) chip, not the proposal chip`() {
+    fun `a legacy free-form tag (no tree, no proposal flag) renders as a GREEN confirmed word, not a candidate`() {
+        app.secretsStore.isSignedOut = false
         app.secretsStore.userAnthropicKey = "sk-ant-configured-test-key"
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
         TagsStateHolder.update(listOf(DisplayedTag("marathon training", 0.9, rank = 1, tier = TagTier.PRIMARY)))
@@ -170,6 +187,6 @@ class RecordingScreenTagsSlotTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithTag(MATCHED_TAG_CHIP_TEST_TAG).assertIsDisplayed()
+        composeTestRule.onNodeWithTag("${CONFIRMED_WORD_TEST_TAG_PREFIX}0").assertIsDisplayed()
     }
 }

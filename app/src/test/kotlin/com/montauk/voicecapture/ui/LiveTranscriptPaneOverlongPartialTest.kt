@@ -1,9 +1,11 @@
 package com.montauk.voicecapture.ui
 
+import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
@@ -70,6 +72,9 @@ class LiveTranscriptPaneOverlongPartialTest {
         // currentPartial directly), so it needs a configured key or it would
         // hit the new keyless message instead of the pane under test here.
         val app: VoiceCaptureApp = ApplicationProvider.getApplicationContext()
+        // isSignedOut = false is explicit, not assumed -- see the identical
+        // comment in LiveTranscriptPaneWordFinalityTest.setUp().
+        app.secretsStore.isSignedOut = false
         app.secretsStore.userAssemblyAiKey = "assemblyai-configured-test-key"
     }
 
@@ -83,6 +88,10 @@ class LiveTranscriptPaneOverlongPartialTest {
         composeTestRule.setContent {
             RecordingScreen(onStopRecording = {})
         }
+        composeTestRule.waitForIdle()
+        // Bead asn-3sm: the transcript pane now lives behind the duck view's
+        // double-tap debug toggle rather than being always-visible.
+        composeTestRule.onNodeWithTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG).performTouchInput { doubleClick() }
         composeTestRule.waitForIdle()
 
         val paneBounds = composeTestRule.onNodeWithTag(LIVE_TRANSCRIPT_PANE_TEST_TAG).getUnclippedBoundsInRoot()

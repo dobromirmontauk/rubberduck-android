@@ -1,8 +1,10 @@
 package com.montauk.voicecapture.ui
 
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.montauk.voicecapture.VoiceCaptureApp
@@ -64,6 +66,14 @@ class LiveTranscriptPaneWordFinalityTest {
         // currentPartial directly), so it needs a configured key or it would
         // hit the new keyless message instead of the pane under test here.
         val app: VoiceCaptureApp = ApplicationProvider.getApplicationContext()
+        // isSignedOut = false is explicit, not assumed: AppSecretsStore's
+        // SharedPreferences-backed isSignedOut flag isn't reset between
+        // Robolectric test classes sharing a Gradle test JVM, so a *different*
+        // test class leaving it `true` would otherwise make
+        // effectiveAssemblyKey() return "" unconditionally and shadow the key
+        // set below (bead asn-3sm surfaced this while adding isSignedOut=true
+        // to RecordingScreenTagsSlotTest/RecordingScreenTranscriptSlotTest).
+        app.secretsStore.isSignedOut = false
         app.secretsStore.userAssemblyAiKey = "assemblyai-configured-test-key"
     }
 
@@ -84,6 +94,10 @@ class LiveTranscriptPaneWordFinalityTest {
         composeTestRule.setContent {
             RecordingScreen(onStopRecording = {})
         }
+        composeTestRule.waitForIdle()
+        // Bead asn-3sm: the transcript pane now lives behind the duck view's
+        // double-tap debug toggle rather than being always-visible.
+        composeTestRule.onNodeWithTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG).performTouchInput { doubleClick() }
         composeTestRule.waitForIdle()
 
         val paneNode = composeTestRule.onNodeWithTag(LIVE_TRANSCRIPT_PANE_TEST_TAG).fetchSemanticsNode()

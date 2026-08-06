@@ -1,11 +1,13 @@
 package com.montauk.voicecapture.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.service.RecordingStateHolder
@@ -32,6 +34,13 @@ import org.robolectric.annotation.Config
  * instead of the Anthropic key. Drives the real nav graph ([AppNavHost])
  * rather than [RecordingScreen] in isolation so the deep link's destination
  * is actually verified.
+ *
+ * Bead asn-3sm: the live-transcript pane is no longer always-visible -- it
+ * now lives in the double-tap debug view, with the duck view as the
+ * default. Every test here double-taps [DUCK_TRANSCRIPT_TOGGLE_TEST_TAG]
+ * ([enterDebugTranscriptView]) before asserting on transcript-pane content;
+ * the underlying transcript behavior itself (including this keyless
+ * message) is otherwise unchanged.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -48,10 +57,22 @@ class RecordingScreenTranscriptSlotTest {
         RecordingStateHolder.update { RecordingUiState() }
         TranscriptStateHolder.reset()
         TagsStateHolder.reset()
-        // Fresh Robolectric app: userAssemblyAiKey is null and there's no
-        // local.properties baked into this test JVM's BuildConfig, so the
-        // effective key is already blank -- explicit anyway for clarity/intent.
         app.secretsStore.userAssemblyAiKey = null
+        // isSignedOut = true forces AppSecretsStore.effectiveAssemblyKey() to ""
+        // unconditionally (same guard KeyScreensScreenshotTest uses) --
+        // userAssemblyAiKey = null alone is NOT enough for hermeticity: on a
+        // clone whose local.properties bakes a real assemblyai.apiKey into
+        // BuildConfig.ASSEMBLYAI_API_KEY, effectiveAssemblyKey() falls back to
+        // that value and "keyless" silently becomes "keyed" depending on which
+        // machine runs this test. The two "configured key" tests below
+        // explicitly flip this back off before setting their own test key.
+        app.secretsStore.isSignedOut = true
+    }
+
+    /** Bead asn-3sm: double-taps the duck/transcript toggle to reveal the debug transcript view. */
+    private fun enterDebugTranscriptView() {
+        composeTestRule.onNodeWithTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG).performTouchInput { doubleClick() }
+        composeTestRule.waitForIdle()
     }
 
     @Test
@@ -62,6 +83,7 @@ class RecordingScreenTranscriptSlotTest {
             AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
         }
         composeTestRule.waitForIdle()
+        enterDebugTranscriptView()
 
         composeTestRule.onNodeWithText("(no transcription key)").assertIsDisplayed()
         composeTestRule.onNodeWithText("Listening…").assertDoesNotExist()
@@ -85,6 +107,7 @@ class RecordingScreenTranscriptSlotTest {
             AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
         }
         composeTestRule.waitForIdle()
+        enterDebugTranscriptView()
 
         composeTestRule.onNodeWithText("(no transcription key)").assertIsDisplayed()
         composeTestRule.onNodeWithText("stale transcript line").assertDoesNotExist()
@@ -98,6 +121,7 @@ class RecordingScreenTranscriptSlotTest {
             AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
         }
         composeTestRule.waitForIdle()
+        enterDebugTranscriptView()
 
         composeTestRule.onNodeWithText("(no transcription key)").performClick()
         composeTestRule.waitForIdle()
@@ -108,6 +132,7 @@ class RecordingScreenTranscriptSlotTest {
 
     @Test
     fun `a configured AssemblyAI key shows the normal Listening placeholder, not the keyless message`() {
+        app.secretsStore.isSignedOut = false
         app.secretsStore.userAssemblyAiKey = "assemblyai-configured-test-key"
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
 
@@ -115,6 +140,7 @@ class RecordingScreenTranscriptSlotTest {
             AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
         }
         composeTestRule.waitForIdle()
+        enterDebugTranscriptView()
 
         composeTestRule.onNodeWithText("Listening…").assertIsDisplayed()
         composeTestRule.onNodeWithText("(no transcription key)").assertDoesNotExist()
@@ -122,6 +148,7 @@ class RecordingScreenTranscriptSlotTest {
 
     @Test
     fun `a configured AssemblyAI key with a real final line renders it, not the keyless message`() {
+        app.secretsStore.isSignedOut = false
         app.secretsStore.userAssemblyAiKey = "assemblyai-configured-test-key"
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
         TranscriptStateHolder.update {
@@ -135,6 +162,7 @@ class RecordingScreenTranscriptSlotTest {
             AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
         }
         composeTestRule.waitForIdle()
+        enterDebugTranscriptView()
 
         composeTestRule.onNodeWithText("kitchen remodel budget update").assertIsDisplayed()
         composeTestRule.onNodeWithText("(no transcription key)").assertDoesNotExist()
