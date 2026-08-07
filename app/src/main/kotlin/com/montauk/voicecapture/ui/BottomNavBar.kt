@@ -10,12 +10,6 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.automirrored.filled.Login
-import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -25,9 +19,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.montauk.voicecapture.BuildConfig
+import com.montauk.voicecapture.R
 
 /**
  * Standard Material 3 bottom nav, 4 items, per the scope addition: New
@@ -66,20 +62,20 @@ fun BottomNavBar(
             NavigationBarItem(
                 selected = currentRoute == Routes.RECORDING,
                 onClick = onNewSession,
-                icon = { Icon(Icons.Filled.Mic, contentDescription = null) },
+                icon = { Icon(painterResource(R.drawable.ic_nav_new_session), contentDescription = null) },
                 label = { Text("New Session") },
             )
         }
         NavigationBarItem(
             selected = currentRoute == Routes.SESSIONS,
             onClick = onSessions,
-            icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null) },
+            icon = { Icon(painterResource(R.drawable.ic_nav_sessions), contentDescription = null) },
             label = { Text("Sessions") },
         )
         NavigationBarItem(
             selected = currentRoute == Routes.SETTINGS,
             onClick = onSettings,
-            icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+            icon = { Icon(painterResource(R.drawable.ic_nav_settings), contentDescription = null) },
             label = { Text("Settings") },
         )
         NavigationBarItem(
@@ -90,7 +86,7 @@ fun BottomNavBar(
             onClick = onAuthTapped,
             icon = {
                 Icon(
-                    if (isConnectedToGithub) Icons.AutoMirrored.Filled.Logout else Icons.AutoMirrored.Filled.Login,
+                    painterResource(if (isConnectedToGithub) R.drawable.ic_nav_signout else R.drawable.ic_nav_signin),
                     contentDescription = null,
                 )
             },
@@ -142,7 +138,7 @@ private fun RowScope.DebugNewSessionItem(selected: Boolean, onClick: () -> Unit,
                 .background(containerColor, RoundedCornerShape(16.dp))
                 .padding(horizontal = 20.dp, vertical = 4.dp),
         ) {
-            Icon(Icons.Filled.Mic, contentDescription = null, tint = contentColor)
+            Icon(painterResource(R.drawable.ic_nav_new_session), contentDescription = null, tint = contentColor)
         }
         Text(text = "New Session", color = contentColor, style = MaterialTheme.typography.labelMedium)
     }
