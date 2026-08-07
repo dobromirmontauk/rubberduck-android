@@ -222,59 +222,38 @@ fun RecordingScreen(
         if (anthropicKeyConfigured) ThoughtCloudWords.fromTagRailChips(rail) else ThoughtCloudWords.EMPTY
     }
 
+    // Device-test directive (2026-08-06 drop #1, item d): the timer itself
+    // is the pause tell -- warm/red only while actually recording, grey+
+    // frozen the instant either pause kind takes over (matches the
+    // storyboard's dim `.paused` timer style, frames 10-11). Shared by both
+    // branches below.
+    val isPausedForTimer = activityState == RecordingActivityState.AUTO_PAUSED ||
+        activityState == RecordingActivityState.USER_PAUSED
+
     VoiceCaptureTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Spacer(modifier = Modifier.height(20.dp))
-                // Bead v5.1: the "● REC"/"⏸ auto"/"⏸ paused" top-chrome
-                // labels are debug-view-only now -- the duck view drops them
-                // entirely in every state (see this file's class KDoc and
-                // MinimalTopChrome's own KDoc). The debug view still wants
-                // them, so they render right where they always have, just
-                // gated on showDebugView instead of unconditionally.
-                if (showDebugView) {
+            if (showDebugView) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    // Bead v5.1: the "● REC"/"⏸ auto"/"⏸ paused" top-chrome
+                    // labels are debug-view-only -- the duck view (the
+                    // `else` branch below) drops them entirely in every
+                    // state (see this file's class KDoc and
+                    // MinimalTopChrome's own KDoc).
                     MinimalTopChrome(mode = recordingState.mode, activityState = activityState, modifier = Modifier.padding(horizontal = 24.dp))
                     Spacer(modifier = Modifier.height(4.dp))
-                }
-                // Device-test directive (2026-08-06 drop #1, item d): the
-                // timer itself is the pause tell -- warm/red only while
-                // actually recording, grey+frozen the instant either pause
-                // kind takes over (matches the storyboard's dim `.paused`
-                // timer style, frames 10-11).
-                val isPausedForTimer = activityState == RecordingActivityState.AUTO_PAUSED ||
-                    activityState == RecordingActivityState.USER_PAUSED
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    BigTimer(elapsedMs = recordingState.elapsedMs, isPaused = isPausedForTimer)
-                }
-                // Bead asn-kd2 v5.2: the mic-loudness waveform, restored
-                // under the timer in every duck-view state (see
-                // DuckWaveformBar's own KDoc for the three renderings) --
-                // the debug view keeps its own richer LoudnessMeterBar
-                // further down instead, so this only renders on the duck
-                // side of the toggle. Device-test directive (drop #1, item
-                // 4): this was the very first thing the live tester looked
-                // for -- kept full-width (no side padding) and tall enough
-                // to read at a glance rather than disappearing under the
-                // timer.
-                if (!showDebugView) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    DuckWaveformBar(
-                        activityState = activityState,
-                        micLevel = transcript.micLevel,
-                        sessionId = recordingState.sessionId,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .testTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG)
-                        .pointerInput(Unit) {
-                            detectTapGestures(onDoubleTap = { showDebugView = !showDebugView })
-                        },
-                ) {
-                    if (showDebugView) {
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        BigTimer(elapsedMs = recordingState.elapsedMs, isPaused = isPausedForTimer)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .testTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG)
+                            .pointerInput(Unit) {
+                                detectTapGestures(onDoubleTap = { showDebugView = !showDebugView })
+                            },
+                    ) {
                         Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
                             Spacer(modifier = Modifier.height(8.dp))
                             ChipsRow(transcript = transcript, hasBluetoothMic = hasBluetoothMic, recordingState = recordingState)
@@ -306,72 +285,128 @@ fun RecordingScreen(
                                 modifier = Modifier.weight(1f),
                             )
                         }
-                    } else {
-                        DuckStage(
-                            duckState = duckState,
-                            words = words,
-                            reducedMotion = reducedMotion,
-                            onApproveWord = { word ->
-                                onApproveTag(word.text)
-                                happyBounceTrigger++
-                            },
-                            summary = summary,
-                            latencyState = latencyState,
-                            onLatencyBadgeTap = {}, // asn-55q's L2 HUD opens here once that bead lands
-                            happyBounceTrigger = happyBounceTrigger,
-                            modifier = Modifier.fillMaxSize(),
-                            // Design-board addendum: controls float ON the duck in this
-                            // view (z-order above him, overlapping his lower body) --
-                            // DuckStage places this slot itself. The debug view below
-                            // renders the identical StopBar as a normal, non-overlapping
-                            // bottom row instead (there's no duck to float over there).
-                            // Bead asn-r60/asn-3sm: pause presentation lives entirely
-                            // here now -- no separate banner (v2 dropped it outright;
-                            // the duck falling asleep + Z-trail + this button + the
-                            // frozen timer above is the whole story) and no non-
-                            // floating equivalent in the debug view (there is no other
-                            // pause UI anywhere on this screen by design).
-                            // Device-test directive (drop #1, item b): the
-                            // pause/resume-role pill is an IN-PLACE swap in
-                            // the bottom-LEFT slot -- not a centered group
-                            // next to STOP. SpaceBetween over the full
-                            // control-row width pins it to the start edge
-                            // and STOP to the end edge (bottom-right,
-                            // prominent), matching the storyboard.
-                            controls = {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    PauseResumeChip(
-                                        activityState = activityState,
-                                        fillFraction = transcript.autoPauseFillFraction,
-                                        onSetPaused = onSetPaused,
-                                    )
-                                    StopBar(onClick = onStopRecording, floating = true)
-                                }
-                            },
-                        )
                     }
+                    StopBar(modifier = Modifier.height(STOP_BAR_HEIGHT), onClick = onStopRecording, floating = false)
                 }
-                // Keyless word-cloud message stays on the default duck view (not
-                // gated behind the double-tap toggle) -- mirrors the pre-asn-3sm
-                // TagChipsRow keyless message 1:1 (bead vn-edu.46), just relocated.
-                if (!showDebugView && !anthropicKeyConfigured) {
-                    Text(
-                        text = "(register your API key to see the word cloud)",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            } else {
+                // Screen-vs-storyboard gate fix (drop #1+#2): this used to be
+                // one more branch inside the SAME Column/weight(1f) box as
+                // above, which meant DuckStage's "bottom two-thirds" fraction
+                // was computed against "whatever's left after the chrome" --
+                // a nearly-empty top chrome (plus the keyless message below,
+                // when unkeyed) still ate enough of that leftover space that
+                // 67% of it put the duck's head at ~41% down the SCREEN,
+                // not ~2/3 up from the bottom, with a big empty void above
+                // him and STOP/PAUSE floating well short of the true screen
+                // edge. A root-level Box sidesteps that entirely: DuckStage
+                // gets a modifier sized against THIS Box's full constraints
+                // (the real screen), and the chrome is a separate top-
+                // aligned sibling layered on top of it -- Box children don't
+                // share/divide space the way Column weights do, so neither
+                // affects the other's sizing. See DuckStage's own KDoc for
+                // the matching fix on its internal DUCK_HEIGHT_FRACTION.
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG)
+                        .pointerInput(Unit) {
+                            detectTapGestures(onDoubleTap = { showDebugView = !showDebugView })
+                        },
+                ) {
+                    DuckStage(
+                        duckState = duckState,
+                        words = words,
+                        reducedMotion = reducedMotion,
+                        onApproveWord = { word ->
+                            onApproveTag(word.text)
+                            happyBounceTrigger++
+                        },
+                        summary = summary,
+                        latencyState = latencyState,
+                        onLatencyBadgeTap = {}, // asn-55q's L2 HUD opens here once that bead lands
+                        happyBounceTrigger = happyBounceTrigger,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 24.dp)
-                            .clickable(onClick = onOpenSettings)
-                            .testTag(REGISTER_KEY_MESSAGE_TEST_TAG),
+                            .fillMaxHeight(DUCK_VIEW_SCREEN_FRACTION)
+                            .align(Alignment.BottomCenter),
+                        // Design-board addendum: controls float ON the duck in this
+                        // view (z-order above him, overlapping his lower body) --
+                        // DuckStage places this slot itself. The debug view above
+                        // renders the identical StopBar as a normal, non-overlapping
+                        // bottom row instead (there's no duck to float over there).
+                        // Bead asn-r60/asn-3sm: pause presentation lives entirely
+                        // here now -- no separate banner (v2 dropped it outright;
+                        // the duck falling asleep + Z-trail + this button + the
+                        // frozen timer above is the whole story) and no non-
+                        // floating equivalent in the debug view (there is no other
+                        // pause UI anywhere on this screen by design).
+                        // Device-test directive (drop #1, item b): the
+                        // pause/resume-role pill is an IN-PLACE swap in
+                        // the bottom-LEFT slot -- not a centered group
+                        // next to STOP. SpaceBetween over the full
+                        // control-row width pins it to the start edge
+                        // and STOP to the end edge (bottom-right,
+                        // prominent), matching the storyboard.
+                        controls = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                PauseResumeChip(
+                                    activityState = activityState,
+                                    fillFraction = transcript.autoPauseFillFraction,
+                                    onSetPaused = onSetPaused,
+                                )
+                                StopBar(onClick = onStopRecording, floating = true)
+                            }
+                        },
                     )
-                }
-                if (showDebugView) {
-                    StopBar(modifier = Modifier.height(STOP_BAR_HEIGHT), onClick = onStopRecording, floating = false)
+                    // Chrome floats over the top of the duck stage (which
+                    // itself is bottom-anchored, so the two never compete
+                    // for space) -- timer, waveform, and (keyless only) the
+                    // word-cloud message all live here now instead of as
+                    // separate Column siblings that used to shrink
+                    // DuckStage's own box (see the KDoc above).
+                    Column(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            BigTimer(elapsedMs = recordingState.elapsedMs, isPaused = isPausedForTimer)
+                        }
+                        // Bead asn-kd2 v5.2: the mic-loudness waveform,
+                        // restored under the timer in every duck-view state
+                        // (see DuckWaveformBar's own KDoc for the three
+                        // renderings) -- the debug view keeps its own
+                        // richer LoudnessMeterBar instead. Device-test
+                        // directive (drop #1, item 4): kept full-width (no
+                        // side padding) and tall enough to read at a glance.
+                        Spacer(modifier = Modifier.height(10.dp))
+                        DuckWaveformBar(
+                            activityState = activityState,
+                            micLevel = transcript.micLevel,
+                            sessionId = recordingState.sessionId,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        // Keyless word-cloud message stays on the default duck
+                        // view (not gated behind the double-tap toggle) --
+                        // mirrors the pre-asn-3sm TagChipsRow keyless message
+                        // 1:1 (bead vn-edu.46). Lives in this top-chrome
+                        // column now (not a separate Column sibling below
+                        // the duck stage) so it can never shrink DuckStage's
+                        // own bottom-two-thirds box.
+                        if (!anthropicKeyConfigured) {
+                            Text(
+                                text = "(register your API key to see the word cloud)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 24.dp)
+                                    .clickable(onClick = onOpenSettings)
+                                    .testTag(REGISTER_KEY_MESSAGE_TEST_TAG),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -401,6 +436,20 @@ private const val THINKING_TICK_INTERVAL_MS = 250L
 const val THINKING_DISPLAY_MS = 1_800L
 
 private val STOP_BAR_HEIGHT = 140.dp
+
+/**
+ * Screen-vs-storyboard gate fix (drop #1+#2): the duck view's ROOT box
+ * (chrome + [DuckStage] together, laid out as [Alignment.TopCenter] /
+ * [Alignment.BottomCenter] siblings within one `Modifier.fillMaxSize()`
+ * `Box`) hands [DuckStage] a `Modifier.fillMaxHeight(DUCK_VIEW_SCREEN_FRACTION)`
+ * measured against THAT full-screen `Box`, not a `Column`'s `weight(1f)`
+ * leftover space -- see the call site's own comment for why the old
+ * `Column`-nested version silently broke "duck fills the bottom two-
+ * thirds of the SCREEN." [DuckStage.DUCK_HEIGHT_FRACTION] is the second,
+ * independent fraction (of THIS box, not of the screen) the duck sprite
+ * itself fills.
+ */
+private const val DUCK_VIEW_SCREEN_FRACTION = 0.67f
 
 /** Which affordance opened [TagPickerSheet] -- decides whether a pick becomes an add or a swap of a specific existing chip. */
 private sealed interface TagPickerRequest {

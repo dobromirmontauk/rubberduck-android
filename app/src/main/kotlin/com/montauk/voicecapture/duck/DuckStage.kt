@@ -23,19 +23,31 @@ import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 /**
  * The duck view, "layout A" (bead asn-3sm, design board + v2 revision --
  * the decided home state): the duck is bottom-anchored and owns
- * [DUCK_HEIGHT_FRACTION] (~2/3) of the stage's height, head landing around
- * that same fraction from the top; [ThoughtCloud] scatters its words in the
- * space above/around his head; [ThoughtBubbleDots] ties the two together
- * visually. [ZzTrail] rises from his head during [DuckState.DROWSY] (bead
- * asn-3h6: "gets heavy-lidded with a rising trail of Z's -- still
- * recording", per the v5.3 storyboard) and [DuckState.SLEEP].
- * [NotesCard] and [controls] both render as pure overlays on top of the
- * duck -- neither ever resizes or reflows him; see each composable's own
- * KDoc for why. [LatencyBadge] sits bottom-right (hidden at
- * [com.montauk.voicecapture.service.LatencySeverity.OK]). No persistent
- * notepad, no transcript, no other chrome --
- * [com.montauk.voicecapture.ui.RecordingScreen] layers the timer above this
- * stage and passes its stop/pause control row in as [controls].
+ * [DUCK_HEIGHT_FRACTION] (~85%) of THIS composable's own box, head landing
+ * near that box's own top edge; [ThoughtCloud] scatters its words in the
+ * remaining space above/around his head; [ThoughtBubbleDots] ties the two
+ * together visually. [ZzTrail] rises from his head during
+ * [DuckState.DROWSY] (bead asn-3h6: "gets heavy-lidded with a rising trail
+ * of Z's -- still recording", per the v5.3 storyboard) and
+ * [DuckState.SLEEP]. [NotesCard] and [controls] both render as pure
+ * overlays on top of the duck -- neither ever resizes or reflows him; see
+ * each composable's own KDoc for why. [LatencyBadge] sits bottom-right
+ * (hidden at [com.montauk.voicecapture.service.LatencySeverity.OK]). No
+ * persistent notepad, no transcript, no other chrome.
+ *
+ * **This composable's own box must equal the screen's actual bottom
+ * two-thirds (device-test/screen-gate fix, drop #1+#2).** The design
+ * board's "duck fills the bottom two-thirds, head at ~2/3 screen height"
+ * is ONE fraction, not two nested ones: [com.montauk.voicecapture.ui.RecordingScreen]
+ * is responsible for handing this composable a `modifier` sized against
+ * the TRUE full screen (`fillMaxHeight` measured at the root, not a
+ * `Column`'s `weight(1f)` leftover space) -- see that file's KDoc for why
+ * the earlier `Column`-based version silently broke this (a small, mostly-
+ * empty top chrome plus an unrelated keyless-message line both ate into
+ * the weighted box, so 67% of an already-85%-of-screen box put the duck's
+ * head at ~41% down the screen instead of ~2/3 up from the bottom). Once
+ * that outer box is correct, [DUCK_HEIGHT_FRACTION] fills nearly all of
+ * it (not another 67%) -- the two fractions are NOT meant to compound.
  *
  * Bead asn-5w3 mechanical note: [happyBounceTrigger] (a tag was approved)
  * and the internal new-tag-entered-the-cloud detection below are each still
@@ -152,8 +164,17 @@ fun DuckStage(
 
 const val DUCK_STAGE_TEST_TAG = "duck_stage"
 
-/** Design-board v2 sizing rule: the duck's head lands around 2/3 of the stage height. */
-const val DUCK_HEIGHT_FRACTION = 0.67f
+/**
+ * Fraction of THIS composable's own box (which [com.montauk.voicecapture.ui.RecordingScreen]
+ * must size to the screen's actual bottom two-thirds -- see this file's
+ * class KDoc) the duck sprite fills, leaving a small margin at the box's
+ * own top for [ThoughtCloud] words to breathe above his head. Deliberately
+ * NOT 0.67 -- that would re-apply the "two-thirds" idea a second time,
+ * nested inside a box that's already exactly two-thirds of the screen,
+ * and land the head far too high (the screen-vs-storyboard gate's original
+ * finding).
+ */
+const val DUCK_HEIGHT_FRACTION = 0.85f
 
 /** How far up from the true bottom edge the control row sits, so it overlaps the duck's lower body/feet rather than floating below him. */
 private val CONTROLS_DUCK_OVERLAP = 18.dp
