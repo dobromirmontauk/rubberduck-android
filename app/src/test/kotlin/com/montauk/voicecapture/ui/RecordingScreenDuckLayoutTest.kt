@@ -5,6 +5,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.montauk.voicecapture.VoiceCaptureApp
@@ -104,12 +105,21 @@ class RecordingScreenDuckLayoutTest {
     }
 
     /**
-     * Bead asn-bb4.2: the pause/resume pill and STOP must OVERLAP the duck
-     * stage's lower region (their vertical ranges intersect the animator's
-     * own bounds), not sit stacked in a row entirely below him.
+     * Bead asn-bb4.2: the pause/resume pill and STOP must OVERLAP the duck's
+     * REAL rendered lower body -- NOT just his `DUCK_ANIMATOR_TEST_TAG`
+     * bounding box's bottom edge. That box is `fillMaxHeight(DUCK_HEIGHT_FRACTION)`
+     * of the stage, which on a tall phone is TALLER than it is wide; a
+     * square (512x512) asset under `ContentScale.Fit` + `TopCenter` only
+     * ever renders a WIDTH-tall square starting at the box's own top, so
+     * the rest of that tall box (below the actual drawn duck) is empty
+     * letterboxing. The original bug: controls anchored to the box's raw
+     * bottom edge floated in that empty gap, ~150px below the duck's real
+     * silhouette. `realDuckBottom` below computes where the drawn duck
+     * ACTUALLY ends (animator.top + min(width, height)); the fix folds
+     * that gap into the controls' pull-up so they land ON him instead.
      */
     @Test
-    fun `pause and stop controls vertically overlap the duck animator, not stacked below him`() {
+    fun `pause and stop controls overlap the duck's real rendered body, not his box's empty letterboxed bottom`() {
         RecordingActivityStateHolder.set(com.montauk.voicecapture.service.RecordingActivityState.SPEAKING)
         renderDuckView()
 
@@ -117,12 +127,22 @@ class RecordingScreenDuckLayoutTest {
         val pause = composeTestRule.onNodeWithTag(PAUSE_RESUME_BUTTON_TEST_TAG).getUnclippedBoundsInRoot()
         val stop = composeTestRule.onNodeWithText("STOP").getUnclippedBoundsInRoot()
 
-        // Overlap means the control's top edge is ABOVE the animator's
-        // bottom edge (they share some vertical range) -- a control
-        // "stacked below" would have its whole box under the animator's
-        // bottom edge instead.
-        assertTrue("pause pill (top=${pause.top}) should overlap the duck's lower body (animator bottom=${animator.bottom})", pause.top < animator.bottom)
-        assertTrue("stop pill (top=${stop.top}) should overlap the duck's lower body (animator bottom=${animator.bottom})", stop.top < animator.bottom)
+        val animatorWidth = animator.right - animator.left
+        val animatorHeight = animator.bottom - animator.top
+        val realDuckBottom = animator.top + minOf(animatorWidth, animatorHeight)
+
+        // A real, visible overlap into his body -- not just barely
+        // crossing the line -- so require at least 8dp of the pill to sit
+        // above realDuckBottom.
+        val minOverlap = 8.dp
+        assertTrue(
+            "pause pill (top=${pause.top}) should overlap the duck's REAL body (realDuckBottom=$realDuckBottom) by at least $minOverlap",
+            pause.top <= realDuckBottom - minOverlap,
+        )
+        assertTrue(
+            "stop pill (top=${stop.top}) should overlap the duck's REAL body (realDuckBottom=$realDuckBottom) by at least $minOverlap",
+            stop.top <= realDuckBottom - minOverlap,
+        )
     }
 
     /**

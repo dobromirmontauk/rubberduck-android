@@ -1,6 +1,7 @@
 package com.montauk.voicecapture.duck
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -109,7 +110,23 @@ fun DuckStage(
         }
     }
 
-    Box(modifier = modifier.testTag(DUCK_STAGE_TEST_TAG).fillMaxSize()) {
+    BoxWithConstraints(modifier = modifier.testTag(DUCK_STAGE_TEST_TAG).fillMaxSize()) {
+        // Bead asn-bb4.2 fix: DuckAnimator's own box is `fillMaxWidth()` x
+        // `fillMaxHeight(DUCK_HEIGHT_FRACTION)` of THIS stage -- for a tall
+        // phone that box is TALLER than it is wide, but DuckPoseFrame's
+        // square (512x512) asset under ContentScale.Fit + TopCenter only
+        // ever renders a WIDTH-tall square starting at the box's own top.
+        // The rest of that box, below the actual drawn duck, is empty
+        // letterboxing -- controls anchored to the STAGE's raw bottom edge
+        // (as before) floated in that empty gap, well below the duck's
+        // real silhouette (the bug: "~150px gap" in the screen-vs-storyboard
+        // gate). Computing the real letterboxed gap here and folding it
+        // into the controls' pull-up (below) anchors them to where the
+        // duck ACTUALLY ends, not to his box's nominal bottom edge.
+        val animatorBoxHeight = maxHeight * DUCK_HEIGHT_FRACTION
+        val visibleDuckHeight = minOf(maxWidth, animatorBoxHeight)
+        val letterboxGapBelowDuck = (animatorBoxHeight - visibleDuckHeight).coerceAtLeast(0.dp)
+
         ThoughtCloud(
             words = words,
             reducedMotion = reducedMotion,
@@ -151,11 +168,17 @@ fun DuckStage(
         )
         // Controls float ON the duck -- z-order above him, overlapping his
         // lower body (design-board addendum: "duck sits behind the control
-        // row rather than above it"). A small negative bottom padding pulls
-        // the row up off the true bottom edge and onto his feet without
-        // covering his face, which sits well above DUCK_HEIGHT_FRACTION's
-        // occluded slice.
-        Box(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(bottom = CONTROLS_DUCK_OVERLAP)) {
+        // row rather than above it", storyboard frame 1's own "-30px
+        // overlap" look). Pull-up = the letterboxing gap computed above
+        // (so this lands right at the duck's REAL rendered feet, not his
+        // box's empty nominal bottom) plus [CONTROLS_DUCK_OVERLAP] more to
+        // actually overlap his lower body rather than just touch it.
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(bottom = letterboxGapBelowDuck + CONTROLS_DUCK_OVERLAP),
+        ) {
             controls()
         }
         NotesCard(summary = summary, modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth())
@@ -184,8 +207,14 @@ const val DUCK_STAGE_TEST_TAG = "duck_stage"
  */
 const val DUCK_HEIGHT_FRACTION = 0.78f
 
-/** How far up from the true bottom edge the control row sits, so it overlaps the duck's lower body/feet rather than floating below him. */
-private val CONTROLS_DUCK_OVERLAP = 18.dp
+/**
+ * How far up from the duck's REAL rendered feet (not his box's raw bottom
+ * edge -- see the letterboxing note at this constant's call site) the
+ * control row sits, so it visibly overlaps his lower body/feet rather than
+ * just touching them. Matches the storyboard's own "-30px overlap" look
+ * (frame 1) at Pixel7 density.
+ */
+private val CONTROLS_DUCK_OVERLAP = 32.dp
 
 private const val WORDS_DIM_FACTOR_WHILE_THINKING = 0.35f
 
