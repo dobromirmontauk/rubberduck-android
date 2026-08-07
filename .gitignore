@@ -10,3 +10,4 @@ captures/
 *.iml
 __pycache__/
 *.pyc
+.worktrees/
