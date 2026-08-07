@@ -244,14 +244,18 @@ fun RecordingScreen(
                 // DuckWaveformBar's own KDoc for the three renderings) --
                 // the debug view keeps its own richer LoudnessMeterBar
                 // further down instead, so this only renders on the duck
-                // side of the toggle.
+                // side of the toggle. Device-test directive (drop #1, item
+                // 4): this was the very first thing the live tester looked
+                // for -- kept full-width (no side padding) and tall enough
+                // to read at a glance rather than disappearing under the
+                // timer.
                 if (!showDebugView) {
                     Spacer(modifier = Modifier.height(10.dp))
                     DuckWaveformBar(
                         activityState = activityState,
                         micLevel = transcript.micLevel,
                         sessionId = recordingState.sessionId,
-                        modifier = Modifier.padding(horizontal = 20.dp),
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
                 Box(
@@ -664,7 +668,10 @@ private fun DuckWaveformBar(
     }
     val isAutoPaused = activityState == RecordingActivityState.AUTO_PAUSED
     val tickColor = if (isAutoPaused) {
-        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+        // Device-test directive (drop #1, item 4): brighter than a plain
+        // dimmed onSurfaceVariant so "still hearing you" reads at a glance
+        // rather than nearly disappearing against a dark background.
+        AUTO_PAUSED_WAVEFORM_GREY
     } else {
         MaterialTheme.colorScheme.error
     }
@@ -710,8 +717,15 @@ private fun DuckWaveformTicks(history: List<Float>, tickColor: Color, modifier: 
 private val FLAT_WAVEFORM_HISTORY = List(LoudnessVisualizer.DEFAULT_HISTORY_LENGTH) { FLAT_WAVEFORM_TICK_LEVEL }
 private const val FLAT_WAVEFORM_TICK_LEVEL = 0.05f
 
-private val DUCK_WAVEFORM_HEIGHT = 14.dp
-private val DUCK_WAVEFORM_MIN_TICK_HEIGHT = 2.dp
+/** Device-test directive (drop #1, item 4): a visible mid-grey, not a barely-there theme tint -- the AUTO_PAUSED waveform needs to read as "still moving" at a glance. */
+private val AUTO_PAUSED_WAVEFORM_GREY = Color(0xFF9A9188)
+
+// Device-test directive (drop #1, item 4): the waveform was the very first
+// thing the live tester looked for -- taller and with a higher tick floor
+// than the original spec's bare-minimum "thin" reading, so it registers
+// immediately instead of blending into the background under the timer.
+private val DUCK_WAVEFORM_HEIGHT = 22.dp
+private val DUCK_WAVEFORM_MIN_TICK_HEIGHT = 3.dp
 
 /** Test-only anchors for [DuckWaveformBar]'s three renderings (bead asn-kd2). */
 const val DUCK_WAVEFORM_RECORDING_TEST_TAG = "recording_duck_waveform_recording"
