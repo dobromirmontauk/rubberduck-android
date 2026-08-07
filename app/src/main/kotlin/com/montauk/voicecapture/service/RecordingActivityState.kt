@@ -1,5 +1,6 @@
 package com.montauk.voicecapture.service
 
+import com.montauk.voicecapture.logging.RubberduckLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -52,16 +53,21 @@ object RecordingActivityStateHolder {
     private val _state = MutableStateFlow(RecordingActivityState.QUIET)
     val state: StateFlow<RecordingActivityState> = _state.asStateFlow()
 
+    /** Bead asn-jht: the single choke point every caller (VAD flips, auto-pause, manual pause/resume) goes through, so every real transition is logged exactly once, from one place, regardless of caller. */
     fun set(value: RecordingActivityState) {
+        val previous = _state.value
+        if (previous != value) {
+            RubberduckLog.i("RecordingActivityState", "transition", "from" to previous, "to" to value)
+        }
         _state.value = value
     }
 
     fun update(transform: (RecordingActivityState) -> RecordingActivityState) {
-        _state.value = transform(_state.value)
+        set(transform(_state.value))
     }
 
     /** Call at the start of every new recording session so a previous session's state never leaks in. */
     fun reset() {
-        _state.value = RecordingActivityState.QUIET
+        set(RecordingActivityState.QUIET)
     }
 }

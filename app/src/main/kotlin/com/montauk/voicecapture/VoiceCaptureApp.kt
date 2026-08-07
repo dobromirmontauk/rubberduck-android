@@ -5,6 +5,7 @@ import android.os.Build
 import android.util.Log
 import com.montauk.voicecapture.audio.AudioEngine
 import com.montauk.voicecapture.auth.isGithubOAuthConfigured
+import com.montauk.voicecapture.logging.RubberduckLog
 import com.montauk.voicecapture.session.SessionStore
 import com.montauk.voicecapture.session.TitleGenerator
 import com.montauk.voicecapture.session.TitleGeneratorFactory
@@ -96,6 +97,11 @@ class VoiceCaptureApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Bead asn-jht: first thing on process start, so every subsequent
+        // component's log lines (including this method's own) reach the
+        // rolling file sink, not just logcat.
+        RubberduckLog.init(filesDir)
+        RubberduckLog.i("Service", "app_start", "versionName" to appVersionName())
         sessionStore = SessionStore(File(filesDir, "sessions"))
         secretsStore = AppSecretsStore(this)
         tagTreeRepository = TagTreeRepository(TagTreeCache(File(filesDir, "tag-tree-cache")))

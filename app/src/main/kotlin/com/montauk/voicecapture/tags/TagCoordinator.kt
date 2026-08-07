@@ -1,5 +1,6 @@
 package com.montauk.voicecapture.tags
 
+import com.montauk.voicecapture.logging.RubberduckLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -160,7 +161,17 @@ class TagCoordinator(
         val tree = runCatching { resolveTree() }.getOrDefault(TagTree.EMPTY)
         val scored = runCatching { scorer.score(tail, currentTags, tree) }.getOrDefault(emptyList())
         val after = tracker.onScored(scored, nowMs)
-        return after.takeIf { it != before }
+        val changed = after.takeIf { it != before }
+        // Bead asn-jht: tag NAMES are explicitly allowed in logs (never
+        // transcript/audio content) -- see RubberduckLog's own KDoc.
+        RubberduckLog.i(
+            "Tags",
+            "score",
+            "before" to before.joinToString(",") { it.tag },
+            "after" to after.joinToString(",") { it.tag },
+            "changed" to (changed != null),
+        )
+        return changed
     }
 
     private fun trimOldLines(nowMs: Long) {

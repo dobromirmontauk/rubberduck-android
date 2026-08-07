@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.montauk.voicecapture.logging.RubberduckLog
 import com.montauk.voicecapture.service.SummaryUiState
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 import kotlinx.coroutines.delay
@@ -79,6 +80,12 @@ fun NotesCard(
     val choreographer = remember { NotesCardChoreographer() }
     var mode by remember { mutableStateOf(choreographer.mode) }
     var dismissedBySwipe by remember { mutableStateOf(false) }
+
+    // Bead asn-jht: restarts (so only logs) when mode actually changes, not
+    // on the choreographer's own ~200ms tick loop below.
+    LaunchedEffect(mode) {
+        RubberduckLog.i("Notes", "mode_change", "mode" to mode)
+    }
 
     LaunchedEffect(summary.updatedAtMs) {
         if (summary.bullets.isNotEmpty()) {

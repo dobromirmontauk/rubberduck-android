@@ -1,5 +1,6 @@
 package com.montauk.voicecapture.duck
 
+import com.montauk.voicecapture.logging.RubberduckLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,10 +27,23 @@ object DuckPulseStateHolder {
 
     private var nonce = 0
 
-    /** Publishes a fresh [DuckPulseEvent] for [pulse] -- always a new, distinct event (see [DuckPulseEvent]'s own KDoc for why the nonce matters) even if [pulse] repeats back to back. */
-    fun emit(pulse: DuckPulse) {
+    /**
+     * Publishes a fresh [DuckPulseEvent] for [pulse] -- always a new, distinct
+     * event (see [DuckPulseEvent]'s own KDoc for why the nonce matters) even
+     * if [pulse] repeats back to back. [source] (bead asn-jht) is a short
+     * label for which real pipeline event triggered this dispatch (e.g.
+     * "final_segment", "tag_approved") -- callers should always pass one;
+     * it's optional only so existing/test call sites that don't care about
+     * the log line still compile unchanged.
+     */
+    fun emit(pulse: DuckPulse, source: String? = null) {
         nonce++
         _events.value = DuckPulseEvent(pulse, nonce)
+        if (source != null) {
+            RubberduckLog.i("DuckPulse", "dispatch", "pulse" to pulse, "source" to source)
+        } else {
+            RubberduckLog.i("DuckPulse", "dispatch", "pulse" to pulse)
+        }
     }
 
     /** Call at the start of every new recording session so a previous session's last pulse never replays into a fresh one. */

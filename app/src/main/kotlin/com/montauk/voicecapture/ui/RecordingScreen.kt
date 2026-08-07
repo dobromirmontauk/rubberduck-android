@@ -84,6 +84,7 @@ import com.montauk.voicecapture.duck.ThoughtCloudWords
 import com.montauk.voicecapture.duck.rememberReducedMotionEnabled
 import com.montauk.voicecapture.duck.shouldPlayPulse
 import com.montauk.voicecapture.duck.toDuckState
+import com.montauk.voicecapture.logging.RubberduckLog
 import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.session.SwipeHintStateHolder
 import com.montauk.voicecapture.service.LatencyBadgeStateHolder
@@ -245,6 +246,12 @@ fun RecordingScreen(
         thinkActive = nowMs < thinkingUntilMs,
         notesCardActive = notesCardActive,
     )
+    // Bead asn-jht: LaunchedEffect keyed on duckState only restarts (so only
+    // logs) when the effective state actually changes -- not on every
+    // recomposition this composable's other, more frequent state triggers.
+    LaunchedEffect(duckState) {
+        RubberduckLog.i("DuckState", "change", "state" to duckState)
+    }
 
     // Bead asn-02h.3: shouldPlayPulse must be evaluated against duckState's
     // value AT THE MOMENT [duckPulseEvent] actually changes, not reactively
