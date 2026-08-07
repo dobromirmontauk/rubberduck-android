@@ -2,10 +2,12 @@ package com.montauk.voicecapture.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.core.app.ApplicationProvider
 import com.montauk.voicecapture.VoiceCaptureApp
+import com.montauk.voicecapture.duck.DUCK_ANIMATOR_TEST_TAG
 import com.montauk.voicecapture.duck.LATENCY_BADGE_TEST_TAG
 import com.montauk.voicecapture.duck.NOTES_CARD_TEST_TAG
 import com.montauk.voicecapture.service.LatencyBadgeStateHolder
@@ -103,5 +105,28 @@ class RecordingScreenLayoutATest {
 
         composeTestRule.onNodeWithTag(NOTES_CARD_TEST_TAG).assertIsDisplayed()
         composeTestRule.onNodeWithText("Budget cap set at \$80k", substring = true).assertIsDisplayed()
+    }
+
+    // Bead asn-dp2: the duck's WRITE-pose coordination with the notes card --
+    // see DuckAnimator's own contentDescription test hook.
+
+    @Test
+    fun `the duck is NOT in the WRITE pose before any summary has landed`() {
+        startOnDuckView()
+
+        composeTestRule.onNodeWithContentDescription("duck_state_WRITE").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a fresh summary switches the duck to the held WRITE pose while the card is up`() {
+        startOnDuckView()
+
+        SummaryStateHolder.update(
+            SummaryUiState(bullets = listOf("Comparing 3 contractor bids"), newestIndex = 0, updatedAtMs = System.currentTimeMillis()),
+        )
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithContentDescription("duck_state_WRITE").assertIsDisplayed()
+        composeTestRule.onNodeWithTag(DUCK_ANIMATOR_TEST_TAG).assertIsDisplayed()
     }
 }

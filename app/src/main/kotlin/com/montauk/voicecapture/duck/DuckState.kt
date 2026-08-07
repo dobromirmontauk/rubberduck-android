@@ -11,11 +11,21 @@ package com.montauk.voicecapture.duck
  * fired (eyes fully closed -- auto and manual pause are visually identical,
  * see [toDuckState] for exactly where each boundary falls); [THINK] for the
  * span of a summary round's real network
- * call ([com.montauk.voicecapture.service.SummaryCallStateHolder]). A base
- * state persists until it's explicitly changed -- see [DuckAnimationEngine]
- * for how a brief [DuckPulse] can interrupt it without changing it.
+ * call ([com.montauk.voicecapture.service.SummaryCallStateHolder]); [WRITE]
+ * (bead asn-dp2.5) for as long as the duck's notes card is entering,
+ * visible, or leaving (design board: "the duck keeps his write pose the
+ * whole time the card is up") -- distinct from [DuckPulse.WRITE]'s brief
+ * ~700ms pulse (that one fires once, for "a summary round completed"; this
+ * base state HOLDS for the card's full ~5-6s+ on-screen window, which
+ * easily outlasts a single pulse). Both map to the identical [DuckFrame.WRITE]
+ * pose -- reusing the same drawable, just with a held-vs-momentary
+ * lifetime. See [com.montauk.voicecapture.ui.RecordingScreen]'s `duckState`
+ * computation for the full override priority
+ * ([SLEEP] > [WRITE] > [THINK] > [ATTENTIVE]/[DROWSY]). A base state
+ * persists until it's explicitly changed -- see [DuckAnimationEngine] for
+ * how a brief [DuckPulse] can interrupt it without changing it.
  */
-enum class DuckState { ATTENTIVE, DROWSY, SLEEP, THINK }
+enum class DuckState { ATTENTIVE, DROWSY, SLEEP, THINK, WRITE }
 
 /**
  * A brief one-shot pose that plays over whatever [DuckState] is current,

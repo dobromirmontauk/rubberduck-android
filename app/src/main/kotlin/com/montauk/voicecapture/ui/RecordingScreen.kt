@@ -132,15 +132,25 @@ import kotlin.math.roundToInt
  * is the expected default. The pause pill lives only in the duck view's
  * floating controls -- there is no pause affordance in the debug view.
  *
- * The duck's LISTENING/SLEEPY/SLEEPING state is derived directly from
+ * The duck's ATTENTIVE/DROWSY/SLEEP base state is derived directly from
  * [RecordingActivityStateHolder]'s real `StateFlow<RecordingActivityState>`
  * (bead asn-r60) via [toDuckState] -- this superseded a crude
  * transcript-derived stand-in (`crudeRecordingActivity`) once asn-r60 landed
- * on `main`. THINKING briefly overrides whichever of those is current for
+ * on `main`. [DuckState.THINK] still overrides that base state for
  * [THINKING_DISPLAY_MS] every time [SummaryStateHolder] publishes a fresh
- * summary (design board: "duck plays 'taking notes', then the notes card
- * slides up") -- the closest real signal available today; there's no
- * equivalent signal yet for a tag-scorer LLM call in flight.
+ * summary -- the closest signal available today for "a round's network
+ * call is in flight" until asn-02h's real
+ * [com.montauk.voicecapture.service.SummaryCallStateHolder] wiring lands
+ * (there's still no equivalent signal for a tag-scorer LLM call in flight
+ * either). [DuckState.WRITE] (bead asn-dp2.5) then overrides THAT for
+ * exactly as long as [DuckStage]'s notes card is entering, visible, or
+ * leaving (design board: "the duck keeps his write pose the whole time the
+ * card is up") -- [notesCardActive] is fed from [NotesCard]'s own
+ * [NotesCardChoreographer.isWritePoseActive] via [DuckStage]'s
+ * `onNotesCardActiveChanged` callback. Priority, highest first:
+ * [DuckState.SLEEP] (never overridden -- paused suspends the card's own
+ * business too) > [DuckState.WRITE] (card up) > [DuckState.THINK] (round in
+ * flight) > the ATTENTIVE/DROWSY base.
  *
  * The thought cloud's BLUE/PURPLE/GREEN/WHITE split comes from
  * [ThoughtCloudWords.fromTagRailChips] over the same [rail][TagRailStateHolder]
@@ -206,12 +216,20 @@ fun RecordingScreen(
     LaunchedEffect(summary.updatedAtMs) {
         if (summary.bullets.isNotEmpty()) thinkingUntilMs = System.currentTimeMillis() + THINKING_DISPLAY_MS
     }
+    // Bead asn-dp2.5: DuckStage's own NotesCardChoreographer.isWritePoseActive
+    // reading, bubbled up via onNotesCardActiveChanged -- true for exactly
+    // as long as the notes card is entering, visible, or leaving.
+    var notesCardActive by remember { mutableStateOf(false) }
     // Bead asn-3h6: NOT `remember(activityState)` anymore -- DROWSY depends
     // on transcript.autoPauseFillFraction too, which changes continuously
     // while activityState stays QUIET, so the mapping has to re-run on every
     // transcript update, not just on activityState transitions.
     val baseDuckState = activityState.toDuckState(transcript.autoPauseFillFraction)
-    val duckState = if (nowMs < thinkingUntilMs) DuckState.THINK else baseDuckState
+    val duckState = effectiveDuckState(
+        baseDuckState = baseDuckState,
+        thinkActive = nowMs < thinkingUntilMs,
+        notesCardActive = notesCardActive,
+    )
 
     // Bead vn-edu.46's keyless guard, preserved: no key means NO word-cloud
     // data at all, even if TagRailStateHolder is stale/non-empty (shouldn't
@@ -325,6 +343,7 @@ fun RecordingScreen(
                         latencyState = latencyState,
                         onLatencyBadgeTap = {}, // asn-55q's L2 HUD opens here once that bead lands
                         happyBounceTrigger = happyBounceTrigger,
+                        onNotesCardActiveChanged = { notesCardActive = it },
                         modifier = Modifier
                             .fillMaxWidth()
                             .fillMaxHeight(DUCK_VIEW_SCREEN_FRACTION)
@@ -430,9 +449,33 @@ fun RecordingScreen(
 /** Test-only anchor for the duck-view/debug-transcript-view double-tap toggle (bead asn-3sm). */
 const val DUCK_TRANSCRIPT_TOGGLE_TEST_TAG = "recording_duck_transcript_toggle"
 
+/**
+ * Bead asn-dp2.5: the duck's effective base state once every override is
+ * folded in -- a pure function so the priority itself is unit-testable
+ * without a Compose test, separate from [RecordingScreenLayoutATest]'s live
+ * render check. Priority, highest first: [DuckState.SLEEP] (never
+ * overridden by anything -- paused suspends the notes card's own business
+ * too, and a round genuinely can't still be "in flight" while paused
+ * either) > [DuckState.WRITE] (the notes card is up, [notesCardActive]) >
+ * [DuckState.THINK] ([thinkActive] -- a summary round's network call is
+ * approximated as still in flight, see the class KDoc's THINK paragraph) >
+ * [baseDuckState] (ATTENTIVE/DROWSY from [toDuckState]). WRITE wins over
+ * THINK because a card up implies a round already completed -- a more
+ * specific, longer-lived signal than "a round is still in flight." SLEEP's
+ * own check runs FIRST, unconditionally, rather than being folded into the
+ * THINK/WRITE branches individually -- an earlier draft that only guarded
+ * WRITE-over-SLEEP left THINK free to override SLEEP on its own (the same
+ * gap the pre-asn-dp2 code silently had), which a state test here caught.
+ */
+internal fun effectiveDuckState(baseDuckState: DuckState, thinkActive: Boolean, notesCardActive: Boolean): DuckState {
+    if (baseDuckState == DuckState.SLEEP) return DuckState.SLEEP
+    if (notesCardActive) return DuckState.WRITE
+    return if (thinkActive) DuckState.THINK else baseDuckState
+}
+
 private const val THINKING_TICK_INTERVAL_MS = 250L
 
-/** How long THINKING overrides the duck's base state after a fresh summary lands (design board: "holds a few seconds"). */
+/** How long THINK overrides the duck's base state after a fresh summary lands (design board: "holds a few seconds") -- see the class KDoc's priority note. */
 const val THINKING_DISPLAY_MS = 1_800L
 
 private val STOP_BAR_HEIGHT = 140.dp

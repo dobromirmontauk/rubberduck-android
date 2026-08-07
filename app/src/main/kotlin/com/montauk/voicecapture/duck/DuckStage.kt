@@ -30,11 +30,15 @@ import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
  * together visually. [ZzTrail] rises from his head during
  * [DuckState.DROWSY] (bead asn-3h6: "gets heavy-lidded with a rising trail
  * of Z's -- still recording", per the v5.3 storyboard) and
- * [DuckState.SLEEP]. [NotesCard] and [controls] both render as pure
- * overlays on top of the duck -- neither ever resizes or reflows him; see
- * each composable's own KDoc for why. [LatencyBadge] sits bottom-right
- * (hidden at [com.montauk.voicecapture.service.LatencySeverity.OK]). No
- * persistent notepad, no transcript, no other chrome.
+ * [DuckState.SLEEP]. [controls] renders as a pure overlay on top of the
+ * duck -- it never resizes or reflows him; see its own KDoc for why.
+ * [NotesCard] (bead asn-dp2 v2 revision) overlays the REMAINING MARGIN AT
+ * THIS BOX'S OWN TOP -- the word cloud's own space (sized to exactly [1f]
+ * minus [DUCK_HEIGHT_FRACTION]) -- rather than the duck's own lower
+ * fraction, so the duck is never covered even for the card's ~5-6s hold.
+ * [LatencyBadge] sits bottom-right (hidden at
+ * [com.montauk.voicecapture.service.LatencySeverity.OK]). No persistent
+ * notepad, no transcript, no other chrome.
  *
  * **This composable's own box must equal the screen's actual bottom
  * two-thirds (device-test/screen-gate fix, drop #1+#2).** The design
@@ -56,8 +60,13 @@ import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
  * composable is what translates them into the pulse-based
  * [DuckAnimator]/[DuckAnimationEngine] API ([DuckPulse.CELEBRATE] and
  * [DuckPulse.RAISE_HAND] respectively). Real event-trigger wiring for the
- * other pulses ([DuckPulse.BLINK]/[DuckPulse.NOD]/[DuckPulse.WRITE]) is
- * asn-02h's job, not this bead's.
+ * other pulses ([DuckPulse.BLINK]/[DuckPulse.NOD]) is asn-02h's job, not
+ * this bead's -- [DuckPulse.WRITE] the one-shot pulse still is too, but the
+ * HELD write pose while the notes card is up (bead asn-dp2.5) is a
+ * different, separate signal: see
+ * [com.montauk.voicecapture.ui.RecordingScreen]'s `duckState` computation
+ * for the base-state priority (notesCardActive -> [DuckState.WRITE],
+ * overriding everything except [DuckState.SLEEP]).
  */
 @Composable
 fun DuckStage(
@@ -70,6 +79,7 @@ fun DuckStage(
     onLatencyBadgeTap: () -> Unit,
     modifier: Modifier = Modifier,
     happyBounceTrigger: Int = 0,
+    onNotesCardActiveChanged: (Boolean) -> Unit = {},
     controls: @Composable () -> Unit = {},
 ) {
     val dozingOrAsleep = duckState == DuckState.DROWSY || duckState == DuckState.SLEEP
@@ -181,7 +191,16 @@ fun DuckStage(
         ) {
             controls()
         }
-        NotesCard(summary = summary, modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth())
+        // Bead asn-dp2 v2: sized to exactly the duck's own complement so the
+        // two boxes never overlap -- the word cloud above already lives in
+        // this same fraction (see ThoughtCloud's TOP_SLOTS/CANDIDATE_SLOTS),
+        // which is why the card visually reads as "over the word cloud."
+        NotesCard(
+            summary = summary,
+            reducedMotion = reducedMotion,
+            onWritePoseActiveChanged = onNotesCardActiveChanged,
+            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().fillMaxHeight(1f - DUCK_HEIGHT_FRACTION),
+        )
     }
 }
 

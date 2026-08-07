@@ -136,6 +136,9 @@ private fun DuckState.toFrame(): DuckFrame = when (this) {
     DuckState.DROWSY -> DuckFrame.DROWSY
     DuckState.SLEEP -> DuckFrame.SLEEP
     DuckState.THINK -> DuckFrame.THINK
+    // Bead asn-dp2.5: same DuckFrame.WRITE pose DuckPulse.WRITE already
+    // renders (see DuckState's own KDoc) -- held rather than momentary.
+    DuckState.WRITE -> DuckFrame.WRITE
 }
 
 private fun DuckPulse.toFrame(): DuckFrame = when (this) {

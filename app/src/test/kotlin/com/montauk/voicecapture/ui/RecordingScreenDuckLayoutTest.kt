@@ -11,10 +11,13 @@ import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.duck.DUCK_ANIMATOR_TEST_TAG
 import com.montauk.voicecapture.duck.DUCK_STAGE_TEST_TAG
+import com.montauk.voicecapture.duck.NOTES_CARD_TEST_TAG
 import com.montauk.voicecapture.duck.PROPOSED_WORD_TEST_TAG_PREFIX
 import com.montauk.voicecapture.service.RecordingActivityStateHolder
 import com.montauk.voicecapture.service.RecordingStateHolder
 import com.montauk.voicecapture.service.RecordingUiState
+import com.montauk.voicecapture.service.SummaryStateHolder
+import com.montauk.voicecapture.service.SummaryUiState
 import com.montauk.voicecapture.service.TagRailStateHolder
 import com.montauk.voicecapture.service.TranscriptStateHolder
 import com.montauk.voicecapture.session.RecordingMode
@@ -56,12 +59,14 @@ class RecordingScreenDuckLayoutTest {
         TranscriptStateHolder.reset()
         TagRailStateHolder.reset()
         RecordingActivityStateHolder.reset()
+        SummaryStateHolder.reset()
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-07_0900_layout", mode = RecordingMode.LISTEN) }
     }
 
     @After
     fun tearDown() {
         RecordingActivityStateHolder.reset()
+        SummaryStateHolder.reset()
     }
 
     private fun renderDuckView() {
@@ -170,5 +175,36 @@ class RecordingScreenDuckLayoutTest {
 
         assertTrue("word (top=${word.top}) should be below the timer row (bottom=${timer.bottom})", word.top >= timer.bottom)
         assertTrue("word (top=${word.top}) should sit above the duck's head apex (animator top=${animator.top})", word.top < animator.top)
+    }
+
+    /**
+     * Bead asn-dp2.1 (storyboard v5.4 frame 6, ported against the landed
+     * asn-bb4/kd2 layout): the notes card overlays the word-cloud region --
+     * below the timer/waveform chrome, at or above the duck's own head
+     * apex -- and the duck himself stays fully visible (his
+     * [DUCK_ANIMATOR_TEST_TAG] bounds are unaffected by the card being up,
+     * same head-apex/full-width invariant as the first test in this file).
+     */
+    @Test
+    fun `notes card sits below the timer row and above the duck's head, duck fully visible`() {
+        RecordingActivityStateHolder.set(com.montauk.voicecapture.service.RecordingActivityState.SPEAKING)
+        renderDuckView()
+        val animatorBeforeCard = composeTestRule.onNodeWithTag(DUCK_ANIMATOR_TEST_TAG).getUnclippedBoundsInRoot()
+
+        SummaryStateHolder.update(
+            SummaryUiState(bullets = listOf("Comparing 3 contractor bids"), newestIndex = 0, updatedAtMs = System.currentTimeMillis()),
+        )
+        composeTestRule.waitForIdle()
+
+        val timer = composeTestRule.onNodeWithText("00:00").getUnclippedBoundsInRoot()
+        val card = composeTestRule.onNodeWithTag(NOTES_CARD_TEST_TAG).getUnclippedBoundsInRoot()
+        val animator = composeTestRule.onNodeWithTag(DUCK_ANIMATOR_TEST_TAG).getUnclippedBoundsInRoot()
+
+        assertTrue("card (top=${card.top}) should sit below the timer row (bottom=${timer.bottom})", card.top >= timer.bottom)
+        assertTrue("card (bottom=${card.bottom}) should sit at or above the duck's head apex (animator top=${animator.top})", card.bottom <= animator.top)
+        assertTrue(
+            "the duck's own bounds must be unaffected by the card being up -- he's never covered",
+            animator == animatorBeforeCard,
+        )
     }
 }
