@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -66,8 +67,21 @@ fun ThoughtCloud(
         val topWords = visibleWords.filter { it.status != TagWordStatus.CANDIDATE }.take(ThoughtCloudWords.MAX_TOP)
         val candidateWords = visibleWords.filter { it.status == TagWordStatus.CANDIDATE }.take(ThoughtCloudWords.MAX_CANDIDATES)
 
-        topWords.forEachIndexed { index, word ->
-            val slot = TOP_SLOTS.getOrElse(index) { TOP_SLOTS.last() }
+        // Bead asn-76m: slots are assigned by each word's own stable key, NOT
+        // by its position in `topWords`/`candidateWords` -- approving a word
+        // promotes it in TagChipRail.chips()'s merge order (user chips move
+        // to the front, ahead of remaining suggested chips), which reshuffles
+        // every other word's *list index* even though nothing about their
+        // own state changed. Indexing into TOP_SLOTS/CANDIDATE_SLOTS by that
+        // list position (the old forEachIndexed) is exactly what made every
+        // chip "jump" on a single approval. Keying by text instead means a
+        // word keeps its slot for as long as it keeps appearing, independent
+        // of where the merged list puts it.
+        val topSlotForKey = rememberStableSlotAssignment(topWords.map { it.text }, TOP_SLOTS.size)
+        val candidateSlotForKey = rememberStableSlotAssignment(candidateWords.map { it.text }, CANDIDATE_SLOTS.size)
+
+        topWords.forEach { word ->
+            val slot = TOP_SLOTS[topSlotForKey.getValue(word.text)]
             ThoughtCloudWordView(
                 word = word,
                 slot = slot,
@@ -83,8 +97,8 @@ fun ThoughtCloud(
                 },
             )
         }
-        candidateWords.forEachIndexed { index, word ->
-            val slot = CANDIDATE_SLOTS.getOrElse(index) { CANDIDATE_SLOTS.last() }
+        candidateWords.forEach { word ->
+            val slot = CANDIDATE_SLOTS[candidateSlotForKey.getValue(word.text)]
             ThoughtCloudWordView(
                 word = word,
                 slot = slot,
@@ -122,6 +136,38 @@ private val CANDIDATE_SLOTS = listOf(
     CloudSlot(topFraction = 0.36f, startFraction = null, endFraction = 0.06f, minFontSp = 10f, maxFontSp = 13f),
     CloudSlot(topFraction = 0.45f, startFraction = 0.16f, endFraction = null, minFontSp = 10f, maxFontSp = 12f),
 )
+
+/**
+ * Assigns each of [keys] a stable index into a fixed-size pool of
+ * [slotCount] slots, remembered by key across recompositions (bead asn-76m
+ * -- see the call site's KDoc for why index-based assignment made every
+ * chip jump on a single approval). A key keeps whatever slot it was first
+ * given for as long as it keeps appearing in [keys]; when it drops out (a
+ * candidate's confidence faded below [CONFIDENCE_FADE_THRESHOLD], the
+ * scorer stopped suggesting it) that slot frees up for the next key that
+ * needs one. [keys] is expected never to exceed [slotCount] (callers pass
+ * already-`take(MAX_TOP)`/`take(MAX_CANDIDATES)`-limited lists), so a free
+ * slot always exists for a genuinely new key.
+ *
+ * Deliberately a plain (non-State) [remember]ed [MutableMap] mutated
+ * in-place each composition, not a derived `remember(keys)` recompute --
+ * the whole point is to *carry forward* the previous assignment across a
+ * keys change rather than start over from it.
+ */
+@Composable
+private fun rememberStableSlotAssignment(keys: List<String>, slotCount: Int): Map<String, Int> {
+    val assignment = remember { mutableMapOf<String, Int>() }
+    assignment.keys.retainAll(keys.toSet())
+    val used = assignment.values.toHashSet()
+    for (key in keys) {
+        if (key !in assignment) {
+            val freeSlot = (0 until slotCount).first { it !in used }
+            assignment[key] = freeSlot
+            used += freeSlot
+        }
+    }
+    return assignment
+}
 
 @Composable
 private fun ThoughtCloudWordView(
