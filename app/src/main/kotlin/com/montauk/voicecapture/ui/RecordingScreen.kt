@@ -748,7 +748,7 @@ private fun DuckWaveformBar(
     // first frame already read as a settled row of ticks; the LaunchedEffect
     // below still scrolls in real variation as the live level changes.
     val visualizer = remember(sessionId) {
-        LoudnessVisualizer().apply { repeat(LoudnessVisualizer.DEFAULT_HISTORY_LENGTH) { onLevel(micLevel) } }
+        LoudnessVisualizer(historyLength = DUCK_WAVEFORM_TICK_COUNT).apply { repeat(DUCK_WAVEFORM_TICK_COUNT) { onLevel(micLevel) } }
     }
     var history by remember(visualizer) { mutableStateOf(visualizer.history) }
     LaunchedEffect(micLevel, visualizer) {
@@ -803,8 +803,11 @@ private fun DuckWaveformTicks(history: List<Float>, tickColor: Color, modifier: 
  * live level to show, so this renders a fixed, uniformly-low tick row
  * instead of letting the last-seen level linger on screen.
  */
-private val FLAT_WAVEFORM_HISTORY = List(LoudnessVisualizer.DEFAULT_HISTORY_LENGTH) { FLAT_WAVEFORM_TICK_LEVEL }
+private val FLAT_WAVEFORM_HISTORY = List(DUCK_WAVEFORM_TICK_COUNT) { FLAT_WAVEFORM_TICK_LEVEL }
 private const val FLAT_WAVEFORM_TICK_LEVEL = 0.05f
+
+/** Bead asn-kd2.1: "~24 discrete ticks" -- matches the storyboard reference's own tick count, not the debug meter's unrelated [LoudnessVisualizer.DEFAULT_HISTORY_LENGTH] (28). */
+private const val DUCK_WAVEFORM_TICK_COUNT = 24
 
 /** Device-test directive (drop #1, item 4): a visible mid-grey, not a barely-there theme tint -- the AUTO_PAUSED waveform needs to read as "still moving" at a glance. */
 private val AUTO_PAUSED_WAVEFORM_GREY = Color(0xFF9A9188)

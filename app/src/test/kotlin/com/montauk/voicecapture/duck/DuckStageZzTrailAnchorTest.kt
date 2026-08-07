@@ -42,12 +42,12 @@ class DuckStageZzTrailAnchorTest {
     @get:Rule
     val composeTestRule = createComposeRule()
 
-    private fun setUpSleepingStage() {
+    private fun setUpDozingStage(duckState: DuckState) {
         composeTestRule.setContent {
             VoiceCaptureTheme {
                 Box(modifier = Modifier.width(360.dp).height(640.dp)) {
                     DuckStage(
-                        duckState = DuckState.SLEEP,
+                        duckState = duckState,
                         words = ThoughtCloudWords.EMPTY,
                         reducedMotion = true,
                         onApproveWord = {},
@@ -63,7 +63,7 @@ class DuckStageZzTrailAnchorTest {
 
     @Test
     fun `the zz trail's box shares the exact bounds of the duck animator's box`() {
-        setUpSleepingStage()
+        setUpDozingStage(DuckState.SLEEP)
 
         val duckBounds = composeTestRule.onNodeWithTag(DUCK_ANIMATOR_TEST_TAG).getUnclippedBoundsInRoot()
         val trailBounds = composeTestRule.onNodeWithTag(ZZ_TRAIL_TEST_TAG).getUnclippedBoundsInRoot()
@@ -72,28 +72,47 @@ class DuckStageZzTrailAnchorTest {
         assertTrue("trail bottom ${trailBounds.bottom} should equal duck box bottom ${duckBounds.bottom}", trailBounds.bottom == duckBounds.bottom)
     }
 
+    /**
+     * Bead asn-kd2.4: "smallest z within ~16dp of the duck's head apex,"
+     * in BOTH [DuckState.DROWSY] (bead asn-3h6: sustained quiet, still
+     * recording) and [DuckState.SLEEP] (either pause kind) -- tightened
+     * from an earlier ~24dp tolerance. Checks BOTH axes -- the smallest
+     * z's top-left corner against the head apex point (the duck box's own
+     * top-center, where [DuckPoseFrame]'s [androidx.compose.ui.Alignment.TopCenter]
+     * fix places the actual rendered head) -- not just vertical proximity,
+     * since "touching the silhouette" means close in both x and y.
+     */
     @Test
-    fun `the smallest z sits right at the duck box's top edge -- the head -- not floating far above it`() {
-        setUpSleepingStage()
+    fun `the smallest z sits within 16dp of the duck's head apex in SLEEP`() {
+        assertSmallestZWithinToleranceOfHeadApex(DuckState.SLEEP)
+    }
+
+    @Test
+    fun `the smallest z sits within 16dp of the duck's head apex in DROWSY`() {
+        assertSmallestZWithinToleranceOfHeadApex(DuckState.DROWSY)
+    }
+
+    private fun assertSmallestZWithinToleranceOfHeadApex(duckState: DuckState) {
+        setUpDozingStage(duckState)
 
         val duckBounds = composeTestRule.onNodeWithTag(DUCK_ANIMATOR_TEST_TAG).getUnclippedBoundsInRoot()
         val smallestZBounds = composeTestRule.onNodeWithText("z").getUnclippedBoundsInRoot()
+        val headApexX = (duckBounds.left + duckBounds.right) / 2
+        val headApexY = duckBounds.top
 
-        // "Touching the head silhouette": within a small tolerance of the
-        // duck box's own top edge (which DuckPoseFrame's TopCenter fix makes
-        // the actual rendered head), not the old bug's ~46dp overshoot
-        // clear above it (or the even older bug's ~600dp overshoot below,
-        // near the duck's feet).
-        val tolerance = 24.dp
+        val tolerance = 16.dp
+        val dx = (smallestZBounds.left - headApexX).value
+        val dy = (smallestZBounds.top - headApexY).value
+        val distance = kotlin.math.sqrt(dx * dx + dy * dy)
         assertTrue(
-            "smallest z top ${smallestZBounds.top} should be within $tolerance of the head at ${duckBounds.top}",
-            smallestZBounds.top >= duckBounds.top - tolerance && smallestZBounds.top <= duckBounds.top + tolerance,
+            "[$duckState] smallest z (left=${smallestZBounds.left}, top=${smallestZBounds.top}) should be within $tolerance of the head apex (x=$headApexX, y=$headApexY), was ${distance}dp",
+            distance <= tolerance.value,
         )
     }
 
     @Test
     fun `the trail ascends up-and-right -- the biggest Z is higher and further right than the smallest z`() {
-        setUpSleepingStage()
+        setUpDozingStage(DuckState.SLEEP)
 
         val smallZBounds = composeTestRule.onNodeWithText("z").getUnclippedBoundsInRoot()
         // Two "Z" nodes exist (medium, then large, in composition order) --
