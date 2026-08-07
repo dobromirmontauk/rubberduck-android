@@ -2,14 +2,127 @@
 
 [![CI](https://github.com/dobromirmontauk/voice-capture-android/actions/workflows/ci.yml/badge.svg)](https://github.com/dobromirmontauk/voice-capture-android/actions/workflows/ci.yml)
 
-Someone to talk to to help think through your own thoughts. rubberduck is a
-minimal voice-first Android capture app: record, live-transcribe, ship
-sessions to voice-vault.
+**Someone to talk to, so you can think.**
 
-The recording core (crash-safe WAL, session store, foreground service),
-live streaming transcription (AssemblyAI Universal-Streaming), confidence-
-ranked live topic tags (Claude Haiku, keyless fallback), and bundle upload
-(to the git-backed voice-vault, pure HTTPS) are all wired up.
+Your best ideas show up on a walk, a drive, in the shower — and evaporate
+before you get anywhere to write them down. rubberduck fixes that: you talk,
+a claymation rubber duck listens, and everything you say ends up organized in
+your own notes, tagged and summarized, without you touching a keyboard.
+
+## How it works
+
+Tap record and start talking. rubberduck streams your voice to a live
+transcriber as you go, so the duck on screen is always caught up with you —
+no waiting, no "processing." Every so often it summarizes what you've said
+into a running set of notes, and it's always watching for new subjects so it
+can label them for you. When you stop, the session — audio, transcript, tags,
+notes — uploads straight into a git-backed vault of Markdown files, where a
+follow-on pipeline files it into the right place. A few minutes later you can
+open Obsidian and find your kitchen-remodel ramblings sitting under
+`kitchen-remodel.md`, summarized, tagged, and linked to everything else you've
+ever said about it.
+
+```
+   talk it out              the duck listens              filed for you
+┌───────────────┐         ┌───────────────────┐        ┌──────────────────┐
+│  walk / drive │  ──▶    │ live transcript +  │  ──▶   │ Obsidian vault,  │
+│  press record │         │ topic tags + notes │        │ tagged & summar- │
+└───────────────┘         └───────────────────┘        │ ized, git history │
+                                                          └──────────────────┘
+```
+
+Nothing is ever silently dropped: audio is written to a crash-safe log the
+instant it's captured, before transcription or tagging ever see it, so a
+killed app or a dead phone loses at most a second of sound.
+
+## The duck is the interface
+
+The whole point of rubberduck is that talking to it should feel like talking
+to *something*, not filling out a form. The Listen screen is built entirely
+around a claymation duck who reacts to you in real time — this is the primary
+surface of the app, not a decoration on top of a transcript view.
+
+**He's listening, visibly.** While you talk, the duck blinks every couple of
+seconds as audio streams in and nods when a chunk of transcription lands.
+Between beats he's still — motion is punctuation, not fidgeting. A thin live
+waveform under the timer is the "yes, I can hear you" signal, and a
+soft-edged cloud of topic words floats around him, each word sized by how
+confident the app currently is that it matters and colored by its status:
+blue for a tag you've already got, purple for something new the duck thinks
+you're onto, green for something you've confirmed.
+
+**New topics arrive as ideas, not database rows.** The moment the app spots a
+subject worth naming, the duck raises a wing eagerly and the word gets
+*written* into existence — letter by letter, in a handwritten scrawl — before
+it settles into type and drifts into the cloud with the rest.
+
+<p align="center">
+  <img src="docs/screenshots/new-tag-handwritten-entrance-1.png" width="46%" alt="A new tag mid-write, in a handwritten scrawl" />
+  <img src="docs/screenshots/new-tag-handwritten-entrance-2.png" width="46%" alt="The same tag settled into type, marked new?" />
+</p>
+
+Tap a purple "new?" word to confirm it's really a topic, and the duck
+throws both wings up and bounces with joy — he got it right. Every other word
+in the cloud holds its exact position; approving one tag never re-shuffles
+the rest.
+
+<p align="center">
+  <img src="docs/screenshots/listen-tag-approved-celebrate.png" width="320" alt="The duck celebrating a tag approval with both wings up" />
+</p>
+
+**He takes notes, and shows you his work.** Roughly once a minute the duck
+switches into a writing pose and a notes card slides in over the word cloud
+— never covering him — with the latest summary bullets, the newest one glowing
+duck-yellow. Swipe right to approve a note; swipe left to discard it, and
+rubberduck remembers that discard so the same note doesn't come back next
+round.
+
+<p align="center">
+  <img src="docs/screenshots/duck-notes-card.png" width="320" alt="The duck's notes card with summary bullets, swipe left to discard / right to approve" />
+</p>
+
+**Silence is handled honestly, not hidden.** Stop talking for a few seconds
+and the duck gets heavy-lidded with a rising trail of Z's — still recording,
+just noting that it's quiet. Stay quiet long enough and a warm gradient fills
+the pause pill in place (nothing else on screen moves); if you keep talking
+it drains back out. Let it fill all the way and the duck actually falls
+asleep: the timer freezes, but the mic keeps a few seconds of buffer so
+picking the conversation back up loses nothing. Tap pause yourself and you
+get the same sleeping duck, except it's a hard mute this time — talking
+won't wake him, only the Resume button will. The live waveform tells you
+which is which even with your eyes half on the road: **red** while recording,
+**grey** while auto-paused (he can still hear you, just isn't saving), and
+**flat with a "NOT RECORDING" sign** when you've paused manually.
+
+<p align="center">
+  <img src="docs/screenshots/pause-and-waveform-states.png" width="640" alt="Four states: dozing, countdown fill, auto-paused asleep, manually paused asleep" />
+</p>
+
+**Full transparency on demand.** Double-tap the duck any time to drop into a
+debug view with the live transcript, per-tag chips, and real-time latency
+readouts for every stage of the pipeline (mic → transcript, transcript →
+tags, tag scoring) — useful for trusting the app, or for us building it.
+
+*The duck-centric Listen screen above (thought cloud, handwritten tag entry,
+notes-card swipes, sleep states) is the locked design as of the v5.3
+storyboard and is under active implementation; the recording, live
+transcription, tagging, and upload pipeline it sits on top of is built and
+working today.*
+
+## The organize loop
+
+The app itself stays deliberately dumb: it never tries to be smart about what
+you said, it just makes sure nothing you said is ever lost. Every session —
+raw audio, verbatim transcript, live tags, approved notes — uploads as one
+commit to a git-backed vault repo over plain HTTPS (no git on the phone). From
+there, a separate pipeline (Claude Code skills, running against the vault)
+does the actual thinking: transcribes a clean second pass, splits the session
+by topic, merges it into the right Markdown notes, and keeps a hierarchical
+tag tree so "kitchen remodel" today lands next to "kitchen remodel" from last
+month. The result opens cleanly in Obsidian, with full history and
+provenance, so you can trust it the way you'd trust your own notes.
+
+---
 
 ## Build
 
