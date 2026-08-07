@@ -75,6 +75,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.audio.AudioRouteType
 import com.montauk.voicecapture.audio.LoudnessVisualizer
+import com.montauk.voicecapture.duck.DuckPulseStateHolder
 import com.montauk.voicecapture.duck.DuckStage
 import com.montauk.voicecapture.duck.DuckState
 import com.montauk.voicecapture.duck.ThoughtCloudWords
@@ -200,6 +201,11 @@ fun RecordingScreen(
     val tagTree by TagTreeStateHolder.state.collectAsStateWithLifecycle()
     val summary by SummaryStateHolder.state.collectAsStateWithLifecycle()
     val latencyState by LatencyBadgeStateHolder.state.collectAsStateWithLifecycle()
+    // Bead asn-02h.1: the real pipeline-driven event-pulse stream --
+    // DuckStage still folds this alongside the legacy happyBounceTrigger/
+    // handRaiseTrigger nonces until each of their own child beads lands and
+    // retires the matching ad-hoc mechanism (see DuckStage's own KDoc).
+    val duckPulseEvent by DuckPulseStateHolder.events.collectAsStateWithLifecycle()
     val anthropicKeyConfigured = app.isAnthropicKeyConfigured()
     val assemblyKeyConfigured = app.isAssemblyKeyConfigured()
     var pickerRequest by remember { mutableStateOf<TagPickerRequest?>(null) }
@@ -346,6 +352,7 @@ fun RecordingScreen(
                         latencyState = latencyState,
                         onLatencyBadgeTap = {}, // asn-55q's L2 HUD opens here once that bead lands
                         happyBounceTrigger = happyBounceTrigger,
+                        pulseTrigger = duckPulseEvent,
                         onApproveNote = onApproveNote,
                         onDiscardNote = { noteText ->
                             // Bead asn-rrw: the toast is local/instant UI

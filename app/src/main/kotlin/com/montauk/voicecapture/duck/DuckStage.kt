@@ -57,11 +57,15 @@ import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
  * Bead asn-5w3 mechanical note: [happyBounceTrigger] (a tag was approved)
  * and the internal new-tag-entered-the-cloud detection below are each still
  * plain incrementing `Int` nonces from their original callers -- this
- * composable is what translates them into the pulse-based
- * [DuckAnimator]/[DuckAnimationEngine] API ([DuckPulse.CELEBRATE] and
- * [DuckPulse.RAISE_HAND] respectively). Real event-trigger wiring for the
- * other pulses ([DuckPulse.BLINK]/[DuckPulse.NOD]) is asn-02h's job, not
- * this bead's -- [DuckPulse.WRITE] the one-shot pulse still is too, but the
+ * composable folds them into the pulse-based [DuckAnimator]/[DuckAnimationEngine]
+ * API ([DuckPulse.CELEBRATE] and [DuckPulse.RAISE_HAND] respectively). Bead
+ * asn-02h is retiring both of these in favor of [pulseTrigger] -- the real
+ * pipeline-driven [com.montauk.voicecapture.duck.DuckPulseStateHolder] event
+ * stream, threaded straight through from
+ * [com.montauk.voicecapture.ui.RecordingScreen] -- one child bead at a time
+ * (asn-02h.1 lands [DuckPulse.BLINK] this way first; each later child bead
+ * removes the matching ad-hoc mechanism above once its own real trigger
+ * lands). [DuckPulse.WRITE] the one-shot pulse is asn-02h's job too, but the
  * HELD write pose while the notes card is up (bead asn-dp2.5) is a
  * different, separate signal: see
  * [com.montauk.voicecapture.ui.RecordingScreen]'s `duckState` computation
@@ -79,6 +83,7 @@ fun DuckStage(
     onLatencyBadgeTap: () -> Unit,
     modifier: Modifier = Modifier,
     happyBounceTrigger: Int = 0,
+    pulseTrigger: DuckPulseEvent? = null,
     onApproveNote: (String) -> Unit = {},
     onDiscardNote: (String) -> Unit = {},
     onNotesCardActiveChanged: (Boolean) -> Unit = {},
@@ -105,21 +110,31 @@ fun DuckStage(
         previousTopKeys = currentTopKeys
     }
 
-    // Folds the two legacy Int nonces above into a single DuckPulseEvent
-    // stream for DuckAnimator -- see the class KDoc's asn-5w3 note.
+    // Folds the two legacy Int nonces above -- plus the real pipeline-driven
+    // [pulseTrigger] stream (bead asn-02h) -- into a single DuckPulseEvent
+    // for DuckAnimator. See the class KDoc's asn-02h note: the legacy
+    // sources are removed one at a time as each pulse's own child bead lands
+    // its real trigger.
     var pulseNonce by remember { mutableStateOf(0) }
-    var pulseTrigger by remember { mutableStateOf<DuckPulseEvent?>(null) }
+    var animatorPulseTrigger by remember { mutableStateOf<DuckPulseEvent?>(null) }
     LaunchedEffect(happyBounceTrigger) {
         if (happyBounceTrigger != 0) {
             pulseNonce++
-            pulseTrigger = DuckPulseEvent(DuckPulse.CELEBRATE, pulseNonce)
+            animatorPulseTrigger = DuckPulseEvent(DuckPulse.CELEBRATE, pulseNonce)
         }
     }
     LaunchedEffect(handRaiseTrigger) {
         if (handRaiseTrigger != 0) {
             pulseNonce++
-            pulseTrigger = DuckPulseEvent(DuckPulse.RAISE_HAND, pulseNonce)
+            animatorPulseTrigger = DuckPulseEvent(DuckPulse.RAISE_HAND, pulseNonce)
         }
+    }
+    // Bead asn-02h.1: real pipeline-driven pulses (BLINK today; NOD/WRITE
+    // join as their own child beads land) pass straight through -- already
+    // carries its own nonce from DuckPulseStateHolder, so no re-wrapping
+    // needed here.
+    LaunchedEffect(pulseTrigger) {
+        if (pulseTrigger != null) animatorPulseTrigger = pulseTrigger
     }
 
     BoxWithConstraints(modifier = modifier.testTag(DUCK_STAGE_TEST_TAG).fillMaxSize()) {
@@ -148,7 +163,7 @@ fun DuckStage(
         )
         DuckAnimator(
             state = duckState,
-            pulseTrigger = pulseTrigger,
+            pulseTrigger = animatorPulseTrigger,
             reducedMotion = reducedMotion,
             modifier = Modifier
                 .align(Alignment.BottomCenter)

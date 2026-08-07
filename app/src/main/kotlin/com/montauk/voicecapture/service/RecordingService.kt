@@ -26,6 +26,9 @@ import com.montauk.voicecapture.audio.MicAudioSource
 import com.montauk.voicecapture.audio.MicLevelMeter
 import com.montauk.voicecapture.audio.VoiceActivityDetector
 import com.montauk.voicecapture.audio.autoPauseFillFraction
+import com.montauk.voicecapture.duck.BlinkHeartbeat
+import com.montauk.voicecapture.duck.DuckPulse
+import com.montauk.voicecapture.duck.DuckPulseStateHolder
 import com.montauk.voicecapture.session.LiveTranscriptLine
 import com.montauk.voicecapture.session.LiveTranscriptWriter
 import com.montauk.voicecapture.session.ModeChange
@@ -284,6 +287,9 @@ class RecordingService : LifecycleService() {
     /** Decides the "(silence)" hint independent of STT connection state -- see class KDoc there. */
     private val silenceDetector = SilenceDetector()
 
+    /** Bead asn-02h.1: throttles the duck's BLINK pulse to the transcription heartbeat -- see [BlinkHeartbeat]'s own KDoc. */
+    private val blinkHeartbeat = BlinkHeartbeat()
+
     /**
      * Bead asn-r60: VAD-driven SPEAKING/QUIET classification, fed one RMS
      * window at a time from the [MicLevelMeter] set up in [beginRecording]
@@ -361,6 +367,8 @@ class RecordingService : LifecycleService() {
         TagTreeStateHolder.reset()
         SummaryStateHolder.reset()
         silenceDetector.reset()
+        blinkHeartbeat.reset()
+        DuckPulseStateHolder.reset()
         modeStateMachine = RecordingModeStateMachine()
         sttEverConnected = false
         // Bead asn-r60: same "never leak a previous session's state"
@@ -823,6 +831,16 @@ class RecordingService : LifecycleService() {
                 // mic-level window (~100ms later) to re-evaluate it.
                 if (partial.text.isNotBlank()) {
                     silenceDetector.onTranscriptActivity(SystemClock.elapsedRealtime())
+                }
+                // Bead asn-02h.1: the transcription heartbeat -- BLINK on
+                // every INBOUND (non-final) partial RESPONSE from the STT
+                // engine (proves the full mic->socket->engine->response
+                // round trip), throttled to at most one per ~2.5s -- never
+                // on an outbound audio-chunk send, which would
+                // false-reassure when the engine is actually down. NOD
+                // (final segments) lands in asn-02h.2.
+                if (!partial.isFinal && blinkHeartbeat.onInboundPartial(SystemClock.elapsedRealtime())) {
+                    DuckPulseStateHolder.emit(DuckPulse.BLINK)
                 }
                 // Bead asn-r60: fold in sttTimelineTracker's accumulated
                 // offset before this timestamp reaches the UI or disk -- see
