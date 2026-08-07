@@ -3,6 +3,7 @@ package com.montauk.voicecapture.ui
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -50,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -59,8 +61,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -73,6 +77,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.montauk.voicecapture.R
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.audio.AudioRouteType
 import com.montauk.voicecapture.audio.LoudnessVisualizer
@@ -610,6 +615,30 @@ private fun RecordingMode.label(): String = when (this) {
     RecordingMode.CHALLENGE -> "Challenge"
 }
 
+/**
+ * Bead vn-edu.64: the switcher shows the duck pose PICTURE for each mode
+ * instead of its name -- [label] survives only as the `contentDescription`
+ * (talkback still announces "Listen" / "Converse, coming soon" / etc, see
+ * [ModeSegment]'s `semantics` block) and as the "soon" sub-label for the
+ * disabled modes. Per the bead's FINAL note this uses the Style B clay poses
+ * (supersedes the original style-A flat-vector plan) since the mode
+ * switcher sits alongside the clay duck mascot elsewhere on this screen.
+ * LISTEN reuses [R.drawable.duck_attentive] (the same normalized
+ * `08-listening-intro-01.png` frame [DuckFrame.ATTENTIVE] already draws)
+ * rather than a duplicate asset; CONVERSE/CHALLENGE are switcher-only
+ * normalized frames with no [DuckFrame] pulse/base state of their own --
+ * `21-talk-viseme-03.png` (widest open-beak frame, reads as mid-speech) and
+ * `40-challenge-01.png` (the pose the library's manifest built specifically
+ * "to feed vn-edu.64") -- normalized to the same 512x512/height-432/bottom-
+ * 488 convention as the 9 [DuckFrame] assets so all three sit at an
+ * identical scale/footing in the row.
+ */
+private fun RecordingMode.poseDrawableRes(): Int = when (this) {
+    RecordingMode.LISTEN -> R.drawable.duck_attentive
+    RecordingMode.CONVERSE -> R.drawable.duck_mode_converse
+    RecordingMode.CHALLENGE -> R.drawable.duck_mode_challenge
+}
+
 @Composable
 private fun ModeSegment(
     mode: RecordingMode,
@@ -650,11 +679,22 @@ private fun ModeSegment(
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = mode.label(),
-                style = MaterialTheme.typography.labelLarge,
-                color = contentColor,
-                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
+            Image(
+                painter = painterResource(mode.poseDrawableRes()),
+                // contentDescription is null here (decorative) -- the parent
+                // Box's semantics block above is the single a11y node for the
+                // whole segment, so talkback doesn't announce the pose image
+                // and then the mode name as two separate stops.
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                alpha = if (mode.isEnabled) 1f else 0.45f,
+                modifier = Modifier
+                    .height(40.dp)
+                    // Extra selected-state cue beyond the pill background color
+                    // (bead vn-edu.64: "tint/scale/underline") -- a full-color
+                    // pose image needs a clearer active signal than text color
+                    // alone would.
+                    .scale(if (isActive) 1.12f else 1f),
             )
             if (!mode.isEnabled) {
                 Spacer(modifier = Modifier.height(2.dp))
