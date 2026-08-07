@@ -115,12 +115,16 @@ fun DuckStage(
                 .fillMaxHeight(DUCK_HEIGHT_FRACTION),
         )
         if (dozingOrAsleep) {
+            // Same bounds as the DuckAnimator box right above -- see
+            // ZzTrail's own KDoc for why that shared box (plus
+            // DuckPoseFrame's top-aligned image) makes this box's top edge
+            // the duck's actual head, and TopCenter the trail's origin.
             ZzTrail(
                 reducedMotion = reducedMotion,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .fillMaxHeight(DUCK_HEIGHT_FRACTION)
-                    .padding(bottom = ZZ_TRAIL_HEAD_OFFSET),
+                    .fillMaxWidth()
+                    .fillMaxHeight(DUCK_HEIGHT_FRACTION),
             )
         } else {
             ThoughtBubbleDots(
@@ -153,9 +157,6 @@ const val DUCK_HEIGHT_FRACTION = 0.67f
 
 /** How far up from the true bottom edge the control row sits, so it overlaps the duck's lower body/feet rather than floating below him. */
 private val CONTROLS_DUCK_OVERLAP = 18.dp
-
-/** Keeps the Z-trail anchored near the duck's head rather than at the very top of his (tall) bounding box. */
-private val ZZ_TRAIL_HEAD_OFFSET = 40.dp
 
 private const val WORDS_DIM_FACTOR_WHILE_THINKING = 0.35f
 

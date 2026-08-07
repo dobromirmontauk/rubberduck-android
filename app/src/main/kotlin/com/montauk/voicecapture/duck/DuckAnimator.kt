@@ -134,12 +134,27 @@ data class DuckPulseEvent(val pulse: DuckPulse, val nonce: Int)
  * coroutine. Used both by [DuckAnimator]'s content and directly by
  * screenshot goldens, which want one deterministic frame rather than
  * whatever the live composable happens to land on.
+ *
+ * [Alignment.TopCenter] (bead asn-kd2), not [Image]'s own default
+ * [Alignment.Center]: the pose assets are square (512x512) but
+ * [DuckStage] hands this a tall, width-constrained box (its
+ * `fillMaxHeight(DUCK_HEIGHT_FRACTION)` slice) -- `ContentScale.Fit` scales
+ * by width and would otherwise center the duck vertically inside that box,
+ * splitting the leftover space evenly above the head and below the feet.
+ * Top-aligning instead collapses all of that slack to the bottom (below the
+ * feet), so the top of the rendered sprite -- the head -- lands exactly at
+ * the box's own top edge: the design board's "head sits at ~2/3 screen
+ * height" (asn-bb4) and the fixed anchor [ZzTrail] now measures its
+ * head-relative offsets from (previously this same gap silently pushed the
+ * Z-trail's assumed head position well above where the head was actually
+ * drawn -- see [DuckStage]'s KDoc).
  */
 @Composable
 internal fun DuckPoseFrame(visual: DuckVisual.Pose, modifier: Modifier = Modifier) {
     Image(
         painter = painterResource(visual.frame.drawableRes()),
         contentDescription = null,
+        alignment = Alignment.TopCenter,
         modifier = modifier.fillMaxSize(),
     )
 }

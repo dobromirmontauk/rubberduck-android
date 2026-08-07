@@ -239,6 +239,21 @@ fun RecordingScreen(
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     BigTimer(elapsedMs = recordingState.elapsedMs)
                 }
+                // Bead asn-kd2 v5.2: the mic-loudness waveform, restored
+                // under the timer in every duck-view state (see
+                // DuckWaveformBar's own KDoc for the three renderings) --
+                // the debug view keeps its own richer LoudnessMeterBar
+                // further down instead, so this only renders on the duck
+                // side of the toggle.
+                if (!showDebugView) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    DuckWaveformBar(
+                        activityState = activityState,
+                        micLevel = transcript.micLevel,
+                        sessionId = recordingState.sessionId,
+                        modifier = Modifier.padding(horizontal = 20.dp),
+                    )
+                }
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -598,6 +613,149 @@ private fun LoudnessMeterBarContent(history: List<Float>) {
 private val LOUDNESS_METER_HEIGHT = 56.dp
 private val LOUDNESS_METER_BAR_GAP = 3.dp
 private val LOUDNESS_METER_REST_HEIGHT = 4.dp
+
+/**
+ * Bead asn-kd2, waveform spec v5.2 (supersedes an earlier faint/flat-only
+ * variant): the mic-loudness tick-bar directly under [BigTimer], visible in
+ * every duck-view state -- the debug view's own [LoudnessMeterBar] already
+ * gave this same "we're hearing you" signal; this restores it to the home
+ * duck view too, in three renderings keyed off [activityState] alone (never
+ * a separate "is recording" boolean a caller could let drift out of sync
+ * with the duck's own pose):
+ *
+ * - [RecordingActivityState.SPEAKING]/[RecordingActivityState.QUIET]: red,
+ *   live-moving ticks fed by [micLevel] -- audio is actively being saved.
+ * - [RecordingActivityState.AUTO_PAUSED]: grey ticks that keep moving off
+ *   the same live [micLevel] -- the mic is still open on its ring buffer
+ *   (design board: "he can still hear you, but nothing is being saved"),
+ *   just not persisted.
+ * - [RecordingActivityState.USER_PAUSED]: the bar goes completely flat (a
+ *   synthetic, non-live history -- the mic is released, there's nothing to
+ *   show) and a studio-style unlit [NotRecordingSign] lights the same spot
+ *   instead. That sign is a deliberate, one-off exception to this screen's
+ *   locked no-corner-labels rule -- manual pause only; auto-pause still
+ *   shows no sign at all, per [RecordingScreen]'s class KDoc.
+ */
+@Composable
+private fun DuckWaveformBar(
+    activityState: RecordingActivityState,
+    micLevel: Float,
+    sessionId: String?,
+    modifier: Modifier = Modifier,
+) {
+    if (activityState == RecordingActivityState.USER_PAUSED) {
+        Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            DuckWaveformTicks(
+                history = FLAT_WAVEFORM_HISTORY,
+                tickColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f),
+                modifier = Modifier.fillMaxWidth().testTag(DUCK_WAVEFORM_FLAT_TEST_TAG),
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            NotRecordingSign()
+        }
+        return
+    }
+
+    val visualizer = remember(sessionId) { LoudnessVisualizer() }
+    var history by remember(visualizer) { mutableStateOf(visualizer.history) }
+    LaunchedEffect(micLevel, visualizer) {
+        visualizer.onLevel(micLevel)
+        history = visualizer.history
+    }
+    val isAutoPaused = activityState == RecordingActivityState.AUTO_PAUSED
+    val tickColor = if (isAutoPaused) {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    } else {
+        MaterialTheme.colorScheme.error
+    }
+    val testTag = if (isAutoPaused) DUCK_WAVEFORM_AUTO_PAUSED_TEST_TAG else DUCK_WAVEFORM_RECORDING_TEST_TAG
+    DuckWaveformTicks(history = history, tickColor = tickColor, modifier = modifier.fillMaxWidth().testTag(testTag))
+}
+
+/**
+ * Pure rendering half of [DuckWaveformBar] -- thin (unlike the debug view's
+ * much taller [LoudnessMeterBarContent]) vertically-centered ticks in a
+ * single [Canvas] pass, one row, full width, colored by the caller.
+ */
+@Composable
+private fun DuckWaveformTicks(history: List<Float>, tickColor: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.fillMaxWidth().height(DUCK_WAVEFORM_HEIGHT)) {
+        val barCount = history.size
+        if (barCount == 0) return@Canvas
+        val gapPx = LOUDNESS_METER_BAR_GAP.toPx()
+        val barWidth = ((size.width - gapPx * (barCount - 1)) / barCount).coerceAtLeast(1f)
+        val minTickPx = DUCK_WAVEFORM_MIN_TICK_HEIGHT.toPx().coerceAtMost(size.height)
+        val cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f)
+        history.forEachIndexed { index, level ->
+            val tickHeight = (size.height * level.coerceIn(0f, 1f)).coerceAtLeast(minTickPx)
+            val left = index * (barWidth + gapPx)
+            drawRoundRect(
+                color = tickColor,
+                topLeft = Offset(left, (size.height - tickHeight) / 2f),
+                size = Size(barWidth, tickHeight),
+                cornerRadius = cornerRadius,
+            )
+        }
+    }
+}
+
+/**
+ * A constant, non-live history for [RecordingActivityState.USER_PAUSED]'s
+ * "completely flat" waveform (design board v5.2) -- deliberately not driven
+ * by [LoudnessVisualizer]/live mic level at all, since manual pause is a
+ * hard mute (mic released, see [RecordingScreen]'s class KDoc): there is no
+ * live level to show, so this renders a fixed, uniformly-low tick row
+ * instead of letting the last-seen level linger on screen.
+ */
+private val FLAT_WAVEFORM_HISTORY = List(LoudnessVisualizer.DEFAULT_HISTORY_LENGTH) { FLAT_WAVEFORM_TICK_LEVEL }
+private const val FLAT_WAVEFORM_TICK_LEVEL = 0.05f
+
+private val DUCK_WAVEFORM_HEIGHT = 14.dp
+private val DUCK_WAVEFORM_MIN_TICK_HEIGHT = 2.dp
+
+/** Test-only anchors for [DuckWaveformBar]'s three renderings (bead asn-kd2). */
+const val DUCK_WAVEFORM_RECORDING_TEST_TAG = "recording_duck_waveform_recording"
+const val DUCK_WAVEFORM_AUTO_PAUSED_TEST_TAG = "recording_duck_waveform_auto_paused"
+const val DUCK_WAVEFORM_FLAT_TEST_TAG = "recording_duck_waveform_flat"
+
+/**
+ * The studio-style unlit "on-air lamp" sign (design board v5.2) that lights
+ * the waveform's spot during [RecordingActivityState.USER_PAUSED] -- a
+ * deliberate, manual-pause-only exception to this screen's locked
+ * no-corner-labels rule (see [RecordingScreen]'s class KDoc): auto-pause
+ * still shows no sign or label of any kind, only this hard-mute state does,
+ * because "mic released" is the one thing here that isn't otherwise visible
+ * anywhere else on screen (the sleeping duck and frozen timer look
+ * IDENTICAL to auto-pause). Colors are hardcoded, not MaterialTheme-derived
+ * -- same convention as this file's other locked-design elements (tag rail
+ * chip colors, [StopBar]'s error red) -- since the whole point is an unlit,
+ * dark studio placard rather than a theme-following surface.
+ */
+@Composable
+private fun NotRecordingSign(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(NOT_RECORDING_BG_COLOR)
+            .border(1.5.dp, NOT_RECORDING_BORDER_COLOR, RoundedCornerShape(6.dp))
+            .testTag(NOT_RECORDING_SIGN_TEST_TAG)
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+    ) {
+        Text(
+            text = "● NOT RECORDING",
+            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp, fontSize = 10.sp),
+            fontWeight = FontWeight.Bold,
+            color = NOT_RECORDING_TEXT_COLOR,
+        )
+    }
+}
+
+/** Test-only anchor for [NotRecordingSign] (bead asn-kd2). */
+const val NOT_RECORDING_SIGN_TEST_TAG = "recording_not_recording_sign"
+
+private val NOT_RECORDING_BG_COLOR = Color(0xFF211D18)
+private val NOT_RECORDING_BORDER_COLOR = Color(0xFF4A4437)
+private val NOT_RECORDING_TEXT_COLOR = Color(0xFF6E6353)
 
 /** One rendered row of [LiveTranscriptPane], oldest-to-newest order matching [LazyColumn] item order. */
 private sealed interface TranscriptRow {

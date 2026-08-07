@@ -27,6 +27,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 /**
  * Bead asn-r60's pause state machine, asn-o63's live-test fixes, bead
@@ -41,9 +42,21 @@ import org.robolectric.annotation.Config
  * ([AppNavHost]), same pattern as
  * [RecordingScreenTagsSlotTest]/[RecordingScreenTranscriptSlotTest], since
  * `onSetPaused` threads through it to [RecordingScreen].
+ *
+ * [GraphicsMode.Mode.NATIVE] (bead asn-kd2): the duck view now always
+ * renders [DuckWaveformBar]'s `Canvas`, so every test in this class hits it
+ * (previously only the debug view's [LoudnessMeterBar] used `Canvas`, which
+ * none of these tests reached). Robolectric's default (non-native) graphics
+ * mode doesn't implement `Canvas` drawing faithfully enough for Compose's
+ * click-dispatch to stay reliable afterward -- `performClick()` kept finding
+ * and asserting the node displayed, but its `onClick` silently never fired.
+ * Matches the convention [LiveTranscriptPaneOverlongPartialTest]/
+ * [com.montauk.voicecapture.screenshot.DuckScreenshotTest] already use for
+ * exactly this reason.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class RecordingScreenPauseTest {
 
     @get:Rule
