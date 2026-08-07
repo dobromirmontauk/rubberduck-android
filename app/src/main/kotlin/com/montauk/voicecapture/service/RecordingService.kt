@@ -568,13 +568,33 @@ class RecordingService : LifecycleService() {
         writeUserTagEvent(session, added = listOf(UserTagRef(newTag, newTagId)), removed = listOf(UserTagRef(oldTag)))
     }
 
-    /** Handles [ACTION_TAG_APPROVE] (bead asn-0jk): a single tap on a still-unapproved PROPOSED_NEW chip's body approves it in place, no picker involved. */
+    /**
+     * Handles [ACTION_TAG_APPROVE] (bead asn-0jk): a single tap on a
+     * still-unapproved PROPOSED_NEW chip's body approves it in place, no
+     * picker involved -- from EITHER surface that can send this intent
+     * (the duck view's word-cloud tap and the debug view's tag-rail tap
+     * both funnel through [com.montauk.voicecapture.ui.MainActivity.approveRecordingTag]
+     * into this exact same handler).
+     *
+     * Bead asn-02h.5: [rail.onApprove]'s Boolean return is the single
+     * source of truth gating BOTH the durable bundle write
+     * ([writeUserTagEvent], `approved:true`) AND the duck's CELEBRATE pulse
+     * -- one `if`, so "approval recorded in the bundle" and "duck
+     * celebrates" can never disagree. This replaces the old UI-local
+     * `happyBounceTrigger` nonce, which only fired from the duck view's own
+     * word-cloud tap handler -- approving the identical tag from the debug
+     * view's [com.montauk.voicecapture.ui.TagRailSection] called
+     * [onApproveTag] directly and never incremented it, so the duck never
+     * celebrated an approval made from that surface. Deriving CELEBRATE
+     * from this handler instead fixes both surfaces at once.
+     */
     private fun handleTagApprove(intent: Intent) {
         val session = currentSession ?: return
         val rail = tagChipRail ?: return
         val tag = intent.getStringExtra(EXTRA_TAG_NAME)?.takeIf { it.isNotBlank() } ?: return
         if (!rail.onApprove(tag)) return
         TagRailStateHolder.update(rail.chips())
+        DuckPulseStateHolder.emit(DuckPulse.CELEBRATE)
         writeUserTagEvent(session, added = listOf(UserTagRef(tag, tagId = null, approved = true)), removed = emptyList())
     }
 

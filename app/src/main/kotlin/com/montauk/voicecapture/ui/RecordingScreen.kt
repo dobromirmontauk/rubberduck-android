@@ -162,10 +162,14 @@ import kotlin.math.roundToInt
  * [TagRailSection] renders in the debug view -- one shared list, two
  * renderings (see [TagRailChip]'s own KDoc for why its status/approved
  * fields already carry this word cloud's exact color split). Tapping a
- * PURPLE word calls [onApproveTag] (green + haptic tick + the duck's
- * happy-bounce, via [happyBounceTrigger]) -- the same callback
- * [TagRailSection]'s own tap-to-approve uses, so approving from either
- * surface converges on the same state.
+ * PURPLE word calls [onApproveTag] (green + haptic tick) -- the same
+ * callback [TagRailSection]'s own tap-to-approve uses, so approving from
+ * either surface converges on the same state. Bead asn-02h.5: the duck's
+ * CELEBRATE happy-bounce is no longer a UI-local nonce this tap increments
+ * directly -- it's derived from [DuckPulseStateHolder]'s real event stream,
+ * emitted by [com.montauk.voicecapture.service.RecordingService.handleTagApprove]
+ * off the exact same approval both surfaces funnel through, so either one
+ * celebrates identically.
  *
  * [onOpenSettings] (bead vn-edu.46 superseding decision, extended by
  * vn-edu.66) is invoked when either keyless message is tapped: the
@@ -204,18 +208,15 @@ fun RecordingScreen(
     val tagTree by TagTreeStateHolder.state.collectAsStateWithLifecycle()
     val summary by SummaryStateHolder.state.collectAsStateWithLifecycle()
     val latencyState by LatencyBadgeStateHolder.state.collectAsStateWithLifecycle()
-    // Bead asn-02h: the real pipeline-driven event-pulse stream. Gated
-    // through shouldPlayPulse below (asn-02h.3's WRITE-vs-notes-card
-    // suppression) before reaching DuckStage, which still folds the result
-    // alongside the legacy happyBounceTrigger/handRaiseTrigger nonces until
-    // each of their own child beads lands and retires the matching ad-hoc
-    // mechanism (see DuckStage's own KDoc).
+    // Bead asn-02h: the real pipeline-driven event-pulse stream -- every
+    // pulse (BLINK/NOD/WRITE/RAISE_HAND/CELEBRATE) arrives this one way now.
+    // Gated through shouldPlayPulse below (asn-02h.3's WRITE-vs-notes-card
+    // suppression) before reaching DuckStage.
     val duckPulseEvent by DuckPulseStateHolder.events.collectAsStateWithLifecycle()
     val anthropicKeyConfigured = app.isAnthropicKeyConfigured()
     val assemblyKeyConfigured = app.isAssemblyKeyConfigured()
     var pickerRequest by remember { mutableStateOf<TagPickerRequest?>(null) }
     var showDebugView by remember { mutableStateOf(false) }
-    var happyBounceTrigger by remember { mutableStateOf(0) }
     val reducedMotion = rememberReducedMotionEnabled()
 
     // THINKING override window -- see the class KDoc's THINKING paragraph.
@@ -364,14 +365,10 @@ fun RecordingScreen(
                         duckState = duckState,
                         words = words,
                         reducedMotion = reducedMotion,
-                        onApproveWord = { word ->
-                            onApproveTag(word.text)
-                            happyBounceTrigger++
-                        },
+                        onApproveWord = { word -> onApproveTag(word.text) },
                         summary = summary,
                         latencyState = latencyState,
                         onLatencyBadgeTap = {}, // asn-55q's L2 HUD opens here once that bead lands
-                        happyBounceTrigger = happyBounceTrigger,
                         pulseTrigger = pulseTrigger,
                         onApproveNote = onApproveNote,
                         onDiscardNote = { noteText ->

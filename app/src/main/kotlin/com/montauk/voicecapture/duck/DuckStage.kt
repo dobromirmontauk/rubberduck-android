@@ -8,11 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -54,20 +49,23 @@ import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
  * that outer box is correct, [DUCK_HEIGHT_FRACTION] fills nearly all of
  * it (not another 67%) -- the two fractions are NOT meant to compound.
  *
- * Bead asn-5w3 mechanical note: [happyBounceTrigger] (a tag was approved)
- * is still a plain incrementing `Int` nonce from its original caller -- this
- * composable folds it into the pulse-based [DuckAnimator]/[DuckAnimationEngine]
- * API ([DuckPulse.CELEBRATE]). Bead asn-02h is retiring it in favor of
- * [pulseTrigger] -- the real pipeline-driven
+ * Bead asn-02h mechanical note (supersedes asn-5w3's original UI-local
+ * nonces): [pulseTrigger] is the real pipeline-driven
  * [com.montauk.voicecapture.duck.DuckPulseStateHolder] event stream,
  * threaded straight through from [com.montauk.voicecapture.ui.RecordingScreen]
- * -- one child bead at a time (asn-02h.1/.2/.3 land [DuckPulse.BLINK]/[DuckPulse.NOD]/[DuckPulse.WRITE]
- * this way; asn-02h.4 already retired the matching ad-hoc
- * new-tag-entered-the-cloud detection that used to live in this composable
- * in favor of [DuckPulse.RAISE_HAND] arriving the same real way; asn-02h.5
- * retires [happyBounceTrigger] itself for [DuckPulse.CELEBRATE]).
- * [DuckPulse.WRITE] the one-shot pulse is asn-02h's job too, but the
- * HELD write pose while the notes card is up (bead asn-dp2.5) is a
+ * into [DuckAnimator]/[DuckAnimationEngine] unchanged -- every pulse
+ * (BLINK/NOD/WRITE/RAISE_HAND/CELEBRATE) now arrives this same way. The
+ * ad-hoc mechanisms that used to live in this composable are gone: asn-02h.4
+ * retired the new-tag-entered-the-cloud [words]-diffing (now
+ * [DuckPulse.RAISE_HAND], derived from the real tag rail in
+ * [com.montauk.voicecapture.service.RecordingService]); asn-02h.5 retired
+ * the `happyBounceTrigger` nonce a tag-approve tap used to increment
+ * directly (now [DuckPulse.CELEBRATE], derived from the same
+ * [com.montauk.voicecapture.tags.TagChipRail.onApprove] call that persists
+ * the approval -- see [com.montauk.voicecapture.service.RecordingService.handleTagApprove]'s
+ * own KDoc for why that single source of truth also fixes a real bug the
+ * old nonce had). [DuckPulse.WRITE] the one-shot pulse is asn-02h's job too,
+ * but the HELD write pose while the notes card is up (bead asn-dp2.5) is a
  * different, separate signal: see
  * [com.montauk.voicecapture.ui.RecordingScreen]'s `duckState` computation
  * for the base-state priority (notesCardActive -> [DuckState.WRITE],
@@ -83,7 +81,6 @@ fun DuckStage(
     latencyState: LatencyBadgeUiState,
     onLatencyBadgeTap: () -> Unit,
     modifier: Modifier = Modifier,
-    happyBounceTrigger: Int = 0,
     pulseTrigger: DuckPulseEvent? = null,
     onApproveNote: (String) -> Unit = {},
     onDiscardNote: (String) -> Unit = {},
@@ -102,24 +99,6 @@ fun DuckStage(
     // RAISE_HAND directly off the rail's own before/after chips (see
     // topSetGainedNewTag), so this composable no longer tracks any cloud
     // history of its own.
-
-    // Folds the one remaining legacy Int nonce ([happyBounceTrigger],
-    // retired by asn-02h.5) alongside the real pipeline-driven [pulseTrigger]
-    // stream (bead asn-02h) into a single DuckPulseEvent for DuckAnimator.
-    var pulseNonce by remember { mutableStateOf(0) }
-    var animatorPulseTrigger by remember { mutableStateOf<DuckPulseEvent?>(null) }
-    LaunchedEffect(happyBounceTrigger) {
-        if (happyBounceTrigger != 0) {
-            pulseNonce++
-            animatorPulseTrigger = DuckPulseEvent(DuckPulse.CELEBRATE, pulseNonce)
-        }
-    }
-    // Bead asn-02h: real pipeline-driven pulses (BLINK/NOD/WRITE/RAISE_HAND)
-    // pass straight through -- already carries its own nonce from
-    // DuckPulseStateHolder, so no re-wrapping needed here.
-    LaunchedEffect(pulseTrigger) {
-        if (pulseTrigger != null) animatorPulseTrigger = pulseTrigger
-    }
 
     BoxWithConstraints(modifier = modifier.testTag(DUCK_STAGE_TEST_TAG).fillMaxSize()) {
         // Bead asn-bb4.2 fix: DuckAnimator's own box is `fillMaxWidth()` x
@@ -147,7 +126,7 @@ fun DuckStage(
         )
         DuckAnimator(
             state = duckState,
-            pulseTrigger = animatorPulseTrigger,
+            pulseTrigger = pulseTrigger,
             reducedMotion = reducedMotion,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -312,7 +291,7 @@ private fun DuckStageCelebratePreview() {
             summary = com.montauk.voicecapture.service.SummaryUiState(),
             latencyState = com.montauk.voicecapture.service.LatencyBadgeUiState(),
             onLatencyBadgeTap = {},
-            happyBounceTrigger = 1,
+            pulseTrigger = DuckPulseEvent(DuckPulse.CELEBRATE, nonce = 1),
         )
     }
 }
