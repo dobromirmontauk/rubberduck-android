@@ -55,17 +55,18 @@ import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
  * it (not another 67%) -- the two fractions are NOT meant to compound.
  *
  * Bead asn-5w3 mechanical note: [happyBounceTrigger] (a tag was approved)
- * and the internal new-tag-entered-the-cloud detection below are each still
- * plain incrementing `Int` nonces from their original callers -- this
- * composable folds them into the pulse-based [DuckAnimator]/[DuckAnimationEngine]
- * API ([DuckPulse.CELEBRATE] and [DuckPulse.RAISE_HAND] respectively). Bead
- * asn-02h is retiring both of these in favor of [pulseTrigger] -- the real
- * pipeline-driven [com.montauk.voicecapture.duck.DuckPulseStateHolder] event
- * stream, threaded straight through from
- * [com.montauk.voicecapture.ui.RecordingScreen] -- one child bead at a time
- * (asn-02h.1 lands [DuckPulse.BLINK] this way first; each later child bead
- * removes the matching ad-hoc mechanism above once its own real trigger
- * lands). [DuckPulse.WRITE] the one-shot pulse is asn-02h's job too, but the
+ * is still a plain incrementing `Int` nonce from its original caller -- this
+ * composable folds it into the pulse-based [DuckAnimator]/[DuckAnimationEngine]
+ * API ([DuckPulse.CELEBRATE]). Bead asn-02h is retiring it in favor of
+ * [pulseTrigger] -- the real pipeline-driven
+ * [com.montauk.voicecapture.duck.DuckPulseStateHolder] event stream,
+ * threaded straight through from [com.montauk.voicecapture.ui.RecordingScreen]
+ * -- one child bead at a time (asn-02h.1/.2/.3 land [DuckPulse.BLINK]/[DuckPulse.NOD]/[DuckPulse.WRITE]
+ * this way; asn-02h.4 already retired the matching ad-hoc
+ * new-tag-entered-the-cloud detection that used to live in this composable
+ * in favor of [DuckPulse.RAISE_HAND] arriving the same real way; asn-02h.5
+ * retires [happyBounceTrigger] itself for [DuckPulse.CELEBRATE]).
+ * [DuckPulse.WRITE] the one-shot pulse is asn-02h's job too, but the
  * HELD write pose while the notes card is up (bead asn-dp2.5) is a
  * different, separate signal: see
  * [com.montauk.voicecapture.ui.RecordingScreen]'s `duckState` computation
@@ -94,27 +95,17 @@ fun DuckStage(
     // pose; cloud words dim to 35%" while a summary round is in flight.
     val wordsDimFactor = if (duckState == DuckState.THINK) WORDS_DIM_FACTOR_WHILE_THINKING else 1f
 
-    // Design board v2, frame 2: "a new tag enters the idea cloud and the
-    // duck raises his hand eagerly" -- tracked here (not pushed onto
-    // RecordingScreen) since DuckStage already owns comparing successive
-    // [words] snapshots for everything else about the cloud. Only the
-    // EXISTING/PROPOSED/APPROVED top set counts as "entering the cloud";
-    // muted CANDIDATE words drifting in and out doesn't trigger this.
-    var previousTopKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var handRaiseTrigger by remember { mutableStateOf(0) }
-    val currentTopKeys = words.filter { it.status != TagWordStatus.CANDIDATE }.map { it.text.trim().lowercase() }.toSet()
-    LaunchedEffect(currentTopKeys) {
-        if (previousTopKeys.isNotEmpty() && (currentTopKeys - previousTopKeys).isNotEmpty()) {
-            handRaiseTrigger++
-        }
-        previousTopKeys = currentTopKeys
-    }
+    // Bead asn-02h.4: RAISE_HAND's old ad-hoc detection lived HERE --
+    // comparing successive [words] snapshots (a UI-mapped, presentation-
+    // layer view of the tag rail) rather than the real tag-tracker-driven
+    // rail state itself. Removed outright: RecordingService now emits
+    // RAISE_HAND directly off the rail's own before/after chips (see
+    // topSetGainedNewTag), so this composable no longer tracks any cloud
+    // history of its own.
 
-    // Folds the two legacy Int nonces above -- plus the real pipeline-driven
-    // [pulseTrigger] stream (bead asn-02h) -- into a single DuckPulseEvent
-    // for DuckAnimator. See the class KDoc's asn-02h note: the legacy
-    // sources are removed one at a time as each pulse's own child bead lands
-    // its real trigger.
+    // Folds the one remaining legacy Int nonce ([happyBounceTrigger],
+    // retired by asn-02h.5) alongside the real pipeline-driven [pulseTrigger]
+    // stream (bead asn-02h) into a single DuckPulseEvent for DuckAnimator.
     var pulseNonce by remember { mutableStateOf(0) }
     var animatorPulseTrigger by remember { mutableStateOf<DuckPulseEvent?>(null) }
     LaunchedEffect(happyBounceTrigger) {
@@ -123,16 +114,9 @@ fun DuckStage(
             animatorPulseTrigger = DuckPulseEvent(DuckPulse.CELEBRATE, pulseNonce)
         }
     }
-    LaunchedEffect(handRaiseTrigger) {
-        if (handRaiseTrigger != 0) {
-            pulseNonce++
-            animatorPulseTrigger = DuckPulseEvent(DuckPulse.RAISE_HAND, pulseNonce)
-        }
-    }
-    // Bead asn-02h.1: real pipeline-driven pulses (BLINK today; NOD/WRITE
-    // join as their own child beads land) pass straight through -- already
-    // carries its own nonce from DuckPulseStateHolder, so no re-wrapping
-    // needed here.
+    // Bead asn-02h: real pipeline-driven pulses (BLINK/NOD/WRITE/RAISE_HAND)
+    // pass straight through -- already carries its own nonce from
+    // DuckPulseStateHolder, so no re-wrapping needed here.
     LaunchedEffect(pulseTrigger) {
         if (pulseTrigger != null) animatorPulseTrigger = pulseTrigger
     }

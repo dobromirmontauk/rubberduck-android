@@ -1,11 +1,15 @@
 package com.montauk.voicecapture.duck
 
+import com.montauk.voicecapture.tags.RailChipSource
+import com.montauk.voicecapture.tags.TagRailChip
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DuckPulseTriggersTest {
+
+    private fun chip(tag: String, tagId: String? = null) = TagRailChip(tag, tagId, RailChipSource.SUGGESTED)
 
     // --- BlinkHeartbeat (bead asn-02h.1) ---
 
@@ -73,5 +77,54 @@ class DuckPulseTriggersTest {
     fun `other pulses always play regardless of the current base state`() {
         val event = DuckPulseEvent(DuckPulse.NOD, nonce = 1)
         assertTrue(shouldPlayPulse(event, currentBaseState = DuckState.WRITE))
+    }
+
+    // --- topSetGainedNewTag (bead asn-02h.4) ---
+
+    @Test
+    fun `a new tag entering the top set fires -- tag event to RAISE_HAND`() {
+        val before = listOf(chip("kitchen-remodel"), chip("dog-walks"))
+        val after = listOf(chip("kitchen-remodel"), chip("dog-walks"), chip("permits"))
+        assertTrue(topSetGainedNewTag(before, after))
+    }
+
+    @Test
+    fun `the cloud's very first population this session never counts as new`() {
+        val before = emptyList<TagRailChip>()
+        val after = listOf(chip("kitchen-remodel"))
+        assertFalse(topSetGainedNewTag(before, after))
+    }
+
+    @Test
+    fun `no change to the top set does not fire`() {
+        val before = listOf(chip("kitchen-remodel"), chip("dog-walks"))
+        val after = listOf(chip("kitchen-remodel"), chip("dog-walks"))
+        assertFalse(topSetGainedNewTag(before, after))
+    }
+
+    @Test
+    fun `a tag dropping out of the top set alone does not fire`() {
+        val before = listOf(chip("kitchen-remodel"), chip("dog-walks"))
+        val after = listOf(chip("kitchen-remodel"))
+        assertFalse(topSetGainedNewTag(before, after))
+    }
+
+    @Test
+    fun `a tag entering only the muted candidate tail (beyond MAX_TOP) does not fire`() {
+        val before = List(ThoughtCloudWords.MAX_TOP) { chip("existing-$it") }
+        val after = before + chip("new-candidate")
+        assertFalse(topSetGainedNewTag(before, after))
+    }
+
+    @Test
+    fun `a tag event fires RAISE_HAND exactly once for one new entry`() {
+        val before = listOf(chip("kitchen-remodel"))
+        val after = listOf(chip("kitchen-remodel"), chip("permits"))
+        assertTrue(topSetGainedNewTag(before, after))
+        // Idempotent re-check against the SAME two snapshots -- a caller
+        // that (incorrectly) evaluated this twice for one real transition
+        // would still only ever see "changed" once per distinct pair.
+        assertTrue(topSetGainedNewTag(before, after))
+        assertFalse(topSetGainedNewTag(after, after))
     }
 }

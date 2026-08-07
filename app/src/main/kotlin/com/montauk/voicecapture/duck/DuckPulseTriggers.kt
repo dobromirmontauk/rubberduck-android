@@ -1,5 +1,7 @@
 package com.montauk.voicecapture.duck
 
+import com.montauk.voicecapture.tags.TagRailChip
+
 /**
  * Pure Kotlin trigger-decision logic behind bead asn-02h's real event-pulse
  * wiring -- each function/class here answers "given this real pipeline
@@ -10,7 +12,7 @@ package com.montauk.voicecapture.duck
  * call sites with a tested pure class) can stay a thin integration wire while
  * the actual decision is independently testable. Grows one piece per child
  * bead: [BlinkHeartbeat] (asn-02h.1), [nodPulseForFinalSegment] (asn-02h.2),
- * [shouldPlayPulse] (asn-02h.3).
+ * [shouldPlayPulse] (asn-02h.3), [topSetGainedNewTag] (asn-02h.4).
  */
 
 /**
@@ -79,3 +81,28 @@ fun nodPulseForFinalSegment(): DuckPulse = DuckPulse.NOD
  */
 fun shouldPlayPulse(event: DuckPulseEvent, currentBaseState: DuckState): Boolean =
     !(event.pulse == DuckPulse.WRITE && currentBaseState == DuckState.WRITE)
+
+/**
+ * Detects a genuinely NEW tag entering the top-of-cloud set (bead asn-02h.4)
+ * from two successive [com.montauk.voicecapture.tags.TagChipRail.chips]
+ * snapshots -- the real tag-tracker-driven rail state
+ * [com.montauk.voicecapture.service.TagRailStateHolder] publishes, not a
+ * [ThoughtCloudWord]-level diff reconstructed in the UI (the ad-hoc
+ * `previousTopKeys`/`handRaiseTrigger` detection this function replaces
+ * inside [DuckStage] -- see this bead's own notes for why "not UI-internal
+ * detection" mattered: it lived one layer removed from the actual rail
+ * state, comparing an already-presentation-mapped word list instead of the
+ * domain data itself). Uses [ThoughtCloudWords.MAX_TOP] for the same
+ * top-vs-candidate split the word cloud itself renders, so "entered the
+ * cloud" here means exactly what a person watching the duck would see.
+ * Returns true only when the top set was non-empty BEFORE (so the cloud's
+ * very first population this session never counts as "new") AND at least
+ * one tag entered the top set that wasn't there a moment ago.
+ */
+fun topSetGainedNewTag(before: List<TagRailChip>, after: List<TagRailChip>): Boolean {
+    val beforeTop = before.take(ThoughtCloudWords.MAX_TOP).map { normalizeTag(it.tag) }.toSet()
+    val afterTop = after.take(ThoughtCloudWords.MAX_TOP).map { normalizeTag(it.tag) }.toSet()
+    return beforeTop.isNotEmpty() && (afterTop - beforeTop).isNotEmpty()
+}
+
+private fun normalizeTag(tag: String): String = tag.trim().lowercase()

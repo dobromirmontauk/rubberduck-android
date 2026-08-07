@@ -30,6 +30,7 @@ import com.montauk.voicecapture.duck.BlinkHeartbeat
 import com.montauk.voicecapture.duck.DuckPulse
 import com.montauk.voicecapture.duck.DuckPulseStateHolder
 import com.montauk.voicecapture.duck.nodPulseForFinalSegment
+import com.montauk.voicecapture.duck.topSetGainedNewTag
 import com.montauk.voicecapture.session.LiveTranscriptLine
 import com.montauk.voicecapture.session.LiveTranscriptWriter
 import com.montauk.voicecapture.session.ModeChange
@@ -982,11 +983,22 @@ class RecordingService : LifecycleService() {
                 // before encodeLine below so a proposal the user already
                 // approved (bead asn-0jk) is reflected in this exact
                 // snapshot line, not one tick later.
+                //
+                // Bead asn-02h.4: RAISE_HAND fires off the real
+                // tag-tracker event -- comparing the rail's own top-set
+                // chips before/after this exact onSuggested call, not a
+                // UI-derived ThoughtCloudWord diff (see topSetGainedNewTag's
+                // own KDoc).
+                val topSetBefore = rail.chips()
                 rail.onSuggested(changed)
+                val topSetAfter = rail.chips()
+                if (topSetGainedNewTag(topSetBefore, topSetAfter)) {
+                    DuckPulseStateHolder.emit(DuckPulse.RAISE_HAND)
+                }
                 val approvedKeys = rail.approvedKeys()
                 app.sessionStore.transcriptFile(session.dir)
                     .appendText(TagsEventWriter.encodeLine(event.atMs, changed, approvedKeys) + "\n")
-                TagRailStateHolder.update(rail.chips())
+                TagRailStateHolder.update(topSetAfter)
             }
         }
     }
