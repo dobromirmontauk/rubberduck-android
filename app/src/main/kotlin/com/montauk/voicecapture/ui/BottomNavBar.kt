@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -40,6 +41,14 @@ import com.montauk.voicecapture.R
  * ([DebugNewSessionItem]) rather than stacking a long-press gesture on top
  * of the stock [NavigationBarItem]'s own click handling, which risks the two
  * gesture detectors fighting over the same tap.
+ *
+ * Bead vn-edu.73 v2 (rejected v1 was a single shared duck silhouette +
+ * generic badge -- "identical icon with a gear box"): each icon is now a
+ * distinct full-color clay-render duck POSE holding/wearing a literal prop
+ * (mic, scroll, hammer, doorframe), generated via the nanobanana pipeline --
+ * see design/nav-icon-props/. Full color means these use `tint =
+ * Color.Unspecified` on every [Icon] call below so Compose doesn't flatten
+ * them to a single-color silhouette the way it would a Material glyph.
  */
 @Composable
 fun BottomNavBar(
@@ -62,20 +71,41 @@ fun BottomNavBar(
             NavigationBarItem(
                 selected = currentRoute == Routes.RECORDING,
                 onClick = onNewSession,
-                icon = { Icon(painterResource(R.drawable.ic_nav_new_session), contentDescription = null) },
+                icon = {
+                    Icon(
+                        painterResource(R.drawable.ic_nav_new_session),
+                        contentDescription = null,
+                        tint = Color.Unspecified,
+                        modifier = Modifier.size(NavIconSize),
+                    )
+                },
                 label = { Text("New Session") },
             )
         }
         NavigationBarItem(
             selected = currentRoute == Routes.SESSIONS,
             onClick = onSessions,
-            icon = { Icon(painterResource(R.drawable.ic_nav_sessions), contentDescription = null) },
+            icon = {
+                Icon(
+                    painterResource(R.drawable.ic_nav_sessions),
+                    contentDescription = null,
+                    tint = Color.Unspecified,
+                    modifier = Modifier.size(NavIconSize),
+                )
+            },
             label = { Text("Sessions") },
         )
         NavigationBarItem(
             selected = currentRoute == Routes.SETTINGS,
             onClick = onSettings,
-            icon = { Icon(painterResource(R.drawable.ic_nav_settings), contentDescription = null) },
+            icon = {
+                Icon(
+                    painterResource(R.drawable.ic_nav_settings),
+                    contentDescription = null,
+                    tint = Color.Unspecified,
+                    modifier = Modifier.size(NavIconSize),
+                )
+            },
             label = { Text("Settings") },
         )
         NavigationBarItem(
@@ -88,12 +118,22 @@ fun BottomNavBar(
                 Icon(
                     painterResource(if (isConnectedToGithub) R.drawable.ic_nav_signout else R.drawable.ic_nav_signin),
                     contentDescription = null,
+                    tint = Color.Unspecified,
+                    modifier = Modifier.size(NavIconSize),
                 )
             },
             label = { Text(if (isConnectedToGithub) "Log Out" else "Sign In") },
         )
     }
 }
+
+/**
+ * Slightly larger than Material's default 24dp icon slot: these full-color
+ * clay-render duck+prop assets carry more visual detail than a flat glyph,
+ * and read better for it at a small size bump. [DebugNewSessionItem] uses
+ * the same value so debug/release builds look consistent.
+ */
+private val NavIconSize = 28.dp
 
 /**
  * Material3's own `NavigationBarItem` pins its height to this value
@@ -138,7 +178,12 @@ private fun RowScope.DebugNewSessionItem(selected: Boolean, onClick: () -> Unit,
                 .background(containerColor, RoundedCornerShape(16.dp))
                 .padding(horizontal = 20.dp, vertical = 4.dp),
         ) {
-            Icon(painterResource(R.drawable.ic_nav_new_session), contentDescription = null, tint = contentColor)
+            Icon(
+                painterResource(R.drawable.ic_nav_new_session),
+                contentDescription = null,
+                tint = Color.Unspecified,
+                modifier = Modifier.size(NavIconSize),
+            )
         }
         Text(text = "New Session", color = contentColor, style = MaterialTheme.typography.labelMedium)
     }

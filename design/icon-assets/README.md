@@ -42,36 +42,24 @@ UI icons): isolated, single-pose crops from
   `ic_launcher_monochrome.xml` (from `traced/listen_launcher_mono.svg`) are
   the actual shipped launcher-icon assets (vn-edu.63) — see
   `app/src/main/res/drawable{-nodpi,}/ic_launcher_*`.
-- `traced/converse.svg` is the open-beak + sound-lines CONVERSE pose, used as
-  the "New Session" bottom-nav glyph (vn-edu.73) — already reads as "duck
-  speaking" with no further editing needed.
-- `traced/challenge.svg` (skeptical/crossed-wings pose) is not yet used by any
+- `traced/converse.svg` (open-beak + sound-lines CONVERSE pose) and
+  `traced/challenge.svg` (skeptical/crossed-wings pose) are not used by any
   landed icon; kept here as reusable raw material.
 - `traced/listen.svg` (small ~6% margin variant, distinct from
-  `listen_launcher_mono.svg`'s ~22% margin) is the calm resting-duck body
-  shared across the Sessions/Settings/Sign-in/Log-out nav icons.
+  `listen_launcher_mono.svg`'s ~22% margin) is not currently used by any
+  landed icon either; kept as reusable raw material.
 
-## Nav-icon badges (vn-edu.73's remaining 4 glyphs)
+## Nav-icon badges — REJECTED, superseded by design/nav-icon-props/
 
-`badge_shapes.py` hand-generates small accent-path `d` strings (a 3-bar notes
-stack, a gear ring via nonzero-winding annulus, a door+arrow login/logout
-glyph) in the same 0..285 coordinate space as `traced/listen.svg`'s duck
-body, since the duck's own alpha bbox (~17..268 x 20..264) leaves a small
-free corner at roughly x:[208,280] y:[4,64]. `build_nav_icon.py` composites
-`traced/listen.svg`'s duck-body group with one badge path per icon and
-writes both a preview SVG and the final Android XML to `traced/nav/`; those
-XML files are then copied byte-for-byte into
-`app/src/main/res/drawable/ic_nav_{sessions,settings,signin,signout}.xml`
-(see each file's header comment for which badge it uses and why -- the gear
-and door+arrow are legibility-driven substitutions for the bead's literal
-"wrench"/"waving duck" asks, flagged there for the lead's visual review
-gate). `ic_nav_new_session.xml` skips the badge step entirely and just
-ports `traced/converse.svg` directly (its open-beak + sound-lines already
-read as "duck speaking").
-
-Regenerate with:
-
-```
-python3 svg_trace_to_avd.py traced/<name>.svg /path/to/out.xml --size 24dp
-python3 build_nav_icon.py   # rebuilds traced/nav/ic_nav_{sessions,settings,signin,signout}.{svg,xml}
-```
+The first pass at vn-edu.73's remaining 4 nav glyphs built them from
+`traced/listen.svg`'s duck-body silhouette plus a small hand-authored accent
+badge (`badge_shapes.py`: a 3-bar notes stack, a gear ring, a door+arrow),
+composited by `build_nav_icon.py` into `traced/nav/ic_nav_{sessions,
+settings,signin,signout}.{svg,xml}`. **User verdict: rejected** — "identical
+icon with a gear box." `badge_shapes.py`/`build_nav_icon.py`/`traced/nav/`
+are left in place as a record of what was tried and why it didn't land (same
+one-fillColor-tinted-silhouette limitation this whole style-A pipeline was
+built around), but none of their output is wired into the app anymore — see
+`design/nav-icon-props/README.md` for the v2 approach that replaced it
+(distinct full-color clay-render duck poses holding literal props, generated
+via nanobanana rather than traced from the flat-vector sheet).
