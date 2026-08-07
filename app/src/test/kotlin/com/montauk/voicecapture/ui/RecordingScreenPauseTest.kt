@@ -1,6 +1,7 @@
 package com.montauk.voicecapture.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -16,6 +17,7 @@ import com.montauk.voicecapture.service.TranscriptStateHolder
 import com.montauk.voicecapture.session.RecordingMode
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -197,5 +199,54 @@ class RecordingScreenPauseTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithTag(AUTO_PAUSE_FILL_OVERLAY_TEST_TAG, useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    /**
+     * Bead asn-52b: the gradient fill must be invisible at fraction 0, a
+     * partial fill at 0.5, and its widest extent at 1 -- checked here by the
+     * overlay's own rendered width, not just presence/absence. Compares the
+     * half-fill width against the full-fill width (roughly half), rather
+     * than against the pause button's own outer width, because
+     * [PauseResumeChip] deliberately insets the fill by the button's
+     * `contentPadding` (see its KDoc) -- the button's outer width is not the
+     * fillable area's width. The fill never exceeding the button's own
+     * bounds at all is covered separately (and is asn-myi's whole point) by
+     * `fill overlay stays within the pause button bounds and siblings are
+     * unchanged`, below.
+     */
+    @Test
+    fun `fill overlay width tracks fillFraction from invisible at 0 to widest at 1`() {
+        RecordingActivityStateHolder.set(RecordingActivityState.QUIET)
+        TranscriptStateHolder.update { it.copy(autoPauseFillFraction = 0f) }
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+
+        // fraction 0f: AutoPauseFillOverlay returns early -- no overlay node at all.
+        composeTestRule.onNodeWithTag(AUTO_PAUSE_FILL_OVERLAY_TEST_TAG, useUnmergedTree = true).assertDoesNotExist()
+
+        val buttonBounds = composeTestRule.onNodeWithTag(PAUSE_RESUME_BUTTON_TEST_TAG).getUnclippedBoundsInRoot()
+        val buttonWidth = buttonBounds.right - buttonBounds.left
+
+        TranscriptStateHolder.update { it.copy(autoPauseFillFraction = 0.5f) }
+        composeTestRule.waitForIdle()
+        val halfBounds = composeTestRule
+            .onNodeWithTag(AUTO_PAUSE_FILL_OVERLAY_TEST_TAG, useUnmergedTree = true)
+            .getUnclippedBoundsInRoot()
+        val halfWidth = halfBounds.right - halfBounds.left
+
+        TranscriptStateHolder.update { it.copy(autoPauseFillFraction = 1f) }
+        composeTestRule.waitForIdle()
+        val fullBounds = composeTestRule
+            .onNodeWithTag(AUTO_PAUSE_FILL_OVERLAY_TEST_TAG, useUnmergedTree = true)
+            .getUnclippedBoundsInRoot()
+        val fullWidth = fullBounds.right - fullBounds.left
+
+        assertTrue("full-fill width ($fullWidth) should exceed half-fill width ($halfWidth)", fullWidth > halfWidth)
+        val ratio = halfWidth / fullWidth
+        assertTrue("half/full width ratio ($ratio) should be roughly 0.5", ratio in 0.3f..0.7f)
+        assertTrue("full-fill width ($fullWidth) must never exceed the button's own width ($buttonWidth)", fullWidth <= buttonWidth)
     }
 }

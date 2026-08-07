@@ -1129,7 +1129,11 @@ private fun PauseResumeChip(activityState: RecordingActivityState, fillFraction:
     ) {
         Box(contentAlignment = Alignment.Center) {
             if (!isPaused) {
-                AutoPauseFillOverlay(fillFraction = fillFraction, modifier = Modifier.align(Alignment.CenterStart))
+                // asn-myi: matchParentSize(), not align(CenterStart) + the
+                // overlay's own fillMaxSize() -- see AutoPauseFillOverlay's
+                // KDoc for why the former alternative inflated this whole
+                // button into a giant, screen-covering ellipse.
+                AutoPauseFillOverlay(fillFraction = fillFraction, modifier = Modifier.matchParentSize())
             }
             Text(
                 text = if (isPaused) "▶ RESUME" else "⏸ PAUSE",
@@ -1164,6 +1168,19 @@ private fun PauseResumeChip(activityState: RecordingActivityState, fillFraction:
  * broke that class's clicks/double-taps). [DuckAnimator]'s own KDoc
  * documents this exact hazard and its fix -- pace off a plain [delay] loop,
  * same as here, not Compose's frame/animation clock.
+ *
+ * [modifier] MUST be `BoxScope.matchParentSize()`, not `fillMaxSize()`/
+ * `align()` (asn-myi bug fix): this overlay sits inside
+ * [PauseResumeChip]'s content `Box` alongside the "PAUSE"/"RESUME" [Text],
+ * which is a content-sized (wrap-content) Button -- if this overlay's own
+ * `BoxWithConstraints` asks for `fillMaxSize()`, it inflates the *incoming*
+ * constraints that same Box (and the Button around it) resolves its own
+ * size from, since [Box] sizes itself from the max of all non-
+ * `matchParentSize` children including this one. A live tester saw exactly
+ * that: the pause pill ballooned into a giant ellipse covering ~90% of the
+ * screen the moment the fill fraction went above 0. `matchParentSize()` is
+ * measured last, sized to whatever the Box already resolved from the [Text]
+ * alone, so this overlay can never inflate its own container.
  */
 @Composable
 private fun AutoPauseFillOverlay(fillFraction: Float, modifier: Modifier = Modifier) {
@@ -1183,8 +1200,11 @@ private fun AutoPauseFillOverlay(fillFraction: Float, modifier: Modifier = Modif
     // this composable's own resolved incoming width explicitly, so the
     // fractional fill width is computed from a definite Dp regardless of how
     // Material3's Button content slot happens to propagate constraints to a
-    // plain Box child.
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+    // plain Box child. [modifier] is expected to already carry a fixed size
+    // (matchParentSize() at the call site) -- this no longer chains its own
+    // fillMaxSize(), which is exactly what let this overlay's requested size
+    // leak upward into the button's own measurement (asn-myi).
+    BoxWithConstraints(modifier = modifier) {
         val fillWidth = maxWidth * fillFraction.coerceIn(0f, 1f)
         Box(
             modifier = Modifier
