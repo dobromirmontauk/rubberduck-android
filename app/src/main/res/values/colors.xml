@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Placeholder launcher-icon color; a real mark can replace this later without touching code. -->
-    <color name="ic_launcher_background">#1B1B1F</color>
+    <!-- Adaptive-icon background (bead vn-edu.63): matches the app's near-black
+         dark-theme background (Theme.kt DarkColors.background) so the launcher
+         mark sits on the same base tone as the app itself. -->
+    <color name="ic_launcher_background">#0E0E10</color>
 </resources>
