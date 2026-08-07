@@ -11,8 +11,11 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -20,11 +23,14 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.tooling.preview.Preview
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
+import kotlinx.coroutines.delay
 
 /**
  * The duck's thought cloud (bead asn-3sm, design-board section 2/5 -- layout
@@ -44,6 +50,24 @@ import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
  * the approval ([com.montauk.voicecapture.service.TagApprovalStateHolder])
  * and trigger the duck's happy-bounce; this composable only handles the
  * haptic tick and the tap gesture itself.
+ *
+ * **New-tag entrance (bead asn-bmq).** A top word this particular
+ * [ThoughtCloud] instance has never shown before plays
+ * [NewTagEntranceTimeline]'s WRITE -> MORPH -> DRIFT sequence (handwritten
+ * letter reveal, crossfade to normal typography, then translate+scale into
+ * its [rememberStableSlotAssignment]-assigned slot) before settling into
+ * exactly today's steady-state rendering. "Never shown before" is tracked
+ * per word key by [rememberFirstSeenAtMs], which deliberately treats the
+ * very *first* composition's whole word set as an already-established
+ * baseline (no entrance) -- only a word that shows up in some *later*
+ * composition (the real "duck notices a new topic" case, e.g. a fresh
+ * scorer suggestion arriving mid-session) counts as new. That baseline
+ * carve-out is also what keeps a test/preview that seeds [words] with
+ * several entries in one `setContent` call (e.g. [ThoughtCloudPreview],
+ * `DuckScreenshotTest`) rendering exactly as before -- entrance timing only
+ * ever engages for a word that *arrives after* this composable's first
+ * frame. Candidate words don't participate -- the entrance is specifically
+ * for a new top-set idea, not the muted also-rans.
  */
 @Composable
 fun ThoughtCloud(
@@ -80,22 +104,45 @@ fun ThoughtCloud(
         val topSlotForKey = rememberStableSlotAssignment(topWords.map { it.text }, TOP_SLOTS.size)
         val candidateSlotForKey = rememberStableSlotAssignment(candidateWords.map { it.text }, CANDIDATE_SLOTS.size)
 
+        // Bead asn-bmq: which top words are "new" for entrance purposes --
+        // see this composable's own KDoc for why the very first composition
+        // is a no-entrance baseline.
+        val topFirstSeenAtMs = rememberFirstSeenAtMs(topWords.map { it.text })
+
         topWords.forEach { word ->
             val slot = TOP_SLOTS[topSlotForKey.getValue(word.text)]
-            ThoughtCloudWordView(
-                word = word,
-                slot = slot,
+            val entrance = rememberEntranceSample(
+                key = word.text,
+                firstSeenAtMs = topFirstSeenAtMs.getValue(word.text),
+                text = word.text,
                 reducedMotion = reducedMotion,
-                stageWidthPx = stageWidthPx,
-                stageHeightPx = stageHeightPx,
-                dimFactor = dimFactor,
-                onTap = {
-                    if (word.status == TagWordStatus.PROPOSED) {
-                        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                        onApprove(word)
-                    }
-                },
             )
+            if (entrance.phase == NewTagEntrancePhase.WRITE) {
+                NewTagWriteView(
+                    word = word,
+                    entrance = entrance,
+                    slot = slot,
+                    stageWidthPx = stageWidthPx,
+                    stageHeightPx = stageHeightPx,
+                    dimFactor = dimFactor,
+                )
+            } else {
+                ThoughtCloudWordView(
+                    word = word,
+                    slot = slot,
+                    reducedMotion = reducedMotion,
+                    stageWidthPx = stageWidthPx,
+                    stageHeightPx = stageHeightPx,
+                    dimFactor = dimFactor,
+                    entrance = entrance,
+                    onTap = {
+                        if (word.status == TagWordStatus.PROPOSED) {
+                            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            onApprove(word)
+                        }
+                    },
+                )
+            }
         }
         candidateWords.forEach { word ->
             val slot = CANDIDATE_SLOTS[candidateSlotForKey.getValue(word.text)]
@@ -169,6 +216,85 @@ private fun rememberStableSlotAssignment(keys: List<String>, slotCount: Int): Ma
     return assignment
 }
 
+/**
+ * First-ever-seen wall-clock timestamp for each of [keys], remembered
+ * across recompositions -- feeds [rememberEntranceSample]'s elapsed-time
+ * calculation. The *very first* call (this composable's first frame) is
+ * treated as an already-settled baseline: every key present then is
+ * stamped with [BASELINE_FIRST_SEEN_AT_MS] (the Unix epoch), so
+ * `now - firstSeenAtMs` is always far past [NewTagEntranceTimeline.TOTAL_MS]
+ * and those words never animate in. Only a key that shows up in some
+ * *later* call -- i.e. wasn't part of that first frame's set -- gets
+ * stamped with the real current time and actually plays the entrance. Once
+ * a key has a timestamp it keeps it forever (unlike [rememberStableSlotAssignment],
+ * which frees a dropped key's slot for reuse) -- a word that leaves the top
+ * set and later comes back must not replay its entrance a second time.
+ */
+@Composable
+private fun rememberFirstSeenAtMs(keys: List<String>): Map<String, Long> {
+    val firstSeen = remember { mutableMapOf<String, Long>() }
+    val isFirstComposition = remember { BooleanHolder(true) }
+    for (key in keys) {
+        if (key !in firstSeen) {
+            firstSeen[key] = if (isFirstComposition.value) BASELINE_FIRST_SEEN_AT_MS else System.currentTimeMillis()
+        }
+    }
+    isFirstComposition.value = false
+    return firstSeen
+}
+
+/** Plain (non-[androidx.compose.runtime.State]) remembered flag -- flipping it must NOT itself trigger recomposition, same rationale as [rememberStableSlotAssignment]'s plain [MutableMap]. */
+private class BooleanHolder(var value: Boolean)
+
+/** Sentinel "first seen" timestamp for a baseline (non-animating) word -- see [rememberFirstSeenAtMs]. */
+private const val BASELINE_FIRST_SEEN_AT_MS = 0L
+
+/** A word that has always been [NewTagEntrancePhase.SETTLED] -- the default for words that don't participate in the entrance (candidates) or haven't been wired up to a real [rememberFirstSeenAtMs] timestamp. */
+private val ALWAYS_SETTLED = NewTagEntranceTimeline.Sample(NewTagEntrancePhase.SETTLED, 1f, 0)
+
+/**
+ * Samples [NewTagEntranceTimeline] once per frame for the word first seen
+ * at [firstSeenAtMs], via a bounded [delay] loop -- same real-wall-clock
+ * convention as [rememberLoopingPhase] (see its KDoc for why: Compose's own
+ * animation clock is for continuous, never-finishing loops, not a one-shot
+ * timeline like this). Unlike [rememberLoopingPhase] this loop is NOT
+ * infinite: it stops ticking the moment the sampled phase reaches
+ * [NewTagEntrancePhase.SETTLED], so a settled word (which is every word,
+ * almost all of the time) leaves no live coroutine behind to complicate
+ * `ComposeTestRule.waitForIdle()`.
+ */
+@Composable
+private fun rememberEntranceSample(key: String, firstSeenAtMs: Long, text: String, reducedMotion: Boolean): NewTagEntranceTimeline.Sample {
+    var sample by remember(key) {
+        mutableStateOf(NewTagEntranceTimeline.at(System.currentTimeMillis() - firstSeenAtMs, text, reducedMotion))
+    }
+    LaunchedEffect(key, reducedMotion) {
+        while (true) {
+            val elapsedMs = System.currentTimeMillis() - firstSeenAtMs
+            sample = NewTagEntranceTimeline.at(elapsedMs, text, reducedMotion)
+            if (sample.phase == NewTagEntrancePhase.SETTLED) break
+            delay(NEW_TAG_ENTRANCE_TICK_MS)
+        }
+    }
+    return sample
+}
+
+private const val NEW_TAG_ENTRANCE_TICK_MS = 16L
+
+/** How far above (px) and how much larger [NewTagEntrancePhase.WRITE]/[NewTagEntrancePhase.MORPH] render, before [NewTagEntrancePhase.DRIFT] eases both back down into the word's real [CloudSlot]. */
+private const val ENTRY_RISE_PX = 70f
+private const val ENTRY_SCALE = 1.3f
+
+private fun colorFor(status: TagWordStatus): Color = when (status) {
+    TagWordStatus.EXISTING -> TAG_COLOR_BLUE
+    TagWordStatus.PROPOSED -> TAG_COLOR_PURPLE
+    TagWordStatus.APPROVED -> TAG_COLOR_GREEN
+    TagWordStatus.CANDIDATE -> TAG_COLOR_CANDIDATE
+}
+
+private fun displayTextFor(word: ThoughtCloudWord): String =
+    if (word.status == TagWordStatus.PROPOSED) "${word.text} new?" else word.text
+
 @Composable
 private fun ThoughtCloudWordView(
     word: ThoughtCloudWord,
@@ -178,13 +304,9 @@ private fun ThoughtCloudWordView(
     stageHeightPx: Float,
     dimFactor: Float,
     onTap: () -> Unit,
+    entrance: NewTagEntranceTimeline.Sample = ALWAYS_SETTLED,
 ) {
-    val color = when (word.status) {
-        TagWordStatus.EXISTING -> TAG_COLOR_BLUE
-        TagWordStatus.PROPOSED -> TAG_COLOR_PURPLE
-        TagWordStatus.APPROVED -> TAG_COLOR_GREEN
-        TagWordStatus.CANDIDATE -> TAG_COLOR_CANDIDATE
-    }
+    val color = colorFor(word.status)
     // Design board v2: "every word's size tracks its live confidence,
     // animating smoothly (300ms ease per rescore, ~5s cadence)".
     val fontSize by animateFloatAsState(
@@ -200,15 +322,33 @@ private fun ThoughtCloudWordView(
     val startPx = slot.startFraction?.let { it * stageWidthPx }
     val endPx = slot.endFraction?.let { it * stageWidthPx }
 
+    // Bead asn-bmq's DRIFT phase: eases the word from ENTRY_RISE_PX above
+    // (and ENTRY_SCALE larger than) its real slot down into place. WRITE
+    // renders through a separate composable ([NewTagWriteView]); MORPH holds
+    // at the same entry offset/scale as WRITE while it crossfades typography
+    // in place, then DRIFT is the only phase that actually moves anything.
+    val (riseOffsetPx, entryScale) = when (entrance.phase) {
+        NewTagEntrancePhase.WRITE, NewTagEntrancePhase.MORPH -> ENTRY_RISE_PX to ENTRY_SCALE
+        NewTagEntrancePhase.DRIFT -> {
+            val eased = FastOutSlowInEasing.transform(entrance.phaseProgress)
+            lerp(ENTRY_RISE_PX, 0f, eased) to lerp(ENTRY_SCALE, 1f, eased)
+        }
+        NewTagEntrancePhase.SETTLED -> 0f to 1f
+    }
+
     Box(
         modifier = Modifier
             .graphicsLayer {
                 translationX = startPx ?: (stageWidthPx - (endPx ?: 0f) - size.width)
-                translationY = topPx + motion.driftYPx
+                translationY = topPx - riseOffsetPx + motion.driftYPx
+                scaleX = entryScale
+                scaleY = entryScale
                 rotationZ = baseRotation + motion.driftRotationDeg
                 alpha = motion.shimmerAlpha * dimAlpha
             }
-            .let { base -> if (word.status == TagWordStatus.PROPOSED) base.clickable(onClick = onTap) else base }
+            // Not clickable until fully SETTLED -- a word still WRITE-ing,
+            // MORPH-ing, or DRIFT-ing shouldn't be approvable mid-flight.
+            .let { base -> if (word.status == TagWordStatus.PROPOSED && entrance.phase == NewTagEntrancePhase.SETTLED) base.clickable(onClick = onTap) else base }
             .testTag(testTagFor(word.status) + word.text)
             .semantics {
                 contentDescription = when (word.status) {
@@ -219,11 +359,86 @@ private fun ThoughtCloudWordView(
                 }
             },
     ) {
+        if (entrance.phase == NewTagEntrancePhase.MORPH) {
+            // Crossfade: the handwritten draft fades out as the normal
+            // cloud typography (this word's real status color + badge)
+            // fades in, both held at the WRITE phase's entry position/scale
+            // (see riseOffsetPx/entryScale above) -- drifting only starts
+            // once this crossfade is done.
+            Text(
+                text = word.text,
+                color = color,
+                fontSize = fontSize.sp,
+                fontStyle = FontStyle.Italic,
+                fontFamily = FontFamily.Cursive,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.graphicsLayer { alpha = 1f - entrance.phaseProgress },
+            )
+            Text(
+                text = displayTextFor(word),
+                color = color,
+                fontSize = fontSize.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.graphicsLayer { alpha = entrance.phaseProgress },
+            )
+        } else {
+            Text(
+                text = displayTextFor(word),
+                color = color,
+                fontSize = fontSize.sp,
+                fontWeight = if (word.status == TagWordStatus.CANDIDATE) FontWeight.Medium else FontWeight.Bold,
+            )
+        }
+    }
+}
+
+/**
+ * Bead asn-bmq's WRITE phase: [word]'s text drawn in letter by letter, as
+ * if the duck is writing it down, with a pencil trailing the reveal
+ * (storyboard v5.2: "pencil at the edge") -- rendered above-and-larger-than
+ * the word's real [CloudSlot] (matching [ThoughtCloudWordView]'s MORPH/DRIFT
+ * entry offset, so the handoff into that composable at MORPH is seamless).
+ * Not clickable and not tagged under [testTagFor] -- this is deliberately a
+ * distinct, [NEW_TAG_WRITE_TEST_TAG_PREFIX]-tagged element, not yet the
+ * word's real chip; [ThoughtCloudWordView] takes over (and the real,
+ * status-based test tag starts existing) the moment the phase advances past
+ * WRITE.
+ */
+@Composable
+private fun NewTagWriteView(
+    word: ThoughtCloudWord,
+    entrance: NewTagEntranceTimeline.Sample,
+    slot: CloudSlot,
+    stageWidthPx: Float,
+    stageHeightPx: Float,
+    dimFactor: Float,
+) {
+    val color = colorFor(word.status)
+    val dimAlpha by animateFloatAsState(targetValue = dimFactor, label = "thought-word-write-dim-${word.text}")
+    val topPx = slot.topFraction * stageHeightPx
+    val startPx = slot.startFraction?.let { it * stageWidthPx }
+    val endPx = slot.endFraction?.let { it * stageWidthPx }
+    val revealedText = word.text.take(entrance.lettersRevealed)
+
+    Box(
+        modifier = Modifier
+            .graphicsLayer {
+                translationX = startPx ?: (stageWidthPx - (endPx ?: 0f) - size.width)
+                translationY = topPx - ENTRY_RISE_PX
+                scaleX = ENTRY_SCALE
+                scaleY = ENTRY_SCALE
+                alpha = dimAlpha
+            }
+            .testTag(NEW_TAG_WRITE_TEST_TAG_PREFIX + word.text)
+            .semantics { contentDescription = "${word.text}, being written" },
+    ) {
         Text(
-            text = if (word.status == TagWordStatus.PROPOSED) "${word.text} new?" else word.text,
+            text = "$revealedText✏️", // trailing pencil -- storyboard v5.2: "pencil at the edge"
             color = color,
-            fontSize = fontSize.sp,
-            fontWeight = if (word.status == TagWordStatus.CANDIDATE) FontWeight.Medium else FontWeight.Bold,
+            fontSize = ((slot.minFontSp + slot.maxFontSp) / 2f).sp,
+            fontStyle = FontStyle.Italic,
+            fontFamily = FontFamily.Cursive,
+            fontWeight = FontWeight.Medium,
         )
     }
 }
@@ -272,6 +487,9 @@ const val EXISTING_WORD_TEST_TAG_PREFIX = "duck_word_existing_"
 const val PROPOSED_WORD_TEST_TAG_PREFIX = "duck_word_proposed_"
 const val APPROVED_WORD_TEST_TAG_PREFIX = "duck_word_approved_"
 const val CANDIDATE_WORD_TEST_TAG_PREFIX = "duck_word_candidate_"
+
+/** Bead asn-bmq: tags a word only while [NewTagEntrancePhase.WRITE] is drawing it in -- see [NewTagWriteView]. */
+const val NEW_TAG_WRITE_TEST_TAG_PREFIX = "duck_word_entering_write_"
 
 // asn-0jk's exact palette (design board :root custom properties).
 val TAG_COLOR_BLUE = Color(0xFF5B8DEF)
