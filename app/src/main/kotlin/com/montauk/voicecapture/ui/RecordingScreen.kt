@@ -735,7 +735,21 @@ private fun DuckWaveformBar(
         return
     }
 
-    val visualizer = remember(sessionId) { LoudnessVisualizer() }
+    // Screen-vs-storyboard gate fix (drop #1): a cold LoudnessVisualizer()
+    // starts every one of its DEFAULT_HISTORY_LENGTH slots at 0f and only
+    // fills in ONE new entry per LaunchedEffect firing -- fine for the
+    // debug view's meter (which genuinely wants to show "just started,
+    // ramping up"), but for a SINGLE static frame (a Roborazzi golden, or
+    // literally the first frame of a real recording) it reads as 27 empty
+    // dashes plus one real, much-taller bar -- which, with this bar's full
+    // corner-radius rounding, renders as a flat dashed line with a trailing
+    // DOT rather than a loudness tick-strip (the gate's exact finding).
+    // Pre-warming every slot with the level at mount time makes the very
+    // first frame already read as a settled row of ticks; the LaunchedEffect
+    // below still scrolls in real variation as the live level changes.
+    val visualizer = remember(sessionId) {
+        LoudnessVisualizer().apply { repeat(LoudnessVisualizer.DEFAULT_HISTORY_LENGTH) { onLevel(micLevel) } }
+    }
     var history by remember(visualizer) { mutableStateOf(visualizer.history) }
     LaunchedEffect(micLevel, visualizer) {
         visualizer.onLevel(micLevel)
