@@ -132,12 +132,16 @@ class RecordingScreenPauseTest {
     /**
      * Bead asn-o63's core bug fix, carried over onto this bead's floating
      * pill: a live tester saw the button label NOT change while auto-paused.
-     * Asserts the label AND the tap semantics -- tapping while auto-paused
-     * now always resumes (there is no other affordance left to offer an
-     * escalate-to-hard-pause path; see [PauseResumeChip]'s KDoc).
+     * Device-test directive (drop #1, item c) supersedes the label itself:
+     * AUTO_PAUSED now reads "JUST SPEAK" (mic still listening, sustained
+     * speech wakes the duck on its own), not "RESUME" (that's the harder,
+     * mic-released USER_PAUSED case -- see the other test in this class).
+     * Tapping still always resumes either way -- there is no other
+     * affordance left to offer an escalate-to-hard-pause path; see
+     * [PauseResumeChip]'s KDoc.
      */
     @Test
-    fun `pause pill shows RESUME while AUTO_PAUSED, and a tap calls onSetPaused(false)`() {
+    fun `pause pill shows JUST SPEAK while AUTO_PAUSED, and a tap calls onSetPaused(false)`() {
         RecordingActivityStateHolder.set(RecordingActivityState.AUTO_PAUSED)
         val pausedCalls = mutableListOf<Boolean>()
 
@@ -151,12 +155,50 @@ class RecordingScreenPauseTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithText("▶ RESUME").assertIsDisplayed()
+        composeTestRule.onNodeWithText("▶ JUST SPEAK").assertIsDisplayed()
+        composeTestRule.onNodeWithText("▶ RESUME").assertDoesNotExist()
         composeTestRule.onNodeWithText("⏸ PAUSE").assertDoesNotExist()
         composeTestRule.onNodeWithTag(PAUSE_RESUME_BUTTON_TEST_TAG).performClick()
         composeTestRule.waitForIdle()
 
         assertEquals(listOf(false), pausedCalls)
+    }
+
+    /**
+     * Device-test directive (drop #1, item b): the pause/resume pill and
+     * STOP must sit at OPPOSITE ends of the control row -- the pause/resume
+     * pill in the bottom-LEFT slot (an in-place swap when the state
+     * changes, not a pill that moves next to STOP), STOP pinned bottom-
+     * right. Checked in both the not-paused and paused renderings since the
+     * pause/resume pill's own width changes with its label ("PAUSE" vs
+     * "JUST SPEAK" vs "RESUME") -- the left-edge anchoring must hold
+     * regardless.
+     */
+    @Test
+    fun `pause-resume pill sits left of STOP in both the active and paused renderings`() {
+        RecordingActivityStateHolder.set(RecordingActivityState.SPEAKING)
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+
+        val pauseBounds = composeTestRule.onNodeWithTag(PAUSE_RESUME_BUTTON_TEST_TAG).getUnclippedBoundsInRoot()
+        val stopBounds = composeTestRule.onNodeWithText("STOP").getUnclippedBoundsInRoot()
+        assertTrue(
+            "pause pill (left=${pauseBounds.left}) should sit left of STOP (left=${stopBounds.left}) while active",
+            pauseBounds.left < stopBounds.left,
+        )
+
+        RecordingActivityStateHolder.set(RecordingActivityState.USER_PAUSED)
+        composeTestRule.waitForIdle()
+
+        val resumeBounds = composeTestRule.onNodeWithTag(PAUSE_RESUME_BUTTON_TEST_TAG).getUnclippedBoundsInRoot()
+        val stopBoundsPaused = composeTestRule.onNodeWithText("STOP").getUnclippedBoundsInRoot()
+        assertTrue(
+            "resume pill (left=${resumeBounds.left}) should sit left of STOP (left=${stopBoundsPaused.left}) while paused",
+            resumeBounds.left < stopBoundsPaused.left,
+        )
     }
 
     /**

@@ -236,8 +236,15 @@ fun RecordingScreen(
                     MinimalTopChrome(mode = recordingState.mode, activityState = activityState, modifier = Modifier.padding(horizontal = 24.dp))
                     Spacer(modifier = Modifier.height(4.dp))
                 }
+                // Device-test directive (2026-08-06 drop #1, item d): the
+                // timer itself is the pause tell -- warm/red only while
+                // actually recording, grey+frozen the instant either pause
+                // kind takes over (matches the storyboard's dim `.paused`
+                // timer style, frames 10-11).
+                val isPausedForTimer = activityState == RecordingActivityState.AUTO_PAUSED ||
+                    activityState == RecordingActivityState.USER_PAUSED
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    BigTimer(elapsedMs = recordingState.elapsedMs)
+                    BigTimer(elapsedMs = recordingState.elapsedMs, isPaused = isPausedForTimer)
                 }
                 // Bead asn-kd2 v5.2: the mic-loudness waveform, restored
                 // under the timer in every duck-view state (see
@@ -324,8 +331,19 @@ fun RecordingScreen(
                             // frozen timer above is the whole story) and no non-
                             // floating equivalent in the debug view (there is no other
                             // pause UI anywhere on this screen by design).
+                            // Device-test directive (drop #1, item b): the
+                            // pause/resume-role pill is an IN-PLACE swap in
+                            // the bottom-LEFT slot -- not a centered group
+                            // next to STOP. SpaceBetween over the full
+                            // control-row width pins it to the start edge
+                            // and STOP to the end edge (bottom-right,
+                            // prominent), matching the storyboard.
                             controls = {
-                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
                                     PauseResumeChip(
                                         activityState = activityState,
                                         fillFraction = transcript.autoPauseFillFraction,
@@ -513,15 +531,23 @@ private fun ModeSegment(
     }
 }
 
+/**
+ * [isPaused] (device-test directive, drop #1 item d): grey+frozen during
+ * either pause kind -- the storyboard's own `.paused` timer style (frames
+ * 10-11) -- warm/[MaterialTheme.colorScheme.primary] only while actually
+ * recording. The elapsed value itself already freezes independently
+ * (real recorded-content time, never wall clock -- see [RecordingUiState.elapsedMs]);
+ * this only controls the color, not whether the number keeps ticking.
+ */
 @Composable
-private fun BigTimer(elapsedMs: Long) {
+private fun BigTimer(elapsedMs: Long, isPaused: Boolean) {
     val totalSeconds = elapsedMs / 1000
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     Text(
         text = String.format("%02d:%02d", minutes, seconds),
         style = MaterialTheme.typography.displayLarge.copy(fontFeatureSettings = "tnum"),
-        color = MaterialTheme.colorScheme.primary,
+        color = if (isPaused) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f) else MaterialTheme.colorScheme.primary,
     )
 }
 
@@ -1237,23 +1263,28 @@ private fun FilingDestinationRibbon(destination: String) {
  *  - [floating] = true (duck view): a small pill (matches the design
  *    board's `.btn-stop`), still >= 48dp touch target, with an explicit
  *    [FLOATING_BUTTON_ELEVATION] drop shadow so it reads as floating above
- *    the duck's yellow rather than blending into him -- [DuckStage] is what
- *    positions this pill so it overlaps his lower body/feet; this
- *    composable only owns the button's own look.
+ *    the duck's yellow rather than blending into him. Deliberately sized to
+ *    its own content -- not wrapped in a `fillMaxWidth()` self-centering
+ *    box -- since its one caller (the duck view's `controls` row) places it
+ *    at the row's own end via `Arrangement.SpaceBetween` (device-test
+ *    directive, drop #1 item b: STOP stays pinned bottom-right while the
+ *    pause/resume pill takes the opposite, bottom-left slot); a
+ *    self-centering wrapper here would have consumed that row's entire
+ *    remaining width and swallowed the `SpaceBetween` effect. [DuckStage]
+ *    positions the whole row so it overlaps the duck's lower body/feet;
+ *    this composable only owns the button's own look.
  */
 @Composable
 private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit, floating: Boolean = false) {
     if (floating) {
-        Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Button(
-                onClick = onClick,
-                modifier = Modifier.heightIn(min = FLOATING_BUTTON_MIN_HEIGHT).shadow(FLOATING_BUTTON_ELEVATION, RoundedCornerShape(999.dp)),
-                shape = RoundedCornerShape(999.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                contentPadding = PaddingValues(horizontal = 28.dp, vertical = 10.dp),
-            ) {
-                Text(text = "STOP", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onError, fontWeight = FontWeight.Bold)
-            }
+        Button(
+            onClick = onClick,
+            modifier = modifier.heightIn(min = FLOATING_BUTTON_MIN_HEIGHT).shadow(FLOATING_BUTTON_ELEVATION, RoundedCornerShape(999.dp)),
+            shape = RoundedCornerShape(999.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+            contentPadding = PaddingValues(horizontal = 28.dp, vertical = 10.dp),
+        ) {
+            Text(text = "STOP", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onError, fontWeight = FontWeight.Bold)
         }
         return
     }
@@ -1283,18 +1314,31 @@ private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit, floating
  * Bead asn-r60's state machine, asn-o63's bug fix, asn-3sm's presentation
  * (team-lead's v2 pause redesign supersedes asn-r60/asn-o63's own
  * `PauseBanner`/`BottomActionsBar` UI outright -- see [RecordingScreen]'s
- * `controls` slot): a small floating pill next to the floating STOP pill,
- * same visual language ([FLOATING_BUTTON_ELEVATION] shadow, fully rounded,
- * >= 48dp touch target).
+ * `controls` slot): a small floating pill in the bottom-left slot (device-
+ * test directive, drop #1 item b -- an IN-PLACE swap, not a separate pill
+ * next to STOP), same visual language ([FLOATING_BUTTON_ELEVATION] shadow,
+ * fully rounded, >= 48dp touch target) as the floating STOP pill.
  *
- * [isPaused] is [RecordingActivityState.USER_PAUSED] OR
- * [RecordingActivityState.AUTO_PAUSED] -- asn-o63's live-test fix: the
- * original asn-r60 build only flipped the label for the manual/hard case, so
- * a tester saw it stay "PAUSE" through an entire auto-pause. Tapping while
- * either kind of pause is active now always resumes (there is no other
- * pause UI left to offer an escalate-to-hard-pause affordance -- asn-o63
- * dropped the separate auto-pause banner entirely, "no need for any other
- * UI, keep it minimal", which is exactly this bead's own v2 direction too).
+ * **Text and color depend on the pause KIND, not just paused-vs-not**
+ * (device-test directive, drop #1 item c): the two pause kinds behave
+ * differently under the hood (see [RecordingActivityState]'s own KDoc) and
+ * the button now says so --
+ *  - not paused (SPEAKING/QUIET): "⏸ PAUSE", neutral
+ *    [MaterialTheme.colorScheme.secondaryContainer].
+ *  - [RecordingActivityState.AUTO_PAUSED]: "▶ JUST SPEAK" -- mic still open
+ *    on its ring buffer, sustained speech wakes the duck on its own; tapping
+ *    this button also resumes, it's just not the only way.
+ *  - [RecordingActivityState.USER_PAUSED]: "▶ RESUME" -- hard mute, mic
+ *    released; this button is the ONLY way back.
+ *
+ * Both pause kinds render as a GREEN pill (matches the storyboard's
+ * `.resume` pill) -- distinct from the neutral pause-state color -- since
+ * either one is "tap this to make the duck listen again," just with
+ * different urgency/mechanism behind it. Tapping while either kind of pause
+ * is active always resumes (there is no other pause UI left to offer an
+ * escalate-to-hard-pause affordance -- asn-o63 dropped the separate
+ * auto-pause banner entirely, "no need for any other UI, keep it minimal",
+ * which is exactly this bead's own v2 direction too).
  *
  * [fillFraction] (asn-o63's [com.montauk.voicecapture.service.TranscriptUiState.autoPauseFillFraction])
  * drives [AutoPauseFillOverlay]'s moving-gradient warning, shown only while
@@ -1303,6 +1347,13 @@ private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit, floating
 @Composable
 private fun PauseResumeChip(activityState: RecordingActivityState, fillFraction: Float, onSetPaused: (Boolean) -> Unit) {
     val isPaused = activityState == RecordingActivityState.USER_PAUSED || activityState == RecordingActivityState.AUTO_PAUSED
+    val label = when (activityState) {
+        RecordingActivityState.AUTO_PAUSED -> "▶ JUST SPEAK"
+        RecordingActivityState.USER_PAUSED -> "▶ RESUME"
+        RecordingActivityState.SPEAKING, RecordingActivityState.QUIET -> "⏸ PAUSE"
+    }
+    val containerColor = if (isPaused) RESUME_PILL_GREEN else MaterialTheme.colorScheme.secondaryContainer
+    val contentColor = if (isPaused) Color.White else MaterialTheme.colorScheme.onSecondaryContainer
     Button(
         onClick = { onSetPaused(!isPaused) },
         modifier = Modifier
@@ -1310,7 +1361,7 @@ private fun PauseResumeChip(activityState: RecordingActivityState, fillFraction:
             .shadow(FLOATING_BUTTON_ELEVATION, RoundedCornerShape(999.dp))
             .testTag(PAUSE_RESUME_BUTTON_TEST_TAG),
         shape = RoundedCornerShape(999.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        colors = ButtonDefaults.buttonColors(containerColor = containerColor),
         // Deliberately keeps Button's default contentPadding rather than
         // zeroing it out (matches BottomActionsBar's own rationale before
         // this bead superseded it): the fill overlay is inset by that same
@@ -1327,14 +1378,17 @@ private fun PauseResumeChip(activityState: RecordingActivityState, fillFraction:
                 AutoPauseFillOverlay(fillFraction = fillFraction, modifier = Modifier.matchParentSize())
             }
             Text(
-                text = if (isPaused) "▶ RESUME" else "⏸ PAUSE",
+                text = label,
                 style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                color = contentColor,
                 fontWeight = FontWeight.Bold,
             )
         }
     }
 }
+
+/** Bead v5.1 device-test directive: the resume-role pill's green, distinct from the neutral pause-state [MaterialTheme.colorScheme.secondaryContainer] -- matches the storyboard's `.resume` pill, hardcoded like this file's other locked-design colors (see [TagRailChipView]'s KDoc for the convention). */
+private val RESUME_PILL_GREEN = Color(0xFF3FAE7A)
 
 /**
  * Bead asn-o63: the Pause pill's interim "closing window" warning -- a
