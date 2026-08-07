@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import com.montauk.voicecapture.VoiceCaptureApp
+import com.montauk.voicecapture.duck.DUCK_STAGE_TEST_TAG
 import com.montauk.voicecapture.service.RecordingActivityState
 import com.montauk.voicecapture.service.RecordingActivityStateHolder
 import com.montauk.voicecapture.service.RecordingStateHolder
@@ -248,5 +249,63 @@ class RecordingScreenPauseTest {
         val ratio = halfWidth / fullWidth
         assertTrue("half/full width ratio ($ratio) should be roughly 0.5", ratio in 0.3f..0.7f)
         assertTrue("full-fill width ($fullWidth) must never exceed the button's own width ($buttonWidth)", fullWidth <= buttonWidth)
+    }
+
+    /**
+     * Regression test for asn-myi: a live tester saw the fill overlay render
+     * as a giant ellipse covering ~90% of the screen instead of staying
+     * inside the pause pill. Root cause was [AutoPauseFillOverlay]'s
+     * `Modifier.fillMaxSize()` -- inside a Button/Row/Box chain that doesn't
+     * clamp its own max-width constraints, a `fillMaxSize()` descendant
+     * pulls the *ancestor* pill outward to whatever loose max constraints
+     * happen to be available (here, the whole duck stage), rather than
+     * being confined to the pill's own wrap-content size. The fix (asn-52b)
+     * uses `BoxScope.matchParentSize()` instead, which is measured last and
+     * sized to match the Box's already-resolved (Text-driven) size, so the
+     * overlay can never inflate its own container. Asserts both halves of
+     * asn-myi's acceptance criteria: the overlay's bounds stay within the
+     * pause pill's own bounds, and the button's own footprint plus its
+     * siblings (duck stage, STOP) are unaffected by the fill fraction.
+     */
+    @Test
+    fun `fill overlay stays within the pause button bounds and siblings are unchanged`() {
+        RecordingActivityStateHolder.set(RecordingActivityState.QUIET)
+        TranscriptStateHolder.update { it.copy(autoPauseFillFraction = 0f) }
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+
+        val buttonBoundsAtZero = composeTestRule.onNodeWithTag(PAUSE_RESUME_BUTTON_TEST_TAG).getUnclippedBoundsInRoot()
+        val duckBoundsAtZero = composeTestRule.onNodeWithTag(DUCK_STAGE_TEST_TAG).getUnclippedBoundsInRoot()
+        val stopBoundsAtZero = composeTestRule.onNodeWithText("STOP").getUnclippedBoundsInRoot()
+
+        TranscriptStateHolder.update { it.copy(autoPauseFillFraction = 0.5f) }
+        composeTestRule.waitForIdle()
+
+        val buttonBounds = composeTestRule.onNodeWithTag(PAUSE_RESUME_BUTTON_TEST_TAG).getUnclippedBoundsInRoot()
+        val overlayBounds = composeTestRule
+            .onNodeWithTag(AUTO_PAUSE_FILL_OVERLAY_TEST_TAG, useUnmergedTree = true)
+            .getUnclippedBoundsInRoot()
+
+        // The pause button itself, and everything else on screen, must be
+        // completely unaffected by the mid-fill fraction.
+        assertEquals(buttonBoundsAtZero, buttonBounds)
+        assertEquals(duckBoundsAtZero, composeTestRule.onNodeWithTag(DUCK_STAGE_TEST_TAG).getUnclippedBoundsInRoot())
+        assertEquals(stopBoundsAtZero, composeTestRule.onNodeWithText("STOP").getUnclippedBoundsInRoot())
+
+        // The fill overlay must render fully inside the pause pill's own
+        // bounds -- never wider/taller than the button, never outside it.
+        assertTrue("overlay left (${overlayBounds.left}) < button left (${buttonBounds.left})", overlayBounds.left >= buttonBounds.left)
+        assertTrue("overlay top (${overlayBounds.top}) < button top (${buttonBounds.top})", overlayBounds.top >= buttonBounds.top)
+        assertTrue("overlay right (${overlayBounds.right}) > button right (${buttonBounds.right})", overlayBounds.right <= buttonBounds.right)
+        assertTrue("overlay bottom (${overlayBounds.bottom}) > button bottom (${buttonBounds.bottom})", overlayBounds.bottom <= buttonBounds.bottom)
+
+        // Sanity ceiling matching asn-myi's screenshot bug (a fill that
+        // covered ~90% of the screen): the overlay must be much smaller
+        // than the duck stage, not comparable to it.
+        assertTrue((overlayBounds.right - overlayBounds.left) < (duckBoundsAtZero.right - duckBoundsAtZero.left) / 2)
+        assertTrue((overlayBounds.bottom - overlayBounds.top) < (duckBoundsAtZero.bottom - duckBoundsAtZero.top) / 2)
     }
 }
