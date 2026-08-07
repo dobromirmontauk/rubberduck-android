@@ -51,7 +51,7 @@ class DuckScreenshotTest {
     val composeTestRule = createComposeRule()
 
     @Test
-    fun duckListeningWithThoughtCloud() {
+    fun duckAttentiveWithThoughtCloud() {
         composeTestRule.setContent {
             VoiceCaptureTheme {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -68,7 +68,7 @@ class DuckScreenshotTest {
                         modifier = Modifier.fillMaxSize(),
                     )
                     DuckPoseFrame(
-                        visual = DuckVisual.Pose(DuckFrame.IDLE_BREATHING_1),
+                        visual = DuckVisual.Pose(DuckFrame.ATTENTIVE),
                         modifier = Modifier.fillMaxWidth(0.55f).aspectRatio(1f),
                     )
                 }
@@ -76,16 +76,16 @@ class DuckScreenshotTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_listening_thought_cloud.png")
+        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_attentive_thought_cloud.png")
     }
 
     @Test
-    fun duckSleepy() {
+    fun duckSleep() {
         composeTestRule.setContent {
             VoiceCaptureTheme {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     DuckPoseFrame(
-                        visual = DuckVisual.Pose(DuckFrame.SLEEPY_1),
+                        visual = DuckVisual.Pose(DuckFrame.SLEEP),
                         modifier = Modifier.fillMaxWidth(0.55f).aspectRatio(1f),
                     )
                 }
@@ -93,16 +93,16 @@ class DuckScreenshotTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_sleepy.png")
+        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_sleep.png")
     }
 
     @Test
-    fun duckThinking() {
+    fun duckThink() {
         composeTestRule.setContent {
             VoiceCaptureTheme {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     DuckPoseFrame(
-                        visual = DuckVisual.Pose(DuckFrame.THINKING_1),
+                        visual = DuckVisual.Pose(DuckFrame.THINK),
                         modifier = Modifier.fillMaxWidth(0.55f).aspectRatio(1f),
                     )
                 }
@@ -110,16 +110,16 @@ class DuckScreenshotTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_thinking.png")
+        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_think.png")
     }
 
     @Test
-    fun duckSleeping() {
+    fun duckCelebrate() {
         composeTestRule.setContent {
             VoiceCaptureTheme {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     DuckPoseFrame(
-                        visual = DuckVisual.Pose(DuckFrame.SLEEPING_1),
+                        visual = DuckVisual.Pose(DuckFrame.CELEBRATE),
                         modifier = Modifier.fillMaxWidth(0.55f).aspectRatio(1f),
                     )
                 }
@@ -127,6 +127,6 @@ class DuckScreenshotTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_sleeping.png")
+        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_celebrate.png")
     }
 }

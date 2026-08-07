@@ -3,15 +3,13 @@ package com.montauk.voicecapture.duck
 import com.montauk.voicecapture.service.RecordingActivityState
 
 /**
- * SPEAKING -> LISTENING anim; QUIET -> SLEEPY; either paused kind ->
- * SLEEPING (bead asn-3sm). [RecordingActivityState] is asn-r60's real,
- * VAD-driven `StateFlow` on [com.montauk.voicecapture.service.RecordingActivityStateHolder] --
- * this superseded a crude stand-in derived from transcript signals
- * (`crudeRecordingActivity`/`RecordingActivitySource`, both deleted) once
- * asn-r60 landed on `main`.
+ * SPEAKING -> ATTENTIVE; QUIET or either paused kind -> SLEEP (bead asn-5w3:
+ * quiet no longer gets its own drowsy tier, and auto-/manual-pause are
+ * now visually identical too -- all three collapse onto the same
+ * [DuckState.SLEEP] pose). [RecordingActivityState] is asn-r60's real,
+ * VAD-driven `StateFlow` on [com.montauk.voicecapture.service.RecordingActivityStateHolder].
  */
 fun RecordingActivityState.toDuckState(): DuckState = when (this) {
-    RecordingActivityState.SPEAKING -> DuckState.LISTENING
-    RecordingActivityState.QUIET -> DuckState.SLEEPY
-    RecordingActivityState.AUTO_PAUSED, RecordingActivityState.USER_PAUSED -> DuckState.SLEEPING
+    RecordingActivityState.SPEAKING -> DuckState.ATTENTIVE
+    RecordingActivityState.QUIET, RecordingActivityState.AUTO_PAUSED, RecordingActivityState.USER_PAUSED -> DuckState.SLEEP
 }

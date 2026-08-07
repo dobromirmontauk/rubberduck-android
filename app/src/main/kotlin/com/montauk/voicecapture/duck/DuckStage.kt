@@ -26,14 +26,23 @@ import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
  * [DUCK_HEIGHT_FRACTION] (~2/3) of the stage's height, head landing around
  * that same fraction from the top; [ThoughtCloud] scatters its words in the
  * space above/around his head; [ThoughtBubbleDots] ties the two together
- * visually. [ZzTrail] rises from his head during [DuckState.SLEEPY]/
- * [DuckState.SLEEPING]. [NotesCard] and [controls] both render as pure
- * overlays on top of the duck -- neither ever resizes or reflows him; see
- * each composable's own KDoc for why. [LatencyBadge] sits bottom-right
- * (hidden at [com.montauk.voicecapture.service.LatencySeverity.OK]). No
- * persistent notepad, no transcript, no other chrome --
+ * visually. [ZzTrail] rises from his head during [DuckState.SLEEP].
+ * [NotesCard] and [controls] both render as pure overlays on top of the
+ * duck -- neither ever resizes or reflows him; see each composable's own
+ * KDoc for why. [LatencyBadge] sits bottom-right (hidden at
+ * [com.montauk.voicecapture.service.LatencySeverity.OK]). No persistent
+ * notepad, no transcript, no other chrome --
  * [com.montauk.voicecapture.ui.RecordingScreen] layers the timer above this
  * stage and passes its stop/pause control row in as [controls].
+ *
+ * Bead asn-5w3 mechanical note: [happyBounceTrigger] (a tag was approved)
+ * and the internal new-tag-entered-the-cloud detection below are each still
+ * plain incrementing `Int` nonces from their original callers -- this
+ * composable is what translates them into the pulse-based
+ * [DuckAnimator]/[DuckAnimationEngine] API ([DuckPulse.CELEBRATE] and
+ * [DuckPulse.RAISE_HAND] respectively). Real event-trigger wiring for the
+ * other pulses ([DuckPulse.BLINK]/[DuckPulse.NOD]/[DuckPulse.WRITE]) is
+ * asn-02h's job, not this bead's.
  */
 @Composable
 fun DuckStage(
@@ -48,10 +57,10 @@ fun DuckStage(
     happyBounceTrigger: Int = 0,
     controls: @Composable () -> Unit = {},
 ) {
-    val dozingOrAsleep = duckState == DuckState.SLEEPY || duckState == DuckState.SLEEPING
+    val dozingOrAsleep = duckState == DuckState.SLEEP
     // Design board v2, frame 4: "duck switches to thinking/notes-scribble
     // pose; cloud words dim to 35%" while a summary round is in flight.
-    val wordsDimFactor = if (duckState == DuckState.THINKING) WORDS_DIM_FACTOR_WHILE_THINKING else 1f
+    val wordsDimFactor = if (duckState == DuckState.THINK) WORDS_DIM_FACTOR_WHILE_THINKING else 1f
 
     // Design board v2, frame 2: "a new tag enters the idea cloud and the
     // duck raises his hand eagerly" -- tracked here (not pushed onto
@@ -69,6 +78,23 @@ fun DuckStage(
         previousTopKeys = currentTopKeys
     }
 
+    // Folds the two legacy Int nonces above into a single DuckPulseEvent
+    // stream for DuckAnimator -- see the class KDoc's asn-5w3 note.
+    var pulseNonce by remember { mutableStateOf(0) }
+    var pulseTrigger by remember { mutableStateOf<DuckPulseEvent?>(null) }
+    LaunchedEffect(happyBounceTrigger) {
+        if (happyBounceTrigger != 0) {
+            pulseNonce++
+            pulseTrigger = DuckPulseEvent(DuckPulse.CELEBRATE, pulseNonce)
+        }
+    }
+    LaunchedEffect(handRaiseTrigger) {
+        if (handRaiseTrigger != 0) {
+            pulseNonce++
+            pulseTrigger = DuckPulseEvent(DuckPulse.RAISE_HAND, pulseNonce)
+        }
+    }
+
     Box(modifier = modifier.testTag(DUCK_STAGE_TEST_TAG).fillMaxSize()) {
         ThoughtCloud(
             words = words,
@@ -79,8 +105,8 @@ fun DuckStage(
         )
         DuckAnimator(
             state = duckState,
-            happyBounceTrigger = happyBounceTrigger,
-            handRaiseTrigger = handRaiseTrigger,
+            pulseTrigger = pulseTrigger,
+            reducedMotion = reducedMotion,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
@@ -133,10 +159,10 @@ private const val WORDS_DIM_FACTOR_WHILE_THINKING = 0.35f
 
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 640)
 @Composable
-private fun DuckStageListeningPreview() {
+private fun DuckStageAttentivePreview() {
     VoiceCaptureTheme {
         DuckStage(
-            duckState = DuckState.LISTENING,
+            duckState = DuckState.ATTENTIVE,
             words = listOf(
                 ThoughtCloudWord("family-trust", 0.9, TagWordStatus.EXISTING),
                 ThoughtCloudWord("kitchen-remodel", 0.85, TagWordStatus.PROPOSED),
@@ -155,10 +181,10 @@ private fun DuckStageListeningPreview() {
 
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 640)
 @Composable
-private fun DuckStageThinkingPreview() {
+private fun DuckStageThinkPreview() {
     VoiceCaptureTheme {
         DuckStage(
-            duckState = DuckState.THINKING,
+            duckState = DuckState.THINK,
             words = listOf(ThoughtCloudWord("kitchen-remodel", 0.6, TagWordStatus.PROPOSED)),
             reducedMotion = false,
             onApproveWord = {},
@@ -171,9 +197,9 @@ private fun DuckStageThinkingPreview() {
 
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 640)
 @Composable
-private fun DuckStageSleepyPreview() {
+private fun DuckStageSleepPreview() {
     VoiceCaptureTheme {
-        DuckStage(duckState = DuckState.SLEEPY, words = ThoughtCloudWords.EMPTY, reducedMotion = false, onApproveWord = {},
+        DuckStage(duckState = DuckState.SLEEP, words = ThoughtCloudWords.EMPTY, reducedMotion = false, onApproveWord = {},
             summary = com.montauk.voicecapture.service.SummaryUiState(),
             latencyState = com.montauk.voicecapture.service.LatencyBadgeUiState(),
             onLatencyBadgeTap = {})
@@ -182,11 +208,17 @@ private fun DuckStageSleepyPreview() {
 
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 640)
 @Composable
-private fun DuckStageSleepingPreview() {
+private fun DuckStageCelebratePreview() {
     VoiceCaptureTheme {
-        DuckStage(duckState = DuckState.SLEEPING, words = ThoughtCloudWords.EMPTY, reducedMotion = false, onApproveWord = {},
+        DuckStage(
+            duckState = DuckState.ATTENTIVE,
+            words = ThoughtCloudWords.EMPTY,
+            reducedMotion = false,
+            onApproveWord = {},
             summary = com.montauk.voicecapture.service.SummaryUiState(),
             latencyState = com.montauk.voicecapture.service.LatencyBadgeUiState(),
-            onLatencyBadgeTap = {})
+            onLatencyBadgeTap = {},
+            happyBounceTrigger = 1,
+        )
     }
 }

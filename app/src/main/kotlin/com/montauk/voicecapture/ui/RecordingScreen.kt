@@ -207,7 +207,7 @@ fun RecordingScreen(
         if (summary.bullets.isNotEmpty()) thinkingUntilMs = System.currentTimeMillis() + THINKING_DISPLAY_MS
     }
     val baseDuckState = remember(activityState) { activityState.toDuckState() }
-    val duckState = if (nowMs < thinkingUntilMs) DuckState.THINKING else baseDuckState
+    val duckState = if (nowMs < thinkingUntilMs) DuckState.THINK else baseDuckState
 
     // Bead vn-edu.46's keyless guard, preserved: no key means NO word-cloud
     // data at all, even if TagRailStateHolder is stale/non-empty (shouldn't
