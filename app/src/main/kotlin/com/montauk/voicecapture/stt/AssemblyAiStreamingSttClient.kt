@@ -1,6 +1,6 @@
 package com.montauk.voicecapture.stt
 
-import android.util.Log
+import com.montauk.voicecapture.logging.RubberduckLog
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
@@ -52,7 +52,6 @@ class AssemblyAiStreamingSttClient(
 ) : StreamingSttClient {
 
     private companion object {
-        const val TAG = "AssemblyAiStt"
         // ~a few seconds of audio at typical AudioRecord read-buffer sizes; deep
         // enough to ride out a brief reconnect, shallow enough that a stuck
         // socket doesn't quietly accumulate unbounded memory.
@@ -139,10 +138,18 @@ class AssemblyAiStreamingSttClient(
     @Volatile private var closed = false
     @Volatile private var reconnectAttempts = 0
 
+    // Bead asn-jht: aggregated counts only, never the transcript text itself
+    // -- see RubberduckLog's own KDoc for why. Both only ever incremented
+    // from onMessage, which OkHttp calls on one reader thread per socket, so
+    // plain (non-atomic) counters are safe here.
+    @Volatile private var partialCount = 0
+    @Volatile private var finalCount = 0
+
     override suspend fun connect(sampleRateHz: Int, channelCount: Int) {
         this.sampleRateHz = sampleRateHz
         this.channelCount = channelCount
         closed = false
+        RubberduckLog.i("Stt", "connecting", "sampleRateHz" to sampleRateHz, "channelCount" to channelCount)
         openSocket()
         senderJob = scope.launch { pumpPcmToSocket() }
     }
@@ -174,7 +181,7 @@ class AssemblyAiStreamingSttClient(
         webSocket = httpClient.newWebSocket(request, Listener(ready))
         val connected = withTimeoutOrNull(CONNECT_TIMEOUT_MS) { ready.await() }
         if (connected == null) {
-            Log.w(TAG, "AssemblyAI connect handshake timed out after ${CONNECT_TIMEOUT_MS}ms")
+            RubberduckLog.i("Stt", "connect_timeout", "timeoutMs" to CONNECT_TIMEOUT_MS)
             connectionStateFlow.value = SttConnectionState.DROPPED
         }
     }
@@ -183,22 +190,26 @@ class AssemblyAiStreamingSttClient(
         override fun onOpen(webSocket: WebSocket, response: Response) {
             connectionStateFlow.value = SttConnectionState.CONNECTED
             reconnectAttempts = 0
+            RubberduckLog.i("Stt", "connected")
             ready.complete(Unit)
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
-            parseTurnMessage(text)?.let { partialsFlow.tryEmit(it) }
+            val partial = parseTurnMessage(text) ?: return
+            // Bead asn-jht: counts only, never partial.text -- see the class-level counter KDoc.
+            if (partial.isFinal) finalCount++ else partialCount++
+            partialsFlow.tryEmit(partial)
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            Log.w(TAG, "AssemblyAI socket failure: ${t.message}")
+            RubberduckLog.i("Stt", "socket_failure", "reason" to (t.message ?: t::class.simpleName))
             ready.complete(Unit) // don't hang connect() forever; reconnect loop takes over
             handleDrop()
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             if (!closed) {
-                Log.i(TAG, "AssemblyAI socket closed unexpectedly (code=$code reason=$reason)")
+                RubberduckLog.i("Stt", "socket_closed_unexpectedly", "code" to code, "reason" to reason)
                 handleDrop()
             }
         }
@@ -214,16 +225,16 @@ class AssemblyAiStreamingSttClient(
         while (!closed && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
             reconnectAttempts++
             val delayMs = (RECONNECT_BASE_DELAY_MS * (1L shl (reconnectAttempts - 1))).coerceAtMost(RECONNECT_MAX_DELAY_MS)
-            Log.i(TAG, "Reconnecting to AssemblyAI in ${delayMs}ms (attempt $reconnectAttempts/$MAX_RECONNECT_ATTEMPTS)")
+            RubberduckLog.i("Stt", "reconnecting", "attempt" to reconnectAttempts, "maxAttempts" to MAX_RECONNECT_ATTEMPTS, "delayMs" to delayMs)
             delay(delayMs)
             if (closed) return
             runCatching { openSocket() }.onFailure { e ->
-                Log.w(TAG, "Reconnect attempt $reconnectAttempts failed: ${e.message}")
+                RubberduckLog.i("Stt", "reconnect_attempt_failed", "attempt" to reconnectAttempts, "reason" to (e.message ?: e::class.simpleName))
             }
             if (connectionStateFlow.value == SttConnectionState.CONNECTED) return
         }
         if (!closed && connectionStateFlow.value != SttConnectionState.CONNECTED) {
-            Log.w(TAG, "Giving up reconnecting to AssemblyAI after $reconnectAttempts attempts; live transcript stays off for the rest of this session")
+            RubberduckLog.i("Stt", "reconnect_exhausted", "attempts" to reconnectAttempts)
         }
     }
 
@@ -267,6 +278,7 @@ class AssemblyAiStreamingSttClient(
 
     override suspend fun close() {
         closed = true
+        RubberduckLog.i("Stt", "closing", "partialCount" to partialCount, "finalCount" to finalCount)
         pcmChannel.close()
         senderJob?.join()
         runCatching {

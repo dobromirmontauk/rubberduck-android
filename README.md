@@ -135,6 +135,40 @@ Requires a JDK compatible with Android Gradle Plugin 8.7 (JDK 17 or 21 --
 newer JDKs are not yet supported by AGP; see "Toolchain notes" below if
 `./gradlew` picks the wrong one).
 
+## Device logs (bead asn-jht)
+
+Every state machine in the app (recording activity state, VAD, duck
+state/pulses, STT socket lifecycle, tag events, summary rounds, notes-card
+choreography, upload steps, service lifecycle) logs its transitions through
+one shared facility, `com.montauk.voicecapture.logging.RubberduckLog`. Every
+line uses the same logcat tag and the same grep-able `key=value` shape:
+
+```
+adb logcat -s rubberduck
+```
+
+`grep`/`awk` a specific component out of the stream, e.g. only STT socket
+events:
+
+```
+adb logcat -s rubberduck | grep 'component=Stt'
+```
+
+logcat's ring buffer rotates away old lines within minutes, so the same
+lines are also mirrored to a small rolling file (~2MB active + ~2MB rolled,
+never more) in the app's files dir. Pull it after reproducing an issue --
+no root required, works on a signed debug build:
+
+```
+adb pull /data/data/com.montauk.voicecapture/files/rubberduck.log
+adb pull /data/data/com.montauk.voicecapture/files/rubberduck.log.1
+```
+
+The `.1` file is whatever rolled off the active file most recently -- pull
+both if the active file alone doesn't cover the window you need. Log lines
+never contain transcript text or audio content; tag names are the one
+deliberate exception (see `RubberduckLog`'s own KDoc for the full contract).
+
 ## Testing without a working microphone (debug builds only)
 
 The macOS emulator's host-mic passthrough is unreliable (it delivers a few

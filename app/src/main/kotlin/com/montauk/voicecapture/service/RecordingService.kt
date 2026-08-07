@@ -31,6 +31,7 @@ import com.montauk.voicecapture.duck.DuckPulse
 import com.montauk.voicecapture.duck.DuckPulseStateHolder
 import com.montauk.voicecapture.duck.nodPulseForFinalSegment
 import com.montauk.voicecapture.duck.topSetGainedNewTag
+import com.montauk.voicecapture.logging.RubberduckLog
 import com.montauk.voicecapture.session.LiveTranscriptLine
 import com.montauk.voicecapture.session.LiveTranscriptWriter
 import com.montauk.voicecapture.session.ModeChange
@@ -334,12 +335,14 @@ class RecordingService : LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
+        RubberduckLog.i("Service", "on_create")
         audioEngine = AudioEngine()
         createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
+        RubberduckLog.i("Service", "start_command", "action" to intent?.action)
         when (intent?.action) {
             ACTION_START -> beginRecording(intent.getStringExtra(EXTRA_INJECT_AUDIO))
             ACTION_STOP -> endRecording()
@@ -356,12 +359,21 @@ class RecordingService : LifecycleService() {
         return START_NOT_STICKY
     }
 
+    /** Bead asn-jht: tracks the last VAD speaking/quiet flip actually logged, so [onVadWindow] only logs on a real flip, not on every ~100ms window. Reset (to null, so the very first window's reading always logs) at the top of [beginRecording]. */
+    private var lastLoggedVadSpeaking: Boolean? = null
+
+    /** Bead asn-jht: the highest [currentAutoPauseFillFraction] quartile (0/25/50/75/100) already logged since it last reset to 0 -- see [logFillMilestoneIfCrossed]. */
+    private var lastLoggedFillMilestone = 0
+
     private fun beginRecording(injectAudioSpec: String?) {
         if (currentSession != null) return // already recording
 
         val app = application as VoiceCaptureApp
         val session = app.sessionStore.createSession(Date())
         currentSession = session
+        RubberduckLog.i("Service", "recording_started", "sessionId" to session.sessionId)
+        lastLoggedVadSpeaking = null
+        lastLoggedFillMilestone = 0
 
         TranscriptStateHolder.reset()
         TagsStateHolder.reset()
@@ -408,12 +420,14 @@ class RecordingService : LifecycleService() {
             // detects an auto-resume. Updated before the TranscriptStateHolder
             // write below so quietDurationMs reflects this window already.
             voiceActivityDetector.onWindow(level, MicLevelMeter.DEFAULT_WINDOW_MS.toLong())
+            val fillFraction = currentAutoPauseFillFraction()
+            logFillMilestoneIfCrossed(fillFraction)
             TranscriptStateHolder.update {
                 it.copy(
                     micLevel = level,
                     silenceHintVisible = silent,
                     quietDurationMs = voiceActivityDetector.continuousQuietMs,
-                    autoPauseFillFraction = currentAutoPauseFillFraction(),
+                    autoPauseFillFraction = fillFraction,
                 )
             }
             onVadWindow()
@@ -543,6 +557,7 @@ class RecordingService : LifecycleService() {
         val tagId = intent.getStringExtra(EXTRA_TAG_ID)
         if (!rail.onAdd(tag, tagId)) return
         TagRailStateHolder.update(rail.chips())
+        RubberduckLog.i("Tags", "user_add", "tag" to tag)
         writeUserTagEvent(session, added = listOf(UserTagRef(tag, tagId)), removed = emptyList())
     }
 
@@ -553,6 +568,7 @@ class RecordingService : LifecycleService() {
         val tag = intent.getStringExtra(EXTRA_TAG_NAME)?.takeIf { it.isNotBlank() } ?: return
         if (!rail.onRemove(tag)) return
         TagRailStateHolder.update(rail.chips())
+        RubberduckLog.i("Tags", "user_remove", "tag" to tag)
         writeUserTagEvent(session, added = emptyList(), removed = listOf(UserTagRef(tag)))
     }
 
@@ -565,6 +581,7 @@ class RecordingService : LifecycleService() {
         val newTagId = intent.getStringExtra(EXTRA_TAG_ID)
         if (!rail.onSwap(oldTag, newTag, newTagId)) return
         TagRailStateHolder.update(rail.chips())
+        RubberduckLog.i("Tags", "user_swap", "from" to oldTag, "to" to newTag)
         writeUserTagEvent(session, added = listOf(UserTagRef(newTag, newTagId)), removed = listOf(UserTagRef(oldTag)))
     }
 
@@ -594,7 +611,8 @@ class RecordingService : LifecycleService() {
         val tag = intent.getStringExtra(EXTRA_TAG_NAME)?.takeIf { it.isNotBlank() } ?: return
         if (!rail.onApprove(tag)) return
         TagRailStateHolder.update(rail.chips())
-        DuckPulseStateHolder.emit(DuckPulse.CELEBRATE)
+        DuckPulseStateHolder.emit(DuckPulse.CELEBRATE, source = "tag_approved")
+        RubberduckLog.i("Tags", "user_approve", "tag" to tag)
         writeUserTagEvent(session, added = listOf(UserTagRef(tag, tagId = null, approved = true)), removed = emptyList())
     }
 
@@ -623,6 +641,8 @@ class RecordingService : LifecycleService() {
     private fun handleNoteApprove(intent: Intent) {
         val session = currentSession ?: return
         val text = intent.getStringExtra(EXTRA_NOTE_TEXT)?.takeIf { it.isNotBlank() } ?: return
+        // Bead asn-jht: length only, never the bullet text itself.
+        RubberduckLog.i("Notes", "user_approve", "bulletLength" to text.length)
         writeUserNoteEvent(session, approved = text, discarded = null)
     }
 
@@ -696,6 +716,29 @@ class RecordingService : LifecycleService() {
     }
 
     /**
+     * Bead asn-jht: logs a "fill_milestone" event the first time
+     * [fillFraction] crosses each quartile (25/50/75/100%) since the last
+     * time it dropped back toward 0 (i.e. speech resumed and the auto-pause
+     * countdown restarted) -- one line per quartile crossing per quiet span,
+     * not a line per ~100ms VAD window (that would be exactly the
+     * per-audio-frame-adjacent hot path the bead's acceptance criteria rule
+     * out).
+     */
+    private fun logFillMilestoneIfCrossed(fillFraction: Float) {
+        val milestone = when {
+            fillFraction >= 1f -> 100
+            fillFraction >= 0.75f -> 75
+            fillFraction >= 0.5f -> 50
+            fillFraction >= 0.25f -> 25
+            else -> 0
+        }
+        if (milestone > lastLoggedFillMilestone) {
+            RubberduckLog.i("RecordingActivityState", "fill_milestone", "percent" to milestone)
+        }
+        lastLoggedFillMilestone = milestone
+    }
+
+    /**
      * Bead asn-r60: VAD-driven activity-state machine, called from every RMS
      * window regardless of pause state (see [MicLevelMeter]'s callback in
      * [beginRecording], which updates [voiceActivityDetector] itself just
@@ -722,6 +765,10 @@ class RecordingService : LifecycleService() {
             }
             RecordingActivityState.SPEAKING, RecordingActivityState.QUIET -> {
                 val speaking = voiceActivityDetector.isSpeaking
+                if (lastLoggedVadSpeaking != speaking) {
+                    RubberduckLog.i("Vad", "flip", "speaking" to speaking)
+                    lastLoggedVadSpeaking = speaking
+                }
                 RecordingActivityStateHolder.set(if (speaking) RecordingActivityState.SPEAKING else RecordingActivityState.QUIET)
                 val app = application as VoiceCaptureApp
                 if (!speaking &&
@@ -863,9 +910,9 @@ class RecordingService : LifecycleService() {
                 // actually down. NOD is the slower per-turn beat: a final
                 // segment landing always fires it, no throttle.
                 if (partial.isFinal) {
-                    DuckPulseStateHolder.emit(nodPulseForFinalSegment())
+                    DuckPulseStateHolder.emit(nodPulseForFinalSegment(), source = "final_segment")
                 } else if (blinkHeartbeat.onInboundPartial(SystemClock.elapsedRealtime())) {
-                    DuckPulseStateHolder.emit(DuckPulse.BLINK)
+                    DuckPulseStateHolder.emit(DuckPulse.BLINK, source = "partial_heartbeat")
                 }
                 // Bead asn-r60: fold in sttTimelineTracker's accumulated
                 // offset before this timestamp reaches the UI or disk -- see
@@ -1013,7 +1060,7 @@ class RecordingService : LifecycleService() {
                 rail.onSuggested(changed)
                 val topSetAfter = rail.chips()
                 if (topSetGainedNewTag(topSetBefore, topSetAfter)) {
-                    DuckPulseStateHolder.emit(DuckPulse.RAISE_HAND)
+                    DuckPulseStateHolder.emit(DuckPulse.RAISE_HAND, source = "new_tag")
                 }
                 val approvedKeys = rail.approvedKeys()
                 app.sessionStore.transcriptFile(session.dir)
@@ -1059,7 +1106,7 @@ class RecordingService : LifecycleService() {
                 // no-op against the held WRITE base state while the notes
                 // card is up) is RecordingScreen's call -- see
                 // shouldPlayPulse's own KDoc.
-                DuckPulseStateHolder.emit(DuckPulse.WRITE)
+                DuckPulseStateHolder.emit(DuckPulse.WRITE, source = "summary_round")
                 app.sessionStore.transcriptFile(session.dir).appendText(SummaryEventWriter.encodeLine(atMs, result.added) + "\n")
                 app.sessionStore.summaryFile(session.dir).writeText(SummaryMarkdownWriter.render(result.bullets))
             }
@@ -1124,6 +1171,7 @@ class RecordingService : LifecycleService() {
         // which doubles as meta.json's new recorded_ms field with no separate
         // accumulator needed.
         val recordedMs = audioTimelineClock.elapsedMs(now, elapsedMs)
+        RubberduckLog.i("Service", "recording_ended", "sessionId" to session.sessionId, "elapsedMs" to elapsedMs)
         currentSession = null
 
         audioEngine.stop()
@@ -1193,6 +1241,7 @@ class RecordingService : LifecycleService() {
                 onWarningResolved = { TooShortWarningStateHolder.clearWarning() },
                 finalize = {
                     val finalizeSucceeded = runFinalizeWithWatchdog(app, session, elapsedMs, recordedMs)
+                    RubberduckLog.i("Service", "recording_finalized", "sessionId" to session.sessionId, "success" to finalizeSucceeded)
                     // No GitHub token configured (bead vn-edu.29: recording is never gated on
                     // sign-in) means there's no uploader to hand this to -- runFinalizeWithWatchdog
                     // already left the session at its writeMeta default of LOCAL in that case, and
@@ -1214,6 +1263,7 @@ class RecordingService : LifecycleService() {
                     // directory -- audio.wal and any live-transcript.jsonl event
                     // lines already written -- so nothing uploads and no row ever
                     // appears (writeMeta/UploadWorker.enqueue are never reached).
+                    RubberduckLog.i("Service", "recording_discarded", "sessionId" to session.sessionId, "reason" to "too_short")
                     TooShortSessionDiscarder.discard(session.dir)
                 },
             )

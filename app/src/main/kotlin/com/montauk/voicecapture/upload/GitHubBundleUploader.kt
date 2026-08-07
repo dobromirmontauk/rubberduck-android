@@ -1,6 +1,7 @@
 package com.montauk.voicecapture.upload
 
 import android.util.Log
+import com.montauk.voicecapture.logging.RubberduckLog
 import java.io.File
 import java.util.Base64
 import java.util.concurrent.TimeUnit
@@ -70,7 +71,7 @@ class GitHubBundleUploader(
         val sessionId = sessionDir.name
         runCatching {
             if (checkAlreadyUploaded(sessionId)) {
-                Log.i(TAG, "inbox/$sessionId already exists at HEAD; treating as already uploaded")
+                RubberduckLog.i("Upload", "already_uploaded", "sessionId" to sessionId)
                 return@runCatching
             }
 
@@ -87,6 +88,7 @@ class GitHubBundleUploader(
 
             val audioExt = audioFile.extension
             val useLfs = gitattributesTracksExtension(audioExt)
+            RubberduckLog.i("Upload", "lfs_upload_start", "sessionId" to sessionId, "useLfs" to useLfs)
             val audioBlobBytes: ByteArray = if (useLfs) {
                 val oid = GitHubLfsPointer.computeOid(audioFile)
                 uploadToLfs(oid, audioFile)
@@ -99,7 +101,9 @@ class GitHubBundleUploader(
                 )
                 audioFile.readBytes()
             }
+            RubberduckLog.i("Upload", "lfs_upload_done", "sessionId" to sessionId)
 
+            RubberduckLog.i("Upload", "commit_bundle_start", "sessionId" to sessionId)
             commitBundle(
                 sessionId = sessionId,
                 audioPath = "inbox/$sessionId/audio.$audioExt",
@@ -108,10 +112,11 @@ class GitHubBundleUploader(
                 transcriptBytes = transcriptFile?.readBytes(),
                 summaryBytes = summaryFile?.readBytes(),
             )
+            RubberduckLog.i("Upload", "commit_bundle_done", "sessionId" to sessionId)
         }.fold(
             onSuccess = { Result.success(Unit) },
             onFailure = { e ->
-                Log.e(TAG, "uploadBundle failed for $sessionId", e)
+                RubberduckLog.i("Upload", "bundle_failed", "sessionId" to sessionId, "reason" to (e.message ?: e::class.simpleName))
                 Result.failure(classifyError(e))
             },
         )

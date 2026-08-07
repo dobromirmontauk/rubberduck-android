@@ -1,7 +1,6 @@
 package com.montauk.voicecapture.upload
 
 import android.content.Context
-import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -13,6 +12,7 @@ import androidx.work.WorkRequest
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.montauk.voicecapture.VoiceCaptureApp
+import com.montauk.voicecapture.logging.RubberduckLog
 import com.montauk.voicecapture.session.SessionStore
 import com.montauk.voicecapture.session.UploadState
 import java.util.concurrent.TimeUnit
@@ -32,26 +32,27 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     override suspend fun doWork(): Result {
         val sessionId = inputData.getString(KEY_SESSION_ID)
         if (sessionId.isNullOrBlank()) {
-            Log.e(TAG, "UploadWorker started with no session id in input data")
+            RubberduckLog.i("Upload", "missing_session_id")
             return Result.failure()
         }
 
         val app = applicationContext as VoiceCaptureApp
         val sessionDir = app.sessionStore.sessionDir(sessionId)
         if (!sessionDir.exists()) {
-            Log.e(TAG, "session directory for $sessionId no longer exists; giving up")
+            RubberduckLog.i("Upload", "session_dir_missing", "sessionId" to sessionId)
             return Result.failure()
         }
 
+        RubberduckLog.i("Upload", "start", "sessionId" to sessionId)
         val uploadResult = app.bundleUploader.uploadBundle(sessionDir)
         return uploadResult.fold(
             onSuccess = {
                 app.sessionStore.setUploadState(sessionDir, UploadState.UPLOADED)
-                Log.i(TAG, "session $sessionId uploaded")
+                RubberduckLog.i("Upload", "success", "sessionId" to sessionId)
                 Result.success()
             },
             onFailure = { e ->
-                Log.w(TAG, "upload attempt failed for $sessionId: ${e.message}")
+                RubberduckLog.i("Upload", "failed", "sessionId" to sessionId, "reason" to (e.message ?: e::class.simpleName))
                 when (e) {
                     // Bad/missing credentials won't fix themselves on retry -- stop burning
                     // the backoff schedule on it. The session stays QUEUED and can be
@@ -64,7 +65,6 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     }
 
     companion object {
-        private const val TAG = "UploadWorker"
         const val KEY_SESSION_ID = "session_id"
         private const val WORK_NAME_PREFIX = "upload-session-"
 

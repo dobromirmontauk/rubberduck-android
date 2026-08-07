@@ -1,5 +1,7 @@
 package com.montauk.voicecapture.summary
 
+import com.montauk.voicecapture.logging.RubberduckLog
+
 /**
  * What changed on a round [SummaryCoordinator.onTick] actually did something
  * on -- mirrors [com.montauk.voicecapture.tags.TagCoordinator]'s
@@ -77,8 +79,20 @@ class SummaryCoordinator(
         lastAttemptAtMs = nowMs
         lastAttemptTranscriptLength = fullTranscript.length
 
+        // Bead asn-jht: round-level bookkeeping only -- word counts and bullet
+        // counts, never fullTranscript or bullet text itself.
+        RubberduckLog.i("Summary", "round_start", "atMs" to nowMs, "transcriptWords" to wordCount(fullTranscript))
         val proposed = runCatching { activeGenerator.generate(fullTranscript, bullets, discardedOriginal.toList()) }.getOrNull()
-        return if (proposed == null) onFailedRound() else onSuccessfulRound(proposed)
+        val result = if (proposed == null) onFailedRound() else onSuccessfulRound(proposed)
+        RubberduckLog.i(
+            "Summary",
+            "round_end",
+            "success" to (proposed != null),
+            "addedCount" to (result?.added?.size ?: 0),
+            "totalBullets" to (result?.bullets?.size ?: bullets.size),
+            "stale" to (result?.stale ?: stale),
+        )
+        return result
     }
 
     /** The bullets/newest/stale [onTick] most recently settled on -- e.g. to re-render after a UI recreation without waiting on the next round. */
@@ -104,6 +118,8 @@ class SummaryCoordinator(
         bullets = bullets.dropLast(1)
         discardedOriginal += bulletText
         discardedNormalized += AppendOnlyBulletMerge.normalize(bulletText)
+        // Bead asn-jht: length only, never the bullet text itself.
+        RubberduckLog.i("Summary", "discard", "bulletLength" to bulletText.length, "remainingBullets" to bullets.size)
         return true
     }
 
