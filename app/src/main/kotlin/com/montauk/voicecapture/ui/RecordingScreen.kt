@@ -226,8 +226,16 @@ fun RecordingScreen(
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(modifier = Modifier.fillMaxSize()) {
                 Spacer(modifier = Modifier.height(20.dp))
-                MinimalTopChrome(mode = recordingState.mode, activityState = activityState, modifier = Modifier.padding(horizontal = 24.dp))
-                Spacer(modifier = Modifier.height(4.dp))
+                // Bead v5.1: the "● REC"/"⏸ auto"/"⏸ paused" top-chrome
+                // labels are debug-view-only now -- the duck view drops them
+                // entirely in every state (see this file's class KDoc and
+                // MinimalTopChrome's own KDoc). The debug view still wants
+                // them, so they render right where they always have, just
+                // gated on showDebugView instead of unconditionally.
+                if (showDebugView) {
+                    MinimalTopChrome(mode = recordingState.mode, activityState = activityState, modifier = Modifier.padding(horizontal = 24.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     BigTimer(elapsedMs = recordingState.elapsedMs)
                 }
@@ -364,16 +372,23 @@ private sealed interface TagPickerRequest {
 }
 
 /**
- * Layout A's minimal top chrome (design board section 2): a small
- * "● REC"/"⏸ auto"/"⏸ paused" indicator plus the current mode, replacing
- * the pre-asn-3sm [ChipsRow] / [LoudnessMeterBar] / [ModeSwitcher] row up
- * here -- those move into the double-tap debug view (see [RecordingScreen])
- * since the home state's whole point is "duck + thought cloud, nothing
- * else." [activityState] (bead asn-r60) drives which of the three the
- * left-hand indicator shows -- team-lead's v2 pause redesign supersedes
- * asn-r60's own `PauseBanner`/`BottomActionsBar` presentation entirely (see
- * [PauseResumeChip]): no separate banner anywhere on this screen, just this
- * label swap plus the floating pause/resume pill next to STOP.
+ * The debug view's top chrome (design board section 2, superseded by v5.1):
+ * a small "● REC"/"⏸ auto"/"⏸ paused" indicator plus the current mode,
+ * replacing the pre-asn-3sm [ChipsRow] / [LoudnessMeterBar] / [ModeSwitcher]
+ * row up here. [activityState] (bead asn-r60) drives which of the three the
+ * left-hand indicator shows.
+ *
+ * **Debug-view-only as of bead v5.1.** Earlier this rendered unconditionally
+ * above both the duck and debug views; the locked no-corner-labels rule now
+ * extends to this row too -- the duck view shows it in NO state (not even
+ * the pause states' "⏸ auto"/"⏸ paused" text: the sleeping duck, the
+ * frozen timer, and the floating Resume pill already say everything there
+ * is to say). [RecordingScreen] only calls this composable inside its
+ * `showDebugView` branch now; the pause/resume presentation itself is
+ * unaffected (team-lead's v2 redesign already superseded asn-r60/asn-o63's
+ * own `PauseBanner`/`BottomActionsBar` UI outright -- see
+ * [PauseResumeChip]): no separate banner anywhere on this screen, just the
+ * floating pause/resume pill next to STOP.
  */
 @Composable
 private fun MinimalTopChrome(mode: RecordingMode, activityState: RecordingActivityState, modifier: Modifier = Modifier) {

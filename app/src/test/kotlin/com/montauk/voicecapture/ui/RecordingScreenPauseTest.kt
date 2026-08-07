@@ -1,11 +1,13 @@
 package com.montauk.voicecapture.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.duck.DUCK_STAGE_TEST_TAG
@@ -144,25 +146,53 @@ class RecordingScreenPauseTest {
         assertEquals(listOf(false), pausedCalls)
     }
 
+    /**
+     * Bead v5.1: the "● REC"/"⏸ auto"/"⏸ paused" top-chrome labels are gone
+     * from the duck view in every state -- the sleeping duck, the Z-trail,
+     * the frozen big timer, and the floating Resume pill already say
+     * everything there is to say (see [MinimalTopChrome]'s KDoc). This
+     * replaces the old version of this test, which asserted the OPPOSITE
+     * (that these labels were displayed) -- that was true before v5.1
+     * dropped them from the duck view specifically.
+     */
     @Test
-    fun `top chrome shows the pause indicator matching each activity state, and no banner exists anywhere`() {
+    fun `duck view shows no REC or auto-pause top-chrome labels in any activity state`() {
         RecordingActivityStateHolder.set(RecordingActivityState.SPEAKING)
 
         composeTestRule.setContent {
             AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
         }
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("● REC").assertIsDisplayed()
+        composeTestRule.onNodeWithText("● REC").assertDoesNotExist()
 
         RecordingActivityStateHolder.set(RecordingActivityState.AUTO_PAUSED)
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("⏸ auto").assertIsDisplayed()
+        composeTestRule.onNodeWithText("⏸ auto").assertDoesNotExist()
         composeTestRule.onNodeWithText("just start talking, or tap to resume").assertDoesNotExist()
 
         RecordingActivityStateHolder.set(RecordingActivityState.USER_PAUSED)
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("⏸ paused").assertIsDisplayed()
+        composeTestRule.onNodeWithText("⏸ paused").assertDoesNotExist()
         composeTestRule.onNodeWithText("tap Resume to keep recording").assertDoesNotExist()
+    }
+
+    /**
+     * Bead v5.1 exempts only the duck view -- the debug/transcript view
+     * (reached via the same double-tap toggle [RecordingScreenDuckToggleTest]
+     * covers) keeps its top-chrome activity indicator exactly as before.
+     */
+    @Test
+    fun `debug view still shows the top-chrome activity indicator`() {
+        RecordingActivityStateHolder.set(RecordingActivityState.SPEAKING)
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG).performTouchInput { doubleClick() }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("● REC").assertIsDisplayed()
     }
 
     /** Bead asn-o63: the fill overlay only ever shows while NOT already paused -- it's meaningless once auto-pause has actually fired. */
