@@ -37,7 +37,7 @@ FRAMES = [
     ("08-listening-intro-01.png", "duck_attentive.png", "ATTENTIVE"),
     ("48-sleeping-01.png", "duck_sleep.png", "SLEEP"),
     ("23-thinking-01.png", "duck_think.png", "THINK"),
-    ("07-blink-03.png", "duck_blink.png", "BLINK"),
+    ("05-blink-01.png", "duck_blink.png", "BLINK"),
     ("16-head-turn-02.png", "duck_nod.png", "NOD"),
     ("46-hand-raise-eager-01.png", "duck_raise_hand.png", "RAISE_HAND"),
     ("41-notes-scribble-01.png", "duck_write.png", "WRITE"),

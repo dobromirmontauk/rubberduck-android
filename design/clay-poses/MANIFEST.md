@@ -218,10 +218,20 @@ re-picking poses.
 | `ATTENTIVE` | `08-listening-intro-01.png` | Base: recording active, default |
 | `SLEEP` | `48-sleeping-01.png` | Base: quiet, or either pause kind |
 | `THINK` | `23-thinking-01.png` | Base: a summary round is in flight |
-| `BLINK` | `07-blink-03.png` | Pulse: a few seconds of audio captured and sent to transcription |
+| `BLINK` | `05-blink-01.png` | Pulse: a few seconds of audio captured and sent to transcription |
 | `NOD` | `16-head-turn-02.png` | Pulse: a final transcription segment landed |
 | `RAISE_HAND` | `46-hand-raise-eager-01.png` | Pulse: a new tag entered the thought cloud |
 | `WRITE` | `41-notes-scribble-01.png` | Pulse: a summary round completed |
+
+Pick correction during asn-q3r's lead review: `BLINK` was originally picked as
+`07-blink-03.png` in the asn-3sm WIP checkpoint, but that frame is off-model
+against the other 6 -- it's a standing duck (legs visible, narrower body,
+more saturated color), so the pulse would visibly "change bodies" against
+the sitting `ATTENTIVE` base every time it fired. Swapped to `05-blink-01.png`,
+which shares the sitting silhouette/bandana of the other 6 and reads as a
+true blink (eyes dipped to brown dots, otherwise identical to the idle/
+attentive pose). `06-blink-02.png` was also considered and rejected --
+heavy-lidded/sleepy read, too close to the `SLEEP` frame.
 
 ### Normalization
 
