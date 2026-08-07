@@ -29,6 +29,7 @@ import com.montauk.voicecapture.audio.autoPauseFillFraction
 import com.montauk.voicecapture.duck.BlinkHeartbeat
 import com.montauk.voicecapture.duck.DuckPulse
 import com.montauk.voicecapture.duck.DuckPulseStateHolder
+import com.montauk.voicecapture.duck.nodPulseForFinalSegment
 import com.montauk.voicecapture.session.LiveTranscriptLine
 import com.montauk.voicecapture.session.LiveTranscriptWriter
 import com.montauk.voicecapture.session.ModeChange
@@ -832,14 +833,17 @@ class RecordingService : LifecycleService() {
                 if (partial.text.isNotBlank()) {
                     silenceDetector.onTranscriptActivity(SystemClock.elapsedRealtime())
                 }
-                // Bead asn-02h.1: the transcription heartbeat -- BLINK on
-                // every INBOUND (non-final) partial RESPONSE from the STT
-                // engine (proves the full mic->socket->engine->response
-                // round trip), throttled to at most one per ~2.5s -- never
-                // on an outbound audio-chunk send, which would
-                // false-reassure when the engine is actually down. NOD
-                // (final segments) lands in asn-02h.2.
-                if (!partial.isFinal && blinkHeartbeat.onInboundPartial(SystemClock.elapsedRealtime())) {
+                // Bead asn-02h.1/asn-02h.2: BLINK is the transcription
+                // heartbeat -- fires on every INBOUND (non-final) partial
+                // RESPONSE from the STT engine (proves the full
+                // mic->socket->engine->response round trip), throttled to at
+                // most one per ~2.5s -- never on an outbound audio-chunk
+                // send, which would false-reassure when the engine is
+                // actually down. NOD is the slower per-turn beat: a final
+                // segment landing always fires it, no throttle.
+                if (partial.isFinal) {
+                    DuckPulseStateHolder.emit(nodPulseForFinalSegment())
+                } else if (blinkHeartbeat.onInboundPartial(SystemClock.elapsedRealtime())) {
                     DuckPulseStateHolder.emit(DuckPulse.BLINK)
                 }
                 // Bead asn-r60: fold in sttTimelineTracker's accumulated

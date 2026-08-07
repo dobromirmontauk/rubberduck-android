@@ -9,7 +9,7 @@ package com.montauk.voicecapture.duck
  * [com.montauk.voicecapture.service.SilenceDetector] pairing untested Service
  * call sites with a tested pure class) can stay a thin integration wire while
  * the actual decision is independently testable. Grows one piece per child
- * bead: [BlinkHeartbeat] (asn-02h.1).
+ * bead: [BlinkHeartbeat] (asn-02h.1), [nodPulseForFinalSegment] (asn-02h.2).
  */
 
 /**
@@ -46,3 +46,17 @@ class BlinkHeartbeat(private val throttleMs: Long = DEFAULT_THROTTLE_MS) {
         const val DEFAULT_THROTTLE_MS = 2_500L
     }
 }
+
+/**
+ * A final transcription segment landing always fires [DuckPulse.NOD] (bead
+ * asn-02h.2) -- a slower, per-turn beat than [BlinkHeartbeat]'s throttled
+ * heartbeat, and unconditional: unlike BLINK there is no cadence to gate,
+ * every real `end_of_turn` result from the STT engine is itself already rare
+ * enough (a whole spoken turn, not a per-word partial) to warrant its own
+ * nod every time. A free function rather than a class since there's no
+ * state to carry between calls -- kept here (not inlined at the call site)
+ * so [com.montauk.voicecapture.service.RecordingService]'s STT partials
+ * collector reads as "ask the trigger layer" the same way it does for
+ * [BlinkHeartbeat], and so this mapping has its own test.
+ */
+fun nodPulseForFinalSegment(): DuckPulse = DuckPulse.NOD

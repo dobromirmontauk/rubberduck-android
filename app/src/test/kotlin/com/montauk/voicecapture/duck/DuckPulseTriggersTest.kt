@@ -1,5 +1,6 @@
 package com.montauk.voicecapture.duck
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -45,5 +46,12 @@ class DuckPulseTriggersTest {
         assertFalse(heartbeat.onInboundPartial(nowMs = 100L))
         heartbeat.reset()
         assertTrue(heartbeat.onInboundPartial(nowMs = 150L))
+    }
+
+    // --- nodPulseForFinalSegment (bead asn-02h.2) ---
+
+    @Test
+    fun `final-segment fires NOD`() {
+        assertEquals(DuckPulse.NOD, nodPulseForFinalSegment())
     }
 }
