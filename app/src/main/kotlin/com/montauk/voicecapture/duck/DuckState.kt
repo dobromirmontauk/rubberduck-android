@@ -1,16 +1,32 @@
 package com.montauk.voicecapture.duck
 
 /**
- * High-level visual state the duck view renders as (bead asn-3sm, design
- * board section 1): LISTENING (awake, taking in the conversation) / SLEEPY
- * (idle-timeout, drowsy but still recording -- eyes stay open/heavy-lidded,
- * MANIFEST.md sequence 12) / THINKING ("taking notes" -- a tag/summary LLM
- * call in flight) / SLEEPING (recording paused, either kind -- fully
- * asleep, eyes closed, MANIFEST.md sequence 18; a later design-board
- * revision dropped the original standalone "BRB sign card" treatment in
- * favor of the duck visibly nodding off in place).
+ * The duck's persistent base visual state (bead asn-5w3, one static pose
+ * per state -- see [DuckFrame]'s KDoc): [ATTENTIVE] while recording is
+ * actively picking up speech; [SLEEP] while quiet or paused (either kind --
+ * auto or manual pause are visually identical, no separate "sleepy" tier
+ * anymore); [THINK] for the span of a summary round's real network call
+ * ([com.montauk.voicecapture.service.SummaryCallStateHolder]). A base state
+ * persists until it's explicitly changed -- see [DuckAnimationEngine] for
+ * how a brief [DuckPulse] can interrupt it without changing it.
  */
-enum class DuckState { LISTENING, SLEEPY, THINKING, SLEEPING }
+enum class DuckState { ATTENTIVE, SLEEP, THINK }
+
+/**
+ * A brief one-shot pose that plays over whatever [DuckState] is current,
+ * then reverts -- design board v3/v5.2's "event pulses": [BLINK] (a few
+ * seconds of audio captured and sent to transcription), [NOD] (a final
+ * transcription segment landed), [RAISE_HAND] (a new tag entered the
+ * thought cloud), [WRITE] (a summary round completed), [CELEBRATE] (a tag
+ * was approved -- both wings up, paired with a vertical happy-bounce
+ * animation [DuckAnimator] layers on top of the pose, not baked into the
+ * pixels). Every pulse but [CELEBRATE] runs for
+ * [DuckAnimationEngine.DEFAULT_PULSE_DURATION_MS]; [CELEBRATE] runs for the
+ * shorter [DuckAnimationEngine.CELEBRATE_PULSE_DURATION_MS] to match its
+ * ~600ms/2-bounce choreography. See [DuckAnimationEngine.triggerPulse] for
+ * the queuing rule when one is already playing.
+ */
+enum class DuckPulse { BLINK, NOD, RAISE_HAND, WRITE, CELEBRATE }
 
 /** What [DuckAnimator] should render for one frame: always a specific pose. */
 sealed interface DuckVisual {

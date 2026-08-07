@@ -6,18 +6,18 @@ import org.junit.Test
 
 class DuckActivityMappingTest {
     @Test
-    fun `SPEAKING maps to LISTENING`() {
-        assertEquals(DuckState.LISTENING, RecordingActivityState.SPEAKING.toDuckState())
+    fun `SPEAKING maps to ATTENTIVE`() {
+        assertEquals(DuckState.ATTENTIVE, RecordingActivityState.SPEAKING.toDuckState())
     }
 
     @Test
-    fun `QUIET maps to SLEEPY`() {
-        assertEquals(DuckState.SLEEPY, RecordingActivityState.QUIET.toDuckState())
+    fun `QUIET maps to SLEEP`() {
+        assertEquals(DuckState.SLEEP, RecordingActivityState.QUIET.toDuckState())
     }
 
     @Test
-    fun `AUTO_PAUSED and USER_PAUSED both map to SLEEPING`() {
-        assertEquals(DuckState.SLEEPING, RecordingActivityState.AUTO_PAUSED.toDuckState())
-        assertEquals(DuckState.SLEEPING, RecordingActivityState.USER_PAUSED.toDuckState())
+    fun `AUTO_PAUSED and USER_PAUSED both map to SLEEP`() {
+        assertEquals(DuckState.SLEEP, RecordingActivityState.AUTO_PAUSED.toDuckState())
+        assertEquals(DuckState.SLEEP, RecordingActivityState.USER_PAUSED.toDuckState())
     }
 }

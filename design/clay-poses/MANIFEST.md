@@ -203,15 +203,18 @@ different states at a glance.
     design-board scope revision dropped it — see git history for that asset
     if it's ever needed again.
 
-## v3 single-pose engine: the 7 chosen frames (bead asn-q3r)
+## v3 single-pose engine: the 8 chosen frames (beads asn-q3r, asn-5w3)
 
 asn-3sm's v3 duck engine (per explicit user direction: "ONE static image per
 state, animation comes later") replaced the ~26-frame animation-loop
 architecture with exactly one static frame per [`DuckState`] plus one per
-event pulse -- 7 frames total, picked from this 49-pose library. Picks
+event pulse -- 7 frames initially, picked from this 49-pose library. Picks
 inherited unchanged from the asn-3sm WIP checkpoint (`agent/asn-3sm` @
 `0089f88`); asn-q3r's job was verifying/redoing the normalization, not
-re-picking poses.
+re-picking poses. Bead asn-5w3 (v5.2 design addition) added an 8th frame,
+`CELEBRATE`, for the new tag-approval celebration pulse -- a fresh pick (both
+wings fully raised, `13-wing-flap-03.png`), not inherited from the WIP
+checkpoint, since that pulse didn't exist yet when asn-3sm's WIP was cut.
 
 | Token | Source pose | Role |
 | --- | --- | --- |
@@ -222,6 +225,7 @@ re-picking poses.
 | `NOD` | `16-head-turn-02.png` | Pulse: a final transcription segment landed |
 | `RAISE_HAND` | `46-hand-raise-eager-01.png` | Pulse: a new tag entered the thought cloud |
 | `WRITE` | `41-notes-scribble-01.png` | Pulse: a summary round completed |
+| `CELEBRATE` | `13-wing-flap-03.png` | Pulse: a tag was approved -- both wings up + a vertical happy-bounce (~600ms, 2 bounces) layered on top by `DuckAnimator`, not baked into the pixels |
 
 Pick correction during asn-q3r's lead review: `BLINK` was originally picked as
 `07-blink-03.png` in the asn-3sm WIP checkpoint, but that frame is off-model
@@ -240,7 +244,7 @@ they are not pixel-continuous with each other -- the duck sits at a
 different scale and vertical offset in different frames. Crossfading
 directly between two unnormalized frames makes the duck visibly jump in
 size/position when the app swaps states. `scripts/normalize_poses.py`
-removes that jump for exactly these 7 frames:
+removes that jump for exactly these 8 frames:
 
 1. Alpha-bbox-crop each source pose (drop the surrounding transparent
    margin).
@@ -252,10 +256,13 @@ removes that jump for exactly these 7 frames:
 
 Output lands directly as the app-ready assets at
 `app/src/main/res/drawable-nodpi/duck_{attentive,sleep,think,blink,nod,
-raise_hand,write}.png`, matching this repo's existing drawable-nodpi
+raise_hand,write,celebrate}.png`, matching this repo's existing drawable-nodpi
 bundling convention (density-independent fixed-pixel bitmaps). Verified with
 `scripts/verify_alpha.py` (true RGBA, transparent corners, non-trivial
-opaque interior) before landing.
+opaque interior) before landing; re-running the script after the asn-5w3
+`FRAMES` addition reproduced byte-identical output for the original 7
+(confirmed via `shasum`), so the celebrate addition didn't perturb the
+already-landed picks.
 
 Regenerate with:
 

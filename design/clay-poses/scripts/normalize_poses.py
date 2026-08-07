@@ -41,6 +41,10 @@ FRAMES = [
     ("16-head-turn-02.png", "duck_nod.png", "NOD"),
     ("46-hand-raise-eager-01.png", "duck_raise_hand.png", "RAISE_HAND"),
     ("41-notes-scribble-01.png", "duck_write.png", "WRITE"),
+    # Bead asn-5w3 (v5.2 addition): TAG-APPROVED celebration pulse -- both
+    # wings fully raised, paired with a vertical happy-bounce animation
+    # layered on top by DuckAnimator (not baked into the pixels).
+    ("13-wing-flap-03.png", "duck_celebrate.png", "CELEBRATE"),
 ]
 
 
