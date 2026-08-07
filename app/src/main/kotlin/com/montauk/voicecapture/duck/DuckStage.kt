@@ -167,14 +167,22 @@ const val DUCK_STAGE_TEST_TAG = "duck_stage"
 /**
  * Fraction of THIS composable's own box (which [com.montauk.voicecapture.ui.RecordingScreen]
  * must size to the screen's actual bottom two-thirds -- see this file's
- * class KDoc) the duck sprite fills, leaving a small margin at the box's
- * own top for [ThoughtCloud] words to breathe above his head. Deliberately
- * NOT 0.67 -- that would re-apply the "two-thirds" idea a second time,
- * nested inside a box that's already exactly two-thirds of the screen,
- * and land the head far too high (the screen-vs-storyboard gate's original
- * finding).
+ * class KDoc) the duck sprite fills, leaving a margin at the box's own top
+ * for [ThoughtCloud] words to breathe above his head. Deliberately NOT
+ * 0.67 -- that would re-apply the "two-thirds" idea a second time, nested
+ * inside a box that's already exactly two-thirds of the screen.
+ *
+ * Bead asn-bb4.1, USER DECISION 2026-08-07 (supersedes an earlier 62-70%
+ * target): the duck stays at max width with no side-cropping -- on a tall
+ * phone that puts his head apex at ~50-55% of full SCREEN height, which is
+ * the accepted spec (the storyboard's own 2/3 mock reflects a stubbier
+ * mock aspect ratio, not a literal crop mandate). 0.78 of the outer box
+ * (itself [com.montauk.voicecapture.ui.RecordingScreen]'s `DUCK_VIEW_SCREEN_FRACTION`,
+ * 0.67 of the screen) lands the head apex at 0.67*0.78 ≈ 52.3% of screen
+ * height -- see [com.montauk.voicecapture.ui.RecordingScreenDuckLayoutTest]
+ * for the assertion against the real screen.
  */
-const val DUCK_HEIGHT_FRACTION = 0.85f
+const val DUCK_HEIGHT_FRACTION = 0.78f
 
 /** How far up from the true bottom edge the control row sits, so it overlaps the duck's lower body/feet rather than floating below him. */
 private val CONTROLS_DUCK_OVERLAP = 18.dp
