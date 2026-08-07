@@ -26,6 +26,11 @@ import com.montauk.voicecapture.audio.MicAudioSource
 import com.montauk.voicecapture.audio.MicLevelMeter
 import com.montauk.voicecapture.audio.VoiceActivityDetector
 import com.montauk.voicecapture.audio.autoPauseFillFraction
+import com.montauk.voicecapture.duck.BlinkHeartbeat
+import com.montauk.voicecapture.duck.DuckPulse
+import com.montauk.voicecapture.duck.DuckPulseStateHolder
+import com.montauk.voicecapture.duck.nodPulseForFinalSegment
+import com.montauk.voicecapture.duck.topSetGainedNewTag
 import com.montauk.voicecapture.session.LiveTranscriptLine
 import com.montauk.voicecapture.session.LiveTranscriptWriter
 import com.montauk.voicecapture.session.ModeChange
@@ -43,6 +48,7 @@ import com.montauk.voicecapture.stt.SttTimelineTracker
 import com.montauk.voicecapture.summary.SummaryCoordinator
 import com.montauk.voicecapture.summary.SummaryEventWriter
 import com.montauk.voicecapture.summary.SummaryMarkdownWriter
+import com.montauk.voicecapture.summary.SummaryNoteEventWriter
 import com.montauk.voicecapture.tags.TagChipRail
 import com.montauk.voicecapture.tags.TagCoordinator
 import com.montauk.voicecapture.tags.TagsEventWriter
@@ -93,6 +99,14 @@ class RecordingService : LifecycleService() {
         const val EXTRA_TAG_NAME = "tag_name"
         const val EXTRA_TAG_ID = "tag_id"
         const val EXTRA_OLD_TAG_NAME = "old_tag_name"
+
+        // Bead asn-rrw: the notes card's swipe gestures -- EXTRA_NOTE_TEXT is
+        // the bullet text being acted on (must match SummaryCoordinator's
+        // current newest bullet for ACTION_NOTE_DISCARD to actually do
+        // anything -- see handleNoteDiscard).
+        const val ACTION_NOTE_APPROVE = "com.montauk.voicecapture.action.NOTE_APPROVE"
+        const val ACTION_NOTE_DISCARD = "com.montauk.voicecapture.action.NOTE_DISCARD"
+        const val EXTRA_NOTE_TEXT = "note_text"
 
         /** Bead asn-r60: the manual (hard) pause button next to Stop. */
         const val ACTION_PAUSE = "com.montauk.voicecapture.action.PAUSE"
@@ -186,6 +200,14 @@ class RecordingService : LifecycleService() {
 
         fun pauseIntent(context: Context): Intent = Intent(context, RecordingService::class.java).setAction(ACTION_PAUSE)
         fun resumeIntent(context: Context): Intent = Intent(context, RecordingService::class.java).setAction(ACTION_RESUME)
+
+        /** Bead asn-rrw: the notes card's swipe-right on [noteText]. */
+        fun approveNoteIntent(context: Context, noteText: String): Intent =
+            Intent(context, RecordingService::class.java).setAction(ACTION_NOTE_APPROVE).putExtra(EXTRA_NOTE_TEXT, noteText)
+
+        /** Bead asn-rrw: the notes card's swipe-left on [noteText]. */
+        fun discardNoteIntent(context: Context, noteText: String): Intent =
+            Intent(context, RecordingService::class.java).setAction(ACTION_NOTE_DISCARD).putExtra(EXTRA_NOTE_TEXT, noteText)
     }
 
     private lateinit var audioEngine: AudioEngine
@@ -267,6 +289,9 @@ class RecordingService : LifecycleService() {
     /** Decides the "(silence)" hint independent of STT connection state -- see class KDoc there. */
     private val silenceDetector = SilenceDetector()
 
+    /** Bead asn-02h.1: throttles the duck's BLINK pulse to the transcription heartbeat -- see [BlinkHeartbeat]'s own KDoc. */
+    private val blinkHeartbeat = BlinkHeartbeat()
+
     /**
      * Bead asn-r60: VAD-driven SPEAKING/QUIET classification, fed one RMS
      * window at a time from the [MicLevelMeter] set up in [beginRecording]
@@ -323,6 +348,8 @@ class RecordingService : LifecycleService() {
             ACTION_TAG_REMOVE -> handleTagRemove(intent)
             ACTION_TAG_SWAP -> handleTagSwap(intent)
             ACTION_TAG_APPROVE -> handleTagApprove(intent)
+            ACTION_NOTE_APPROVE -> handleNoteApprove(intent)
+            ACTION_NOTE_DISCARD -> handleNoteDiscard(intent)
             ACTION_PAUSE -> pauseManually()
             ACTION_RESUME -> resumeTapped()
         }
@@ -342,6 +369,8 @@ class RecordingService : LifecycleService() {
         TagTreeStateHolder.reset()
         SummaryStateHolder.reset()
         silenceDetector.reset()
+        blinkHeartbeat.reset()
+        DuckPulseStateHolder.reset()
         modeStateMachine = RecordingModeStateMachine()
         sttEverConnected = false
         // Bead asn-r60: same "never leak a previous session's state"
@@ -539,13 +568,33 @@ class RecordingService : LifecycleService() {
         writeUserTagEvent(session, added = listOf(UserTagRef(newTag, newTagId)), removed = listOf(UserTagRef(oldTag)))
     }
 
-    /** Handles [ACTION_TAG_APPROVE] (bead asn-0jk): a single tap on a still-unapproved PROPOSED_NEW chip's body approves it in place, no picker involved. */
+    /**
+     * Handles [ACTION_TAG_APPROVE] (bead asn-0jk): a single tap on a
+     * still-unapproved PROPOSED_NEW chip's body approves it in place, no
+     * picker involved -- from EITHER surface that can send this intent
+     * (the duck view's word-cloud tap and the debug view's tag-rail tap
+     * both funnel through [com.montauk.voicecapture.ui.MainActivity.approveRecordingTag]
+     * into this exact same handler).
+     *
+     * Bead asn-02h.5: [rail.onApprove]'s Boolean return is the single
+     * source of truth gating BOTH the durable bundle write
+     * ([writeUserTagEvent], `approved:true`) AND the duck's CELEBRATE pulse
+     * -- one `if`, so "approval recorded in the bundle" and "duck
+     * celebrates" can never disagree. This replaces the old UI-local
+     * `happyBounceTrigger` nonce, which only fired from the duck view's own
+     * word-cloud tap handler -- approving the identical tag from the debug
+     * view's [com.montauk.voicecapture.ui.TagRailSection] called
+     * [onApproveTag] directly and never incremented it, so the duck never
+     * celebrated an approval made from that surface. Deriving CELEBRATE
+     * from this handler instead fixes both surfaces at once.
+     */
     private fun handleTagApprove(intent: Intent) {
         val session = currentSession ?: return
         val rail = tagChipRail ?: return
         val tag = intent.getStringExtra(EXTRA_TAG_NAME)?.takeIf { it.isNotBlank() } ?: return
         if (!rail.onApprove(tag)) return
         TagRailStateHolder.update(rail.chips())
+        DuckPulseStateHolder.emit(DuckPulse.CELEBRATE)
         writeUserTagEvent(session, added = listOf(UserTagRef(tag, tagId = null, approved = true)), removed = emptyList())
     }
 
@@ -562,6 +611,62 @@ class RecordingService : LifecycleService() {
         val elapsedMs = SystemClock.elapsedRealtime() - startElapsedRealtimeMs
         lifecycleScope.launch(Dispatchers.IO) {
             app.sessionStore.transcriptFile(session.dir).appendText(TagsEventWriter.encodeUserEditLine(elapsedMs, added, removed) + "\n")
+        }
+    }
+
+    /**
+     * Handles [ACTION_NOTE_APPROVE] (bead asn-rrw): the notes card's
+     * swipe-right. Approving a bullet has no effect on [summaryCoordinator]'s
+     * own state -- it was already a normal, filed bullet the moment it
+     * landed -- this only records that the user explicitly signed off on it.
+     */
+    private fun handleNoteApprove(intent: Intent) {
+        val session = currentSession ?: return
+        val text = intent.getStringExtra(EXTRA_NOTE_TEXT)?.takeIf { it.isNotBlank() } ?: return
+        writeUserNoteEvent(session, approved = text, discarded = null)
+    }
+
+    /**
+     * Handles [ACTION_NOTE_DISCARD] (bead asn-rrw): the notes card's
+     * swipe-left. [SummaryCoordinator.discardBullet] both removes [text] from
+     * the running summary (so it's never filed) and remembers it for the
+     * next round's generator context -- this then republishes
+     * [SummaryStateHolder] and rewrites `summary.md` in full so the on-disk
+     * bundle immediately reflects the removal, exactly the same "rewrite
+     * whole" contract [startSummaryPipeline] uses for a normal round. A
+     * mismatched [text] (the coordinator's newest bullet already moved on --
+     * a stale/late discard tap) is a silent no-op: nothing is removed, no
+     * event is written, same as [SummaryCoordinator.discardBullet]'s own
+     * false-return contract.
+     */
+    private fun handleNoteDiscard(intent: Intent) {
+        val session = currentSession ?: return
+        val app = application as VoiceCaptureApp
+        val coordinator = summaryCoordinator ?: return
+        val text = intent.getStringExtra(EXTRA_NOTE_TEXT)?.takeIf { it.isNotBlank() } ?: return
+        if (!coordinator.discardBullet(text)) return
+
+        val elapsedMs = SystemClock.elapsedRealtime() - startElapsedRealtimeMs
+        SummaryStateHolder.update(
+            SummaryUiState(bullets = coordinator.currentBullets(), newestIndex = null, updatedAtMs = elapsedMs, stale = coordinator.isStale()),
+        )
+        lifecycleScope.launch(Dispatchers.IO) {
+            app.sessionStore.summaryFile(session.dir).writeText(SummaryMarkdownWriter.render(coordinator.currentBullets()))
+        }
+        writeUserNoteEvent(session, approved = null, discarded = text)
+    }
+
+    /** Appends a [SummaryNoteEventWriter] user-action line -- same timestamp convention as [writeUserTagEvent]: elapsed recording time at the moment the intent was handled. */
+    private fun writeUserNoteEvent(session: SessionHandle, approved: String?, discarded: String?) {
+        val app = application as VoiceCaptureApp
+        val elapsedMs = SystemClock.elapsedRealtime() - startElapsedRealtimeMs
+        val line = when {
+            approved != null -> SummaryNoteEventWriter.encodeApproved(elapsedMs, approved)
+            discarded != null -> SummaryNoteEventWriter.encodeDiscarded(elapsedMs, discarded)
+            else -> return
+        }
+        lifecycleScope.launch(Dispatchers.IO) {
+            app.sessionStore.transcriptFile(session.dir).appendText(line + "\n")
         }
     }
 
@@ -749,6 +854,19 @@ class RecordingService : LifecycleService() {
                 if (partial.text.isNotBlank()) {
                     silenceDetector.onTranscriptActivity(SystemClock.elapsedRealtime())
                 }
+                // Bead asn-02h.1/asn-02h.2: BLINK is the transcription
+                // heartbeat -- fires on every INBOUND (non-final) partial
+                // RESPONSE from the STT engine (proves the full
+                // mic->socket->engine->response round trip), throttled to at
+                // most one per ~2.5s -- never on an outbound audio-chunk
+                // send, which would false-reassure when the engine is
+                // actually down. NOD is the slower per-turn beat: a final
+                // segment landing always fires it, no throttle.
+                if (partial.isFinal) {
+                    DuckPulseStateHolder.emit(nodPulseForFinalSegment())
+                } else if (blinkHeartbeat.onInboundPartial(SystemClock.elapsedRealtime())) {
+                    DuckPulseStateHolder.emit(DuckPulse.BLINK)
+                }
                 // Bead asn-r60: fold in sttTimelineTracker's accumulated
                 // offset before this timestamp reaches the UI or disk -- see
                 // its KDoc for why a manual-pause resume's brand-new STT
@@ -885,11 +1003,22 @@ class RecordingService : LifecycleService() {
                 // before encodeLine below so a proposal the user already
                 // approved (bead asn-0jk) is reflected in this exact
                 // snapshot line, not one tick later.
+                //
+                // Bead asn-02h.4: RAISE_HAND fires off the real
+                // tag-tracker event -- comparing the rail's own top-set
+                // chips before/after this exact onSuggested call, not a
+                // UI-derived ThoughtCloudWord diff (see topSetGainedNewTag's
+                // own KDoc).
+                val topSetBefore = rail.chips()
                 rail.onSuggested(changed)
+                val topSetAfter = rail.chips()
+                if (topSetGainedNewTag(topSetBefore, topSetAfter)) {
+                    DuckPulseStateHolder.emit(DuckPulse.RAISE_HAND)
+                }
                 val approvedKeys = rail.approvedKeys()
                 app.sessionStore.transcriptFile(session.dir)
                     .appendText(TagsEventWriter.encodeLine(event.atMs, changed, approvedKeys) + "\n")
-                TagRailStateHolder.update(rail.chips())
+                TagRailStateHolder.update(topSetAfter)
             }
         }
     }
@@ -921,6 +1050,16 @@ class RecordingService : LifecycleService() {
                 SummaryStateHolder.update(
                     SummaryUiState(bullets = result.bullets, newestIndex = result.newestIndex, updatedAtMs = atMs, stale = result.stale),
                 )
+                // Bead asn-02h.3: a summary round completing is the real
+                // "summary round" beat (SummaryCoordinator.onTick returning
+                // non-null -- its internal due/growth/word-count gating
+                // means the caller can't know in advance whether a given
+                // tick will actually attempt one, only that it just did).
+                // Whether this WRITE pulse actually plays (vs. being a
+                // no-op against the held WRITE base state while the notes
+                // card is up) is RecordingScreen's call -- see
+                // shouldPlayPulse's own KDoc.
+                DuckPulseStateHolder.emit(DuckPulse.WRITE)
                 app.sessionStore.transcriptFile(session.dir).appendText(SummaryEventWriter.encodeLine(atMs, result.added) + "\n")
                 app.sessionStore.summaryFile(session.dir).writeText(SummaryMarkdownWriter.render(result.bullets))
             }

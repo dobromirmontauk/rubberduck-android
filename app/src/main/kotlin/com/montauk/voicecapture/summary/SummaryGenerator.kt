@@ -23,8 +23,16 @@ import okhttp3.OkHttpClient
  * what actually enforces that, one layer up in [SummaryCoordinator].
  */
 interface SummaryGenerator {
-    /** [fullTranscript] is every finalized transcript line so far, joined oldest to newest; [previousBullets] is the summary's current bullets, in order. */
-    suspend fun generate(fullTranscript: String, previousBullets: List<String>): List<String>?
+    /**
+     * [fullTranscript] is every finalized transcript line so far, joined
+     * oldest to newest; [previousBullets] is the summary's current bullets,
+     * in order. [discardedBullets] (bead asn-rrw) is every bullet the user
+     * has swiped away this session, oldest first -- a soft ask ("please
+     * don't write this again") the implementation should fold into its
+     * prompt; [AppendOnlyBulletMerge]'s own discarded-set filter is the hard
+     * backstop if a generator ignores this.
+     */
+    suspend fun generate(fullTranscript: String, previousBullets: List<String>, discardedBullets: List<String> = emptyList()): List<String>?
 }
 
 /**
@@ -52,15 +60,19 @@ class AnthropicSummaryGenerator(
 
     private val client = AnthropicClient(apiKey, httpClient, endpoint)
 
-    override suspend fun generate(fullTranscript: String, previousBullets: List<String>): List<String>? {
+    override suspend fun generate(fullTranscript: String, previousBullets: List<String>, discardedBullets: List<String>): List<String>? {
         val systemBlocks = listOf(PromptBlock(SYSTEM_PROMPT, cacheControl = true))
-        val userBlocks = listOf(
+        val userBlocks = listOfNotNull(
             // The transcript is the block that's worth caching -- it's the
             // large, monotonically-growing part of the prompt. The bullets
             // block is small and changes every round anyway, so it isn't
             // marked as a breakpoint.
             PromptBlock(transcriptBlock(fullTranscript), cacheControl = true),
             PromptBlock(bulletsBlock(previousBullets)),
+            // Bead asn-rrw: only present once the user has actually
+            // discarded something -- an empty block would just be noise on
+            // every one of a session's early rounds.
+            discardedBullets.takeIf { it.isNotEmpty() }?.let { PromptBlock(discardedBlock(it)) },
         )
         val rawText = client.completeWithCache(model, maxTokens = MAX_TOKENS, systemBlocks = systemBlocks, userBlocks = userBlocks)
         val bullets = rawText?.let { parseBullets(it) }
@@ -84,6 +96,17 @@ class AnthropicSummaryGenerator(
             $listed
 
             Return the updated bullet list per the system instructions.
+        """.trimIndent()
+    }
+
+    /** Bead asn-rrw: told to the model so it doesn't re-propose a note the user explicitly discarded -- see [SummaryGenerator.generate]'s KDoc. */
+    private fun discardedBlock(discardedBullets: List<String>): String {
+        val listed = discardedBullets.joinToString("\n") { "- $it" }
+        return """
+            The user explicitly discarded these previously-suggested notes.
+            Do not write any of them again, verbatim or reworded, even if the
+            transcript still supports them:
+            $listed
         """.trimIndent()
     }
 

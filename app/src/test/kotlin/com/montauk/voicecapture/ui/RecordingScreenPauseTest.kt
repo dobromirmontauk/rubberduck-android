@@ -1,11 +1,13 @@
 package com.montauk.voicecapture.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.duck.DUCK_STAGE_TEST_TAG
@@ -25,6 +27,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 /**
  * Bead asn-r60's pause state machine, asn-o63's live-test fixes, bead
@@ -39,9 +42,21 @@ import org.robolectric.annotation.Config
  * ([AppNavHost]), same pattern as
  * [RecordingScreenTagsSlotTest]/[RecordingScreenTranscriptSlotTest], since
  * `onSetPaused` threads through it to [RecordingScreen].
+ *
+ * [GraphicsMode.Mode.NATIVE] (bead asn-kd2): the duck view now always
+ * renders [DuckWaveformBar]'s `Canvas`, so every test in this class hits it
+ * (previously only the debug view's [LoudnessMeterBar] used `Canvas`, which
+ * none of these tests reached). Robolectric's default (non-native) graphics
+ * mode doesn't implement `Canvas` drawing faithfully enough for Compose's
+ * click-dispatch to stay reliable afterward -- `performClick()` kept finding
+ * and asserting the node displayed, but its `onClick` silently never fired.
+ * Matches the convention [LiveTranscriptPaneOverlongPartialTest]/
+ * [com.montauk.voicecapture.screenshot.DuckScreenshotTest] already use for
+ * exactly this reason.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class RecordingScreenPauseTest {
 
     @get:Rule
@@ -117,12 +132,16 @@ class RecordingScreenPauseTest {
     /**
      * Bead asn-o63's core bug fix, carried over onto this bead's floating
      * pill: a live tester saw the button label NOT change while auto-paused.
-     * Asserts the label AND the tap semantics -- tapping while auto-paused
-     * now always resumes (there is no other affordance left to offer an
-     * escalate-to-hard-pause path; see [PauseResumeChip]'s KDoc).
+     * Device-test directive (drop #1, item c) supersedes the label itself:
+     * AUTO_PAUSED now reads "JUST SPEAK" (mic still listening, sustained
+     * speech wakes the duck on its own), not "RESUME" (that's the harder,
+     * mic-released USER_PAUSED case -- see the other test in this class).
+     * Tapping still always resumes either way -- there is no other
+     * affordance left to offer an escalate-to-hard-pause path; see
+     * [PauseResumeChip]'s KDoc.
      */
     @Test
-    fun `pause pill shows RESUME while AUTO_PAUSED, and a tap calls onSetPaused(false)`() {
+    fun `pause pill shows JUST SPEAK while AUTO_PAUSED, and a tap calls onSetPaused(false)`() {
         RecordingActivityStateHolder.set(RecordingActivityState.AUTO_PAUSED)
         val pausedCalls = mutableListOf<Boolean>()
 
@@ -136,7 +155,8 @@ class RecordingScreenPauseTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithText("▶ RESUME").assertIsDisplayed()
+        composeTestRule.onNodeWithText("▶ JUST SPEAK").assertIsDisplayed()
+        composeTestRule.onNodeWithText("▶ RESUME").assertDoesNotExist()
         composeTestRule.onNodeWithText("⏸ PAUSE").assertDoesNotExist()
         composeTestRule.onNodeWithTag(PAUSE_RESUME_BUTTON_TEST_TAG).performClick()
         composeTestRule.waitForIdle()
@@ -144,25 +164,90 @@ class RecordingScreenPauseTest {
         assertEquals(listOf(false), pausedCalls)
     }
 
+    /**
+     * Device-test directive (drop #1, item b): the pause/resume pill and
+     * STOP must sit at OPPOSITE ends of the control row -- the pause/resume
+     * pill in the bottom-LEFT slot (an in-place swap when the state
+     * changes, not a pill that moves next to STOP), STOP pinned bottom-
+     * right. Checked in both the not-paused and paused renderings since the
+     * pause/resume pill's own width changes with its label ("PAUSE" vs
+     * "JUST SPEAK" vs "RESUME") -- the left-edge anchoring must hold
+     * regardless.
+     */
     @Test
-    fun `top chrome shows the pause indicator matching each activity state, and no banner exists anywhere`() {
+    fun `pause-resume pill sits left of STOP in both the active and paused renderings`() {
         RecordingActivityStateHolder.set(RecordingActivityState.SPEAKING)
 
         composeTestRule.setContent {
             AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
         }
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("● REC").assertIsDisplayed()
+
+        val pauseBounds = composeTestRule.onNodeWithTag(PAUSE_RESUME_BUTTON_TEST_TAG).getUnclippedBoundsInRoot()
+        val stopBounds = composeTestRule.onNodeWithText("STOP").getUnclippedBoundsInRoot()
+        assertTrue(
+            "pause pill (left=${pauseBounds.left}) should sit left of STOP (left=${stopBounds.left}) while active",
+            pauseBounds.left < stopBounds.left,
+        )
+
+        RecordingActivityStateHolder.set(RecordingActivityState.USER_PAUSED)
+        composeTestRule.waitForIdle()
+
+        val resumeBounds = composeTestRule.onNodeWithTag(PAUSE_RESUME_BUTTON_TEST_TAG).getUnclippedBoundsInRoot()
+        val stopBoundsPaused = composeTestRule.onNodeWithText("STOP").getUnclippedBoundsInRoot()
+        assertTrue(
+            "resume pill (left=${resumeBounds.left}) should sit left of STOP (left=${stopBoundsPaused.left}) while paused",
+            resumeBounds.left < stopBoundsPaused.left,
+        )
+    }
+
+    /**
+     * Bead v5.1: the "● REC"/"⏸ auto"/"⏸ paused" top-chrome labels are gone
+     * from the duck view in every state -- the sleeping duck, the Z-trail,
+     * the frozen big timer, and the floating Resume pill already say
+     * everything there is to say (see [MinimalTopChrome]'s KDoc). This
+     * replaces the old version of this test, which asserted the OPPOSITE
+     * (that these labels were displayed) -- that was true before v5.1
+     * dropped them from the duck view specifically.
+     */
+    @Test
+    fun `duck view shows no REC or auto-pause top-chrome labels in any activity state`() {
+        RecordingActivityStateHolder.set(RecordingActivityState.SPEAKING)
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("● REC").assertDoesNotExist()
 
         RecordingActivityStateHolder.set(RecordingActivityState.AUTO_PAUSED)
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("⏸ auto").assertIsDisplayed()
+        composeTestRule.onNodeWithText("⏸ auto").assertDoesNotExist()
         composeTestRule.onNodeWithText("just start talking, or tap to resume").assertDoesNotExist()
 
         RecordingActivityStateHolder.set(RecordingActivityState.USER_PAUSED)
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("⏸ paused").assertIsDisplayed()
+        composeTestRule.onNodeWithText("⏸ paused").assertDoesNotExist()
         composeTestRule.onNodeWithText("tap Resume to keep recording").assertDoesNotExist()
+    }
+
+    /**
+     * Bead v5.1 exempts only the duck view -- the debug/transcript view
+     * (reached via the same double-tap toggle [RecordingScreenDuckToggleTest]
+     * covers) keeps its top-chrome activity indicator exactly as before.
+     */
+    @Test
+    fun `debug view still shows the top-chrome activity indicator`() {
+        RecordingActivityStateHolder.set(RecordingActivityState.SPEAKING)
+
+        composeTestRule.setContent {
+            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG).performTouchInput { doubleClick() }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("● REC").assertIsDisplayed()
     }
 
     /** Bead asn-o63: the fill overlay only ever shows while NOT already paused -- it's meaningless once auto-pause has actually fired. */

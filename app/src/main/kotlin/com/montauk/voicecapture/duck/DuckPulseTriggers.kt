@@ -1,0 +1,108 @@
+package com.montauk.voicecapture.duck
+
+import com.montauk.voicecapture.tags.TagRailChip
+
+/**
+ * Pure Kotlin trigger-decision logic behind bead asn-02h's real event-pulse
+ * wiring -- each function/class here answers "given this real pipeline
+ * event, should a [DuckPulse] fire (and which)?" without any Compose/Android
+ * dependency, so [com.montauk.voicecapture.service.RecordingService] (which
+ * has no unit-test coverage of its own -- same as [com.montauk.voicecapture.tags.TagChipRail]/
+ * [com.montauk.voicecapture.service.SilenceDetector] pairing untested Service
+ * call sites with a tested pure class) can stay a thin integration wire while
+ * the actual decision is independently testable. Grows one piece per child
+ * bead: [BlinkHeartbeat] (asn-02h.1), [nodPulseForFinalSegment] (asn-02h.2),
+ * [shouldPlayPulse] (asn-02h.3), [topSetGainedNewTag] (asn-02h.4).
+ */
+
+/**
+ * The transcription heartbeat (bead asn-02h.1, user + lead decision
+ * 2026-08-07): throttles [DuckPulse.BLINK] to at most once per [throttleMs]
+ * regardless of how often inbound STT partials arrive. [onInboundPartial] is
+ * driven exclusively by a RESPONSE received from the STT engine (proves the
+ * full mic->socket->engine->response round trip) -- callers must never call
+ * this for an outbound audio-chunk send, which would false-reassure when the
+ * engine is actually down. No partials arriving at all (quiet) means no
+ * calls at all, which correctly means no blinks -- there is no separate
+ * "idle" branch to gate here.
+ */
+class BlinkHeartbeat(private val throttleMs: Long = DEFAULT_THROTTLE_MS) {
+    private var lastBlinkAtMs: Long? = null
+
+    /** Call on every inbound (non-final) STT partial response at [nowMs]. Returns true iff this call should trigger [DuckPulse.BLINK] -- i.e. [throttleMs] has elapsed since the last one that did. */
+    fun onInboundPartial(nowMs: Long): Boolean {
+        val last = lastBlinkAtMs
+        if (last != null && nowMs - last < throttleMs) return false
+        lastBlinkAtMs = nowMs
+        return true
+    }
+
+    /** Call at the start of every new recording session so a previous session's throttle window never bleeds into a fresh one. */
+    fun reset() {
+        lastBlinkAtMs = null
+    }
+
+    /** True iff [onInboundPartial] has ever returned true -- test/assertion hook for "no inbound partial ever arrived means no blink ever fired" (asn-02h.1: an outbound audio-chunk send alone must never reach this class at all). */
+    fun hasEverBlinked(): Boolean = lastBlinkAtMs != null
+
+    companion object {
+        const val DEFAULT_THROTTLE_MS = 2_500L
+    }
+}
+
+/**
+ * A final transcription segment landing always fires [DuckPulse.NOD] (bead
+ * asn-02h.2) -- a slower, per-turn beat than [BlinkHeartbeat]'s throttled
+ * heartbeat, and unconditional: unlike BLINK there is no cadence to gate,
+ * every real `end_of_turn` result from the STT engine is itself already rare
+ * enough (a whole spoken turn, not a per-word partial) to warrant its own
+ * nod every time. A free function rather than a class since there's no
+ * state to carry between calls -- kept here (not inlined at the call site)
+ * so [com.montauk.voicecapture.service.RecordingService]'s STT partials
+ * collector reads as "ask the trigger layer" the same way it does for
+ * [BlinkHeartbeat], and so this mapping has its own test.
+ */
+fun nodPulseForFinalSegment(): DuckPulse = DuckPulse.NOD
+
+/**
+ * Decides whether an incoming [DuckPulseEvent] should actually play, or be
+ * silently dropped (bead asn-02h.3): specifically, a [DuckPulse.WRITE] pulse
+ * (fired once, "a summary round completed") arriving while [DuckState.WRITE]
+ * is already the held BASE state (bead asn-dp2.5 -- the notes card is
+ * entering/visible/leaving) would layer the identical [DuckFrame.WRITE] pose
+ * over itself: a visual no-op that would only reset the pulse's own
+ * animation-timer machinery for nothing. Every other pulse always plays,
+ * regardless of the current base state -- this never suppresses
+ * BLINK/NOD/RAISE_HAND/CELEBRATE. Pure Kotlin so
+ * [com.montauk.voicecapture.ui.RecordingScreen]'s `rememberUpdatedState`-based
+ * live check (Compose only evaluates a pulse once per distinct
+ * [DuckPulseEvent], not reactively as [currentBaseState] later changes) has
+ * something unit-testable to delegate the actual decision to.
+ */
+fun shouldPlayPulse(event: DuckPulseEvent, currentBaseState: DuckState): Boolean =
+    !(event.pulse == DuckPulse.WRITE && currentBaseState == DuckState.WRITE)
+
+/**
+ * Detects a genuinely NEW tag entering the top-of-cloud set (bead asn-02h.4)
+ * from two successive [com.montauk.voicecapture.tags.TagChipRail.chips]
+ * snapshots -- the real tag-tracker-driven rail state
+ * [com.montauk.voicecapture.service.TagRailStateHolder] publishes, not a
+ * [ThoughtCloudWord]-level diff reconstructed in the UI (the ad-hoc
+ * `previousTopKeys`/`handRaiseTrigger` detection this function replaces
+ * inside [DuckStage] -- see this bead's own notes for why "not UI-internal
+ * detection" mattered: it lived one layer removed from the actual rail
+ * state, comparing an already-presentation-mapped word list instead of the
+ * domain data itself). Uses [ThoughtCloudWords.MAX_TOP] for the same
+ * top-vs-candidate split the word cloud itself renders, so "entered the
+ * cloud" here means exactly what a person watching the duck would see.
+ * Returns true only when the top set was non-empty BEFORE (so the cloud's
+ * very first population this session never counts as "new") AND at least
+ * one tag entered the top set that wasn't there a moment ago.
+ */
+fun topSetGainedNewTag(before: List<TagRailChip>, after: List<TagRailChip>): Boolean {
+    val beforeTop = before.take(ThoughtCloudWords.MAX_TOP).map { normalizeTag(it.tag) }.toSet()
+    val afterTop = after.take(ThoughtCloudWords.MAX_TOP).map { normalizeTag(it.tag) }.toSet()
+    return beforeTop.isNotEmpty() && (afterTop - beforeTop).isNotEmpty()
+}
+
+private fun normalizeTag(tag: String): String = tag.trim().lowercase()

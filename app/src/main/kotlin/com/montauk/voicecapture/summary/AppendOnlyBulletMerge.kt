@@ -24,18 +24,26 @@ object AppendOnlyBulletMerge {
      * [proposed]'s own version of that prefix (if any -- same index range)
      * is ignored entirely, matched or not. Anything [proposed] offers beyond
      * [previous]'s length is a candidate new bullet, kept only if it's
-     * non-blank and isn't (case/whitespace-insensitively) a duplicate of a
+     * non-blank, isn't (case/whitespace-insensitively) a duplicate of a
      * bullet already in [previous] -- a model that re-emits a rewrite of an
      * existing bullet as if it were new must not get to sneak it in as a
-     * second, duplicate entry either.
+     * second, duplicate entry either -- and isn't a (case/whitespace-
+     * insensitive) match of anything in [discarded] (bead asn-rrw: normalized
+     * text of every bullet the user has swiped away this session, from
+     * [SummaryCoordinator.discardBullet]). [discarded] is a hard backstop, not
+     * the only defense -- [com.montauk.voicecapture.summary.AnthropicSummaryGenerator]
+     * also tells the model about these directly so it (ideally) never
+     * proposes them again in the first place, but a prompt is a request, not
+     * a guarantee, same reasoning as the append-only contract above.
      */
-    fun merge(previous: List<String>, proposed: List<String>): List<String> {
+    fun merge(previous: List<String>, proposed: List<String>, discarded: Set<String> = emptySet()): List<String> {
         if (proposed.size <= previous.size) return previous
         val existingNormalized = previous.map { normalize(it) }.toSet()
         val genuinelyNew = proposed.drop(previous.size)
-            .filter { it.isNotBlank() && normalize(it) !in existingNormalized }
+            .filter { it.isNotBlank() && normalize(it) !in existingNormalized && normalize(it) !in discarded }
         return previous + genuinelyNew
     }
 
-    private fun normalize(bullet: String): String = bullet.trim().lowercase()
+    /** [bullet], trimmed and lowercased -- the same normalization [SummaryCoordinator] uses to key its discarded-bullet set, so the two stay in lockstep. */
+    fun normalize(bullet: String): String = bullet.trim().lowercase()
 }

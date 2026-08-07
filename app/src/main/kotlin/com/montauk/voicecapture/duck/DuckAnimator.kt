@@ -19,6 +19,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
 import kotlinx.coroutines.delay
@@ -106,7 +108,17 @@ fun DuckAnimator(
         celebrateBounceFraction = 0f
     }
 
-    Box(modifier = modifier.testTag(DUCK_ANIMATOR_TEST_TAG), contentAlignment = Alignment.Center) {
+    Box(
+        // Bead asn-dp2: contentDescription exposes which DuckState is
+        // actually driving the animator right now -- a test hook only (no
+        // visible/spoken effect for a sighted user; this stage isn't behind
+        // a real accessibility tree anywhere else) so a Compose test can
+        // assert the duck really switched to THINKING (the WRITE pose) for
+        // exactly as long as the notes card is up, without needing to
+        // inspect which drawable resource got rendered.
+        modifier = modifier.testTag(DUCK_ANIMATOR_TEST_TAG).semantics { contentDescription = "duck_state_${state.name}" },
+        contentAlignment = Alignment.Center,
+    ) {
         Crossfade(
             targetState = visual.frame,
             animationSpec = tween(if (reducedMotion) 0 else DuckAnimationEngine.DEFAULT_CROSSFADE_MS.toInt()),
@@ -134,12 +146,27 @@ data class DuckPulseEvent(val pulse: DuckPulse, val nonce: Int)
  * coroutine. Used both by [DuckAnimator]'s content and directly by
  * screenshot goldens, which want one deterministic frame rather than
  * whatever the live composable happens to land on.
+ *
+ * [Alignment.TopCenter] (bead asn-kd2), not [Image]'s own default
+ * [Alignment.Center]: the pose assets are square (512x512) but
+ * [DuckStage] hands this a tall, width-constrained box (its
+ * `fillMaxHeight(DUCK_HEIGHT_FRACTION)` slice) -- `ContentScale.Fit` scales
+ * by width and would otherwise center the duck vertically inside that box,
+ * splitting the leftover space evenly above the head and below the feet.
+ * Top-aligning instead collapses all of that slack to the bottom (below the
+ * feet), so the top of the rendered sprite -- the head -- lands exactly at
+ * the box's own top edge: the design board's "head sits at ~2/3 screen
+ * height" (asn-bb4) and the fixed anchor [ZzTrail] now measures its
+ * head-relative offsets from (previously this same gap silently pushed the
+ * Z-trail's assumed head position well above where the head was actually
+ * drawn -- see [DuckStage]'s KDoc).
  */
 @Composable
 internal fun DuckPoseFrame(visual: DuckVisual.Pose, modifier: Modifier = Modifier) {
     Image(
         painter = painterResource(visual.frame.drawableRes()),
         contentDescription = null,
+        alignment = Alignment.TopCenter,
         modifier = modifier.fillMaxSize(),
     )
 }
@@ -188,6 +215,16 @@ private fun DuckAnimatorThinkPreview() {
     VoiceCaptureTheme {
         Box(modifier = Modifier.padding(24.dp).aspectRatio(1f)) {
             DuckAnimator(state = DuckState.THINK)
+        }
+    }
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 320, heightDp = 320)
+@Composable
+private fun DuckAnimatorWritePreview() {
+    VoiceCaptureTheme {
+        Box(modifier = Modifier.padding(24.dp).aspectRatio(1f)) {
+            DuckAnimator(state = DuckState.WRITE)
         }
     }
 }

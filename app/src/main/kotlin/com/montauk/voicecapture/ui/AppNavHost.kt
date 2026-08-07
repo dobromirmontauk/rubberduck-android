@@ -51,6 +51,8 @@ fun AppNavHost(
     onSwapTag: (oldTag: String, newTag: String, newTagId: String?) -> Unit = { _, _, _ -> },
     onApproveTag: (tag: String) -> Unit = {},
     onSetPaused: (Boolean) -> Unit = {},
+    onApproveNote: (noteText: String) -> Unit = {},
+    onDiscardNote: (noteText: String) -> Unit = {},
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
@@ -184,6 +186,8 @@ fun AppNavHost(
                     onSwapTag = onSwapTag,
                     onApproveTag = onApproveTag,
                     onSetPaused = onSetPaused,
+                    onApproveNote = onApproveNote,
+                    onDiscardNote = onDiscardNote,
                     onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                     onStopRecording = {
                         onStopRecording()

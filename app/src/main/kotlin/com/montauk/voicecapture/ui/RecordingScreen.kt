@@ -42,6 +42,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -75,12 +76,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.audio.AudioRouteType
 import com.montauk.voicecapture.audio.LoudnessVisualizer
+import com.montauk.voicecapture.duck.DuckPulseEvent
+import com.montauk.voicecapture.duck.DuckPulseStateHolder
 import com.montauk.voicecapture.duck.DuckStage
 import com.montauk.voicecapture.duck.DuckState
 import com.montauk.voicecapture.duck.ThoughtCloudWords
 import com.montauk.voicecapture.duck.rememberReducedMotionEnabled
+import com.montauk.voicecapture.duck.shouldPlayPulse
 import com.montauk.voicecapture.duck.toDuckState
 import com.montauk.voicecapture.session.RecordingMode
+import com.montauk.voicecapture.session.SwipeHintStateHolder
 import com.montauk.voicecapture.service.LatencyBadgeStateHolder
 import com.montauk.voicecapture.service.RecordingActivityState
 import com.montauk.voicecapture.service.RecordingActivityStateHolder
@@ -132,25 +137,39 @@ import kotlin.math.roundToInt
  * is the expected default. The pause pill lives only in the duck view's
  * floating controls -- there is no pause affordance in the debug view.
  *
- * The duck's LISTENING/SLEEPY/SLEEPING state is derived directly from
+ * The duck's ATTENTIVE/DROWSY/SLEEP base state is derived directly from
  * [RecordingActivityStateHolder]'s real `StateFlow<RecordingActivityState>`
  * (bead asn-r60) via [toDuckState] -- this superseded a crude
  * transcript-derived stand-in (`crudeRecordingActivity`) once asn-r60 landed
- * on `main`. THINKING briefly overrides whichever of those is current for
+ * on `main`. [DuckState.THINK] still overrides that base state for
  * [THINKING_DISPLAY_MS] every time [SummaryStateHolder] publishes a fresh
- * summary (design board: "duck plays 'taking notes', then the notes card
- * slides up") -- the closest real signal available today; there's no
- * equivalent signal yet for a tag-scorer LLM call in flight.
+ * summary -- the closest signal available today for "a round's network
+ * call is in flight" until asn-02h's real
+ * [com.montauk.voicecapture.service.SummaryCallStateHolder] wiring lands
+ * (there's still no equivalent signal for a tag-scorer LLM call in flight
+ * either). [DuckState.WRITE] (bead asn-dp2.5) then overrides THAT for
+ * exactly as long as [DuckStage]'s notes card is entering, visible, or
+ * leaving (design board: "the duck keeps his write pose the whole time the
+ * card is up") -- [notesCardActive] is fed from [NotesCard]'s own
+ * [NotesCardChoreographer.isWritePoseActive] via [DuckStage]'s
+ * `onNotesCardActiveChanged` callback. Priority, highest first:
+ * [DuckState.SLEEP] (never overridden -- paused suspends the card's own
+ * business too) > [DuckState.WRITE] (card up) > [DuckState.THINK] (round in
+ * flight) > the ATTENTIVE/DROWSY base.
  *
  * The thought cloud's BLUE/PURPLE/GREEN/WHITE split comes from
  * [ThoughtCloudWords.fromTagRailChips] over the same [rail][TagRailStateHolder]
  * [TagRailSection] renders in the debug view -- one shared list, two
  * renderings (see [TagRailChip]'s own KDoc for why its status/approved
  * fields already carry this word cloud's exact color split). Tapping a
- * PURPLE word calls [onApproveTag] (green + haptic tick + the duck's
- * happy-bounce, via [happyBounceTrigger]) -- the same callback
- * [TagRailSection]'s own tap-to-approve uses, so approving from either
- * surface converges on the same state.
+ * PURPLE word calls [onApproveTag] (green + haptic tick) -- the same
+ * callback [TagRailSection]'s own tap-to-approve uses, so approving from
+ * either surface converges on the same state. Bead asn-02h.5: the duck's
+ * CELEBRATE happy-bounce is no longer a UI-local nonce this tap increments
+ * directly -- it's derived from [DuckPulseStateHolder]'s real event stream,
+ * emitted by [com.montauk.voicecapture.service.RecordingService.handleTagApprove]
+ * off the exact same approval both surfaces funnel through, so either one
+ * celebrates identically.
  *
  * [onOpenSettings] (bead vn-edu.46 superseding decision, extended by
  * vn-edu.66) is invoked when either keyless message is tapped: the
@@ -171,6 +190,8 @@ fun RecordingScreen(
     onApproveTag: (tag: String) -> Unit = {},
     onSetPaused: (Boolean) -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onApproveNote: (noteText: String) -> Unit = {},
+    onDiscardNote: (noteText: String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as VoiceCaptureApp
@@ -187,11 +208,15 @@ fun RecordingScreen(
     val tagTree by TagTreeStateHolder.state.collectAsStateWithLifecycle()
     val summary by SummaryStateHolder.state.collectAsStateWithLifecycle()
     val latencyState by LatencyBadgeStateHolder.state.collectAsStateWithLifecycle()
+    // Bead asn-02h: the real pipeline-driven event-pulse stream -- every
+    // pulse (BLINK/NOD/WRITE/RAISE_HAND/CELEBRATE) arrives this one way now.
+    // Gated through shouldPlayPulse below (asn-02h.3's WRITE-vs-notes-card
+    // suppression) before reaching DuckStage.
+    val duckPulseEvent by DuckPulseStateHolder.events.collectAsStateWithLifecycle()
     val anthropicKeyConfigured = app.isAnthropicKeyConfigured()
     val assemblyKeyConfigured = app.isAssemblyKeyConfigured()
     var pickerRequest by remember { mutableStateOf<TagPickerRequest?>(null) }
     var showDebugView by remember { mutableStateOf(false) }
-    var happyBounceTrigger by remember { mutableStateOf(0) }
     val reducedMotion = rememberReducedMotionEnabled()
 
     // THINKING override window -- see the class KDoc's THINKING paragraph.
@@ -206,12 +231,35 @@ fun RecordingScreen(
     LaunchedEffect(summary.updatedAtMs) {
         if (summary.bullets.isNotEmpty()) thinkingUntilMs = System.currentTimeMillis() + THINKING_DISPLAY_MS
     }
+    // Bead asn-dp2.5: DuckStage's own NotesCardChoreographer.isWritePoseActive
+    // reading, bubbled up via onNotesCardActiveChanged -- true for exactly
+    // as long as the notes card is entering, visible, or leaving.
+    var notesCardActive by remember { mutableStateOf(false) }
     // Bead asn-3h6: NOT `remember(activityState)` anymore -- DROWSY depends
     // on transcript.autoPauseFillFraction too, which changes continuously
     // while activityState stays QUIET, so the mapping has to re-run on every
     // transcript update, not just on activityState transitions.
     val baseDuckState = activityState.toDuckState(transcript.autoPauseFillFraction)
-    val duckState = if (nowMs < thinkingUntilMs) DuckState.THINK else baseDuckState
+    val duckState = effectiveDuckState(
+        baseDuckState = baseDuckState,
+        thinkActive = nowMs < thinkingUntilMs,
+        notesCardActive = notesCardActive,
+    )
+
+    // Bead asn-02h.3: shouldPlayPulse must be evaluated against duckState's
+    // value AT THE MOMENT [duckPulseEvent] actually changes, not reactively
+    // re-evaluated later -- a WRITE pulse silently dropped while the notes
+    // card was up must stay dropped, never retroactively fire once the card
+    // closes. LaunchedEffect below is keyed on duckPulseEvent alone, so
+    // rememberUpdatedState is what lets it read duckState's CURRENT value
+    // without restarting (and re-deciding) every time duckState itself
+    // changes for an unrelated reason.
+    val currentDuckState = rememberUpdatedState(duckState)
+    var pulseTrigger by remember { mutableStateOf<DuckPulseEvent?>(null) }
+    LaunchedEffect(duckPulseEvent) {
+        val event = duckPulseEvent ?: return@LaunchedEffect
+        if (shouldPlayPulse(event, currentDuckState.value)) pulseTrigger = event
+    }
 
     // Bead vn-edu.46's keyless guard, preserved: no key means NO word-cloud
     // data at all, even if TagRailStateHolder is stale/non-empty (shouldn't
@@ -222,25 +270,38 @@ fun RecordingScreen(
         if (anthropicKeyConfigured) ThoughtCloudWords.fromTagRailChips(rail) else ThoughtCloudWords.EMPTY
     }
 
+    // Device-test directive (2026-08-06 drop #1, item d): the timer itself
+    // is the pause tell -- warm/red only while actually recording, grey+
+    // frozen the instant either pause kind takes over (matches the
+    // storyboard's dim `.paused` timer style, frames 10-11). Shared by both
+    // branches below.
+    val isPausedForTimer = activityState == RecordingActivityState.AUTO_PAUSED ||
+        activityState == RecordingActivityState.USER_PAUSED
+
     VoiceCaptureTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Spacer(modifier = Modifier.height(20.dp))
-                MinimalTopChrome(mode = recordingState.mode, activityState = activityState, modifier = Modifier.padding(horizontal = 24.dp))
-                Spacer(modifier = Modifier.height(4.dp))
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    BigTimer(elapsedMs = recordingState.elapsedMs)
-                }
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .testTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG)
-                        .pointerInput(Unit) {
-                            detectTapGestures(onDoubleTap = { showDebugView = !showDebugView })
-                        },
-                ) {
-                    if (showDebugView) {
+            if (showDebugView) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    // Bead v5.1: the "● REC"/"⏸ auto"/"⏸ paused" top-chrome
+                    // labels are debug-view-only -- the duck view (the
+                    // `else` branch below) drops them entirely in every
+                    // state (see this file's class KDoc and
+                    // MinimalTopChrome's own KDoc).
+                    MinimalTopChrome(mode = recordingState.mode, activityState = activityState, modifier = Modifier.padding(horizontal = 24.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        BigTimer(elapsedMs = recordingState.elapsedMs, isPaused = isPausedForTimer)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .testTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG)
+                            .pointerInput(Unit) {
+                                detectTapGestures(onDoubleTap = { showDebugView = !showDebugView })
+                            },
+                    ) {
                         Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
                             Spacer(modifier = Modifier.height(8.dp))
                             ChipsRow(transcript = transcript, hasBluetoothMic = hasBluetoothMic, recordingState = recordingState)
@@ -272,61 +333,140 @@ fun RecordingScreen(
                                 modifier = Modifier.weight(1f),
                             )
                         }
-                    } else {
-                        DuckStage(
-                            duckState = duckState,
-                            words = words,
-                            reducedMotion = reducedMotion,
-                            onApproveWord = { word ->
-                                onApproveTag(word.text)
-                                happyBounceTrigger++
-                            },
-                            summary = summary,
-                            latencyState = latencyState,
-                            onLatencyBadgeTap = {}, // asn-55q's L2 HUD opens here once that bead lands
-                            happyBounceTrigger = happyBounceTrigger,
-                            modifier = Modifier.fillMaxSize(),
-                            // Design-board addendum: controls float ON the duck in this
-                            // view (z-order above him, overlapping his lower body) --
-                            // DuckStage places this slot itself. The debug view below
-                            // renders the identical StopBar as a normal, non-overlapping
-                            // bottom row instead (there's no duck to float over there).
-                            // Bead asn-r60/asn-3sm: pause presentation lives entirely
-                            // here now -- no separate banner (v2 dropped it outright;
-                            // the duck falling asleep + Z-trail + this button + the
-                            // frozen timer above is the whole story) and no non-
-                            // floating equivalent in the debug view (there is no other
-                            // pause UI anywhere on this screen by design).
-                            controls = {
-                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    PauseResumeChip(
-                                        activityState = activityState,
-                                        fillFraction = transcript.autoPauseFillFraction,
-                                        onSetPaused = onSetPaused,
-                                    )
-                                    StopBar(onClick = onStopRecording, floating = true)
-                                }
-                            },
-                        )
                     }
+                    StopBar(modifier = Modifier.height(STOP_BAR_HEIGHT), onClick = onStopRecording, floating = false)
                 }
-                // Keyless word-cloud message stays on the default duck view (not
-                // gated behind the double-tap toggle) -- mirrors the pre-asn-3sm
-                // TagChipsRow keyless message 1:1 (bead vn-edu.46), just relocated.
-                if (!showDebugView && !anthropicKeyConfigured) {
-                    Text(
-                        text = "(register your API key to see the word cloud)",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            } else {
+                // Screen-vs-storyboard gate fix (drop #1+#2): this used to be
+                // one more branch inside the SAME Column/weight(1f) box as
+                // above, which meant DuckStage's "bottom two-thirds" fraction
+                // was computed against "whatever's left after the chrome" --
+                // a nearly-empty top chrome (plus the keyless message below,
+                // when unkeyed) still ate enough of that leftover space that
+                // 67% of it put the duck's head at ~41% down the SCREEN,
+                // not ~2/3 up from the bottom, with a big empty void above
+                // him and STOP/PAUSE floating well short of the true screen
+                // edge. A root-level Box sidesteps that entirely: DuckStage
+                // gets a modifier sized against THIS Box's full constraints
+                // (the real screen), and the chrome is a separate top-
+                // aligned sibling layered on top of it -- Box children don't
+                // share/divide space the way Column weights do, so neither
+                // affects the other's sizing. See DuckStage's own KDoc for
+                // the matching fix on its internal DUCK_HEIGHT_FRACTION.
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag(DUCK_TRANSCRIPT_TOGGLE_TEST_TAG)
+                        .pointerInput(Unit) {
+                            detectTapGestures(onDoubleTap = { showDebugView = !showDebugView })
+                        },
+                ) {
+                    DuckStage(
+                        duckState = duckState,
+                        words = words,
+                        reducedMotion = reducedMotion,
+                        onApproveWord = { word -> onApproveTag(word.text) },
+                        summary = summary,
+                        latencyState = latencyState,
+                        onLatencyBadgeTap = {}, // asn-55q's L2 HUD opens here once that bead lands
+                        pulseTrigger = pulseTrigger,
+                        onApproveNote = onApproveNote,
+                        onDiscardNote = { noteText ->
+                            // Bead asn-rrw: the toast is local/instant UI
+                            // feedback -- SwipeHintStateHolder is the same
+                            // global one-shot snackbar SessionListScreen's
+                            // swipe hints use (see AppNavHost's Scaffold-
+                            // level LaunchedEffect). Persisting the
+                            // discard (removing the bullet, feeding the
+                            // next summary round's generator context, and
+                            // writing the user event) is onDiscardNote's
+                            // job, same split as onApproveTag/RecordingService.
+                            SwipeHintStateHolder.show("Note discarded")
+                            onDiscardNote(noteText)
+                        },
+                        onNotesCardActiveChanged = { notesCardActive = it },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 24.dp)
-                            .clickable(onClick = onOpenSettings)
-                            .testTag(REGISTER_KEY_MESSAGE_TEST_TAG),
+                            .fillMaxHeight(DUCK_VIEW_SCREEN_FRACTION)
+                            .align(Alignment.BottomCenter),
+                        // Design-board addendum: controls float ON the duck in this
+                        // view (z-order above him, overlapping his lower body) --
+                        // DuckStage places this slot itself. The debug view above
+                        // renders the identical StopBar as a normal, non-overlapping
+                        // bottom row instead (there's no duck to float over there).
+                        // Bead asn-r60/asn-3sm: pause presentation lives entirely
+                        // here now -- no separate banner (v2 dropped it outright;
+                        // the duck falling asleep + Z-trail + this button + the
+                        // frozen timer above is the whole story) and no non-
+                        // floating equivalent in the debug view (there is no other
+                        // pause UI anywhere on this screen by design).
+                        // Device-test directive (drop #1, item b): the
+                        // pause/resume-role pill is an IN-PLACE swap in
+                        // the bottom-LEFT slot -- not a centered group
+                        // next to STOP. SpaceBetween over the full
+                        // control-row width pins it to the start edge
+                        // and STOP to the end edge (bottom-right,
+                        // prominent), matching the storyboard.
+                        controls = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                PauseResumeChip(
+                                    activityState = activityState,
+                                    fillFraction = transcript.autoPauseFillFraction,
+                                    onSetPaused = onSetPaused,
+                                )
+                                StopBar(onClick = onStopRecording, floating = true)
+                            }
+                        },
                     )
-                }
-                if (showDebugView) {
-                    StopBar(modifier = Modifier.height(STOP_BAR_HEIGHT), onClick = onStopRecording, floating = false)
+                    // Chrome floats over the top of the duck stage (which
+                    // itself is bottom-anchored, so the two never compete
+                    // for space) -- timer, waveform, and (keyless only) the
+                    // word-cloud message all live here now instead of as
+                    // separate Column siblings that used to shrink
+                    // DuckStage's own box (see the KDoc above).
+                    Column(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            BigTimer(elapsedMs = recordingState.elapsedMs, isPaused = isPausedForTimer)
+                        }
+                        // Bead asn-kd2 v5.2: the mic-loudness waveform,
+                        // restored under the timer in every duck-view state
+                        // (see DuckWaveformBar's own KDoc for the three
+                        // renderings) -- the debug view keeps its own
+                        // richer LoudnessMeterBar instead. Device-test
+                        // directive (drop #1, item 4): kept full-width (no
+                        // side padding) and tall enough to read at a glance.
+                        Spacer(modifier = Modifier.height(10.dp))
+                        DuckWaveformBar(
+                            activityState = activityState,
+                            micLevel = transcript.micLevel,
+                            sessionId = recordingState.sessionId,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        // Keyless word-cloud message stays on the default duck
+                        // view (not gated behind the double-tap toggle) --
+                        // mirrors the pre-asn-3sm TagChipsRow keyless message
+                        // 1:1 (bead vn-edu.46). Lives in this top-chrome
+                        // column now (not a separate Column sibling below
+                        // the duck stage) so it can never shrink DuckStage's
+                        // own bottom-two-thirds box.
+                        if (!anthropicKeyConfigured) {
+                            Text(
+                                text = "(register your API key to see the word cloud)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 24.dp)
+                                    .clickable(onClick = onOpenSettings)
+                                    .testTag(REGISTER_KEY_MESSAGE_TEST_TAG),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -350,12 +490,50 @@ fun RecordingScreen(
 /** Test-only anchor for the duck-view/debug-transcript-view double-tap toggle (bead asn-3sm). */
 const val DUCK_TRANSCRIPT_TOGGLE_TEST_TAG = "recording_duck_transcript_toggle"
 
+/**
+ * Bead asn-dp2.5: the duck's effective base state once every override is
+ * folded in -- a pure function so the priority itself is unit-testable
+ * without a Compose test, separate from [RecordingScreenLayoutATest]'s live
+ * render check. Priority, highest first: [DuckState.SLEEP] (never
+ * overridden by anything -- paused suspends the notes card's own business
+ * too, and a round genuinely can't still be "in flight" while paused
+ * either) > [DuckState.WRITE] (the notes card is up, [notesCardActive]) >
+ * [DuckState.THINK] ([thinkActive] -- a summary round's network call is
+ * approximated as still in flight, see the class KDoc's THINK paragraph) >
+ * [baseDuckState] (ATTENTIVE/DROWSY from [toDuckState]). WRITE wins over
+ * THINK because a card up implies a round already completed -- a more
+ * specific, longer-lived signal than "a round is still in flight." SLEEP's
+ * own check runs FIRST, unconditionally, rather than being folded into the
+ * THINK/WRITE branches individually -- an earlier draft that only guarded
+ * WRITE-over-SLEEP left THINK free to override SLEEP on its own (the same
+ * gap the pre-asn-dp2 code silently had), which a state test here caught.
+ */
+internal fun effectiveDuckState(baseDuckState: DuckState, thinkActive: Boolean, notesCardActive: Boolean): DuckState {
+    if (baseDuckState == DuckState.SLEEP) return DuckState.SLEEP
+    if (notesCardActive) return DuckState.WRITE
+    return if (thinkActive) DuckState.THINK else baseDuckState
+}
+
 private const val THINKING_TICK_INTERVAL_MS = 250L
 
-/** How long THINKING overrides the duck's base state after a fresh summary lands (design board: "holds a few seconds"). */
+/** How long THINK overrides the duck's base state after a fresh summary lands (design board: "holds a few seconds") -- see the class KDoc's priority note. */
 const val THINKING_DISPLAY_MS = 1_800L
 
 private val STOP_BAR_HEIGHT = 140.dp
+
+/**
+ * Screen-vs-storyboard gate fix (drop #1+#2): the duck view's ROOT box
+ * (chrome + [DuckStage] together, laid out as [Alignment.TopCenter] /
+ * [Alignment.BottomCenter] siblings within one `Modifier.fillMaxSize()`
+ * `Box`) hands [DuckStage] a `Modifier.fillMaxHeight(DUCK_VIEW_SCREEN_FRACTION)`
+ * measured against THAT full-screen `Box`, not a `Column`'s `weight(1f)`
+ * leftover space -- see the call site's own comment for why the old
+ * `Column`-nested version silently broke "duck fills the bottom two-
+ * thirds of the SCREEN." [DuckStage.DUCK_HEIGHT_FRACTION] is the second,
+ * independent fraction (of THIS box, not of the screen) the duck sprite
+ * itself fills.
+ */
+private const val DUCK_VIEW_SCREEN_FRACTION = 0.67f
 
 /** Which affordance opened [TagPickerSheet] -- decides whether a pick becomes an add or a swap of a specific existing chip. */
 private sealed interface TagPickerRequest {
@@ -364,16 +542,23 @@ private sealed interface TagPickerRequest {
 }
 
 /**
- * Layout A's minimal top chrome (design board section 2): a small
- * "● REC"/"⏸ auto"/"⏸ paused" indicator plus the current mode, replacing
- * the pre-asn-3sm [ChipsRow] / [LoudnessMeterBar] / [ModeSwitcher] row up
- * here -- those move into the double-tap debug view (see [RecordingScreen])
- * since the home state's whole point is "duck + thought cloud, nothing
- * else." [activityState] (bead asn-r60) drives which of the three the
- * left-hand indicator shows -- team-lead's v2 pause redesign supersedes
- * asn-r60's own `PauseBanner`/`BottomActionsBar` presentation entirely (see
- * [PauseResumeChip]): no separate banner anywhere on this screen, just this
- * label swap plus the floating pause/resume pill next to STOP.
+ * The debug view's top chrome (design board section 2, superseded by v5.1):
+ * a small "● REC"/"⏸ auto"/"⏸ paused" indicator plus the current mode,
+ * replacing the pre-asn-3sm [ChipsRow] / [LoudnessMeterBar] / [ModeSwitcher]
+ * row up here. [activityState] (bead asn-r60) drives which of the three the
+ * left-hand indicator shows.
+ *
+ * **Debug-view-only as of bead v5.1.** Earlier this rendered unconditionally
+ * above both the duck and debug views; the locked no-corner-labels rule now
+ * extends to this row too -- the duck view shows it in NO state (not even
+ * the pause states' "⏸ auto"/"⏸ paused" text: the sleeping duck, the
+ * frozen timer, and the floating Resume pill already say everything there
+ * is to say). [RecordingScreen] only calls this composable inside its
+ * `showDebugView` branch now; the pause/resume presentation itself is
+ * unaffected (team-lead's v2 redesign already superseded asn-r60/asn-o63's
+ * own `PauseBanner`/`BottomActionsBar` UI outright -- see
+ * [PauseResumeChip]): no separate banner anywhere on this screen, just the
+ * floating pause/resume pill next to STOP.
  */
 @Composable
 private fun MinimalTopChrome(mode: RecordingMode, activityState: RecordingActivityState, modifier: Modifier = Modifier) {
@@ -479,15 +664,23 @@ private fun ModeSegment(
     }
 }
 
+/**
+ * [isPaused] (device-test directive, drop #1 item d): grey+frozen during
+ * either pause kind -- the storyboard's own `.paused` timer style (frames
+ * 10-11) -- warm/[MaterialTheme.colorScheme.primary] only while actually
+ * recording. The elapsed value itself already freezes independently
+ * (real recorded-content time, never wall clock -- see [RecordingUiState.elapsedMs]);
+ * this only controls the color, not whether the number keeps ticking.
+ */
 @Composable
-private fun BigTimer(elapsedMs: Long) {
+private fun BigTimer(elapsedMs: Long, isPaused: Boolean) {
     val totalSeconds = elapsedMs / 1000
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     Text(
         text = String.format("%02d:%02d", minutes, seconds),
         style = MaterialTheme.typography.displayLarge.copy(fontFeatureSettings = "tnum"),
-        color = MaterialTheme.colorScheme.primary,
+        color = if (isPaused) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f) else MaterialTheme.colorScheme.primary,
     )
 }
 
@@ -583,6 +776,176 @@ private fun LoudnessMeterBarContent(history: List<Float>) {
 private val LOUDNESS_METER_HEIGHT = 56.dp
 private val LOUDNESS_METER_BAR_GAP = 3.dp
 private val LOUDNESS_METER_REST_HEIGHT = 4.dp
+
+/**
+ * Bead asn-kd2, waveform spec v5.2 (supersedes an earlier faint/flat-only
+ * variant): the mic-loudness tick-bar directly under [BigTimer], visible in
+ * every duck-view state -- the debug view's own [LoudnessMeterBar] already
+ * gave this same "we're hearing you" signal; this restores it to the home
+ * duck view too, in three renderings keyed off [activityState] alone (never
+ * a separate "is recording" boolean a caller could let drift out of sync
+ * with the duck's own pose):
+ *
+ * - [RecordingActivityState.SPEAKING]/[RecordingActivityState.QUIET]: red,
+ *   live-moving ticks fed by [micLevel] -- audio is actively being saved.
+ * - [RecordingActivityState.AUTO_PAUSED]: grey ticks that keep moving off
+ *   the same live [micLevel] -- the mic is still open on its ring buffer
+ *   (design board: "he can still hear you, but nothing is being saved"),
+ *   just not persisted.
+ * - [RecordingActivityState.USER_PAUSED]: the bar goes completely flat (a
+ *   synthetic, non-live history -- the mic is released, there's nothing to
+ *   show) and a studio-style unlit [NotRecordingSign] lights the same spot
+ *   instead. That sign is a deliberate, one-off exception to this screen's
+ *   locked no-corner-labels rule -- manual pause only; auto-pause still
+ *   shows no sign at all, per [RecordingScreen]'s class KDoc.
+ */
+@Composable
+private fun DuckWaveformBar(
+    activityState: RecordingActivityState,
+    micLevel: Float,
+    sessionId: String?,
+    modifier: Modifier = Modifier,
+) {
+    if (activityState == RecordingActivityState.USER_PAUSED) {
+        Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            DuckWaveformTicks(
+                history = FLAT_WAVEFORM_HISTORY,
+                tickColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f),
+                modifier = Modifier.fillMaxWidth().testTag(DUCK_WAVEFORM_FLAT_TEST_TAG),
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            NotRecordingSign()
+        }
+        return
+    }
+
+    // Screen-vs-storyboard gate fix (drop #1): a cold LoudnessVisualizer()
+    // starts every one of its DEFAULT_HISTORY_LENGTH slots at 0f and only
+    // fills in ONE new entry per LaunchedEffect firing -- fine for the
+    // debug view's meter (which genuinely wants to show "just started,
+    // ramping up"), but for a SINGLE static frame (a Roborazzi golden, or
+    // literally the first frame of a real recording) it reads as 27 empty
+    // dashes plus one real, much-taller bar -- which, with this bar's full
+    // corner-radius rounding, renders as a flat dashed line with a trailing
+    // DOT rather than a loudness tick-strip (the gate's exact finding).
+    // Pre-warming every slot with the level at mount time makes the very
+    // first frame already read as a settled row of ticks; the LaunchedEffect
+    // below still scrolls in real variation as the live level changes.
+    val visualizer = remember(sessionId) {
+        LoudnessVisualizer(historyLength = DUCK_WAVEFORM_TICK_COUNT).apply { repeat(DUCK_WAVEFORM_TICK_COUNT) { onLevel(micLevel) } }
+    }
+    var history by remember(visualizer) { mutableStateOf(visualizer.history) }
+    LaunchedEffect(micLevel, visualizer) {
+        visualizer.onLevel(micLevel)
+        history = visualizer.history
+    }
+    val isAutoPaused = activityState == RecordingActivityState.AUTO_PAUSED
+    val tickColor = if (isAutoPaused) {
+        // Device-test directive (drop #1, item 4): brighter than a plain
+        // dimmed onSurfaceVariant so "still hearing you" reads at a glance
+        // rather than nearly disappearing against a dark background.
+        AUTO_PAUSED_WAVEFORM_GREY
+    } else {
+        MaterialTheme.colorScheme.error
+    }
+    val testTag = if (isAutoPaused) DUCK_WAVEFORM_AUTO_PAUSED_TEST_TAG else DUCK_WAVEFORM_RECORDING_TEST_TAG
+    DuckWaveformTicks(history = history, tickColor = tickColor, modifier = modifier.fillMaxWidth().testTag(testTag))
+}
+
+/**
+ * Pure rendering half of [DuckWaveformBar] -- thin (unlike the debug view's
+ * much taller [LoudnessMeterBarContent]) vertically-centered ticks in a
+ * single [Canvas] pass, one row, full width, colored by the caller.
+ */
+@Composable
+private fun DuckWaveformTicks(history: List<Float>, tickColor: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.fillMaxWidth().height(DUCK_WAVEFORM_HEIGHT)) {
+        val barCount = history.size
+        if (barCount == 0) return@Canvas
+        val gapPx = LOUDNESS_METER_BAR_GAP.toPx()
+        val barWidth = ((size.width - gapPx * (barCount - 1)) / barCount).coerceAtLeast(1f)
+        val minTickPx = DUCK_WAVEFORM_MIN_TICK_HEIGHT.toPx().coerceAtMost(size.height)
+        val cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f)
+        history.forEachIndexed { index, level ->
+            val tickHeight = (size.height * level.coerceIn(0f, 1f)).coerceAtLeast(minTickPx)
+            val left = index * (barWidth + gapPx)
+            drawRoundRect(
+                color = tickColor,
+                topLeft = Offset(left, (size.height - tickHeight) / 2f),
+                size = Size(barWidth, tickHeight),
+                cornerRadius = cornerRadius,
+            )
+        }
+    }
+}
+
+/**
+ * A constant, non-live history for [RecordingActivityState.USER_PAUSED]'s
+ * "completely flat" waveform (design board v5.2) -- deliberately not driven
+ * by [LoudnessVisualizer]/live mic level at all, since manual pause is a
+ * hard mute (mic released, see [RecordingScreen]'s class KDoc): there is no
+ * live level to show, so this renders a fixed, uniformly-low tick row
+ * instead of letting the last-seen level linger on screen.
+ */
+private val FLAT_WAVEFORM_HISTORY = List(DUCK_WAVEFORM_TICK_COUNT) { FLAT_WAVEFORM_TICK_LEVEL }
+private const val FLAT_WAVEFORM_TICK_LEVEL = 0.05f
+
+/** Bead asn-kd2.1: "~24 discrete ticks" -- matches the storyboard reference's own tick count, not the debug meter's unrelated [LoudnessVisualizer.DEFAULT_HISTORY_LENGTH] (28). */
+private const val DUCK_WAVEFORM_TICK_COUNT = 24
+
+/** Device-test directive (drop #1, item 4): a visible mid-grey, not a barely-there theme tint -- the AUTO_PAUSED waveform needs to read as "still moving" at a glance. */
+private val AUTO_PAUSED_WAVEFORM_GREY = Color(0xFF9A9188)
+
+// Device-test directive (drop #1, item 4): the waveform was the very first
+// thing the live tester looked for -- taller and with a higher tick floor
+// than the original spec's bare-minimum "thin" reading, so it registers
+// immediately instead of blending into the background under the timer.
+private val DUCK_WAVEFORM_HEIGHT = 22.dp
+private val DUCK_WAVEFORM_MIN_TICK_HEIGHT = 3.dp
+
+/** Test-only anchors for [DuckWaveformBar]'s three renderings (bead asn-kd2). */
+const val DUCK_WAVEFORM_RECORDING_TEST_TAG = "recording_duck_waveform_recording"
+const val DUCK_WAVEFORM_AUTO_PAUSED_TEST_TAG = "recording_duck_waveform_auto_paused"
+const val DUCK_WAVEFORM_FLAT_TEST_TAG = "recording_duck_waveform_flat"
+
+/**
+ * The studio-style unlit "on-air lamp" sign (design board v5.2) that lights
+ * the waveform's spot during [RecordingActivityState.USER_PAUSED] -- a
+ * deliberate, manual-pause-only exception to this screen's locked
+ * no-corner-labels rule (see [RecordingScreen]'s class KDoc): auto-pause
+ * still shows no sign or label of any kind, only this hard-mute state does,
+ * because "mic released" is the one thing here that isn't otherwise visible
+ * anywhere else on screen (the sleeping duck and frozen timer look
+ * IDENTICAL to auto-pause). Colors are hardcoded, not MaterialTheme-derived
+ * -- same convention as this file's other locked-design elements (tag rail
+ * chip colors, [StopBar]'s error red) -- since the whole point is an unlit,
+ * dark studio placard rather than a theme-following surface.
+ */
+@Composable
+private fun NotRecordingSign(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(NOT_RECORDING_BG_COLOR)
+            .border(1.5.dp, NOT_RECORDING_BORDER_COLOR, RoundedCornerShape(6.dp))
+            .testTag(NOT_RECORDING_SIGN_TEST_TAG)
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+    ) {
+        Text(
+            text = "● NOT RECORDING",
+            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp, fontSize = 10.sp),
+            fontWeight = FontWeight.Bold,
+            color = NOT_RECORDING_TEXT_COLOR,
+        )
+    }
+}
+
+/** Test-only anchor for [NotRecordingSign] (bead asn-kd2). */
+const val NOT_RECORDING_SIGN_TEST_TAG = "recording_not_recording_sign"
+
+private val NOT_RECORDING_BG_COLOR = Color(0xFF211D18)
+private val NOT_RECORDING_BORDER_COLOR = Color(0xFF4A4437)
+private val NOT_RECORDING_TEXT_COLOR = Color(0xFF6E6353)
 
 /** One rendered row of [LiveTranscriptPane], oldest-to-newest order matching [LazyColumn] item order. */
 private sealed interface TranscriptRow {
@@ -1050,23 +1413,28 @@ private fun FilingDestinationRibbon(destination: String) {
  *  - [floating] = true (duck view): a small pill (matches the design
  *    board's `.btn-stop`), still >= 48dp touch target, with an explicit
  *    [FLOATING_BUTTON_ELEVATION] drop shadow so it reads as floating above
- *    the duck's yellow rather than blending into him -- [DuckStage] is what
- *    positions this pill so it overlaps his lower body/feet; this
- *    composable only owns the button's own look.
+ *    the duck's yellow rather than blending into him. Deliberately sized to
+ *    its own content -- not wrapped in a `fillMaxWidth()` self-centering
+ *    box -- since its one caller (the duck view's `controls` row) places it
+ *    at the row's own end via `Arrangement.SpaceBetween` (device-test
+ *    directive, drop #1 item b: STOP stays pinned bottom-right while the
+ *    pause/resume pill takes the opposite, bottom-left slot); a
+ *    self-centering wrapper here would have consumed that row's entire
+ *    remaining width and swallowed the `SpaceBetween` effect. [DuckStage]
+ *    positions the whole row so it overlaps the duck's lower body/feet;
+ *    this composable only owns the button's own look.
  */
 @Composable
 private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit, floating: Boolean = false) {
     if (floating) {
-        Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Button(
-                onClick = onClick,
-                modifier = Modifier.heightIn(min = FLOATING_BUTTON_MIN_HEIGHT).shadow(FLOATING_BUTTON_ELEVATION, RoundedCornerShape(999.dp)),
-                shape = RoundedCornerShape(999.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                contentPadding = PaddingValues(horizontal = 28.dp, vertical = 10.dp),
-            ) {
-                Text(text = "STOP", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onError, fontWeight = FontWeight.Bold)
-            }
+        Button(
+            onClick = onClick,
+            modifier = modifier.heightIn(min = FLOATING_BUTTON_MIN_HEIGHT).shadow(FLOATING_BUTTON_ELEVATION, RoundedCornerShape(999.dp)),
+            shape = RoundedCornerShape(999.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+            contentPadding = PaddingValues(horizontal = 28.dp, vertical = 10.dp),
+        ) {
+            Text(text = "STOP", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onError, fontWeight = FontWeight.Bold)
         }
         return
     }
@@ -1096,18 +1464,31 @@ private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit, floating
  * Bead asn-r60's state machine, asn-o63's bug fix, asn-3sm's presentation
  * (team-lead's v2 pause redesign supersedes asn-r60/asn-o63's own
  * `PauseBanner`/`BottomActionsBar` UI outright -- see [RecordingScreen]'s
- * `controls` slot): a small floating pill next to the floating STOP pill,
- * same visual language ([FLOATING_BUTTON_ELEVATION] shadow, fully rounded,
- * >= 48dp touch target).
+ * `controls` slot): a small floating pill in the bottom-left slot (device-
+ * test directive, drop #1 item b -- an IN-PLACE swap, not a separate pill
+ * next to STOP), same visual language ([FLOATING_BUTTON_ELEVATION] shadow,
+ * fully rounded, >= 48dp touch target) as the floating STOP pill.
  *
- * [isPaused] is [RecordingActivityState.USER_PAUSED] OR
- * [RecordingActivityState.AUTO_PAUSED] -- asn-o63's live-test fix: the
- * original asn-r60 build only flipped the label for the manual/hard case, so
- * a tester saw it stay "PAUSE" through an entire auto-pause. Tapping while
- * either kind of pause is active now always resumes (there is no other
- * pause UI left to offer an escalate-to-hard-pause affordance -- asn-o63
- * dropped the separate auto-pause banner entirely, "no need for any other
- * UI, keep it minimal", which is exactly this bead's own v2 direction too).
+ * **Text and color depend on the pause KIND, not just paused-vs-not**
+ * (device-test directive, drop #1 item c): the two pause kinds behave
+ * differently under the hood (see [RecordingActivityState]'s own KDoc) and
+ * the button now says so --
+ *  - not paused (SPEAKING/QUIET): "⏸ PAUSE", neutral
+ *    [MaterialTheme.colorScheme.secondaryContainer].
+ *  - [RecordingActivityState.AUTO_PAUSED]: "▶ JUST SPEAK" -- mic still open
+ *    on its ring buffer, sustained speech wakes the duck on its own; tapping
+ *    this button also resumes, it's just not the only way.
+ *  - [RecordingActivityState.USER_PAUSED]: "▶ RESUME" -- hard mute, mic
+ *    released; this button is the ONLY way back.
+ *
+ * Both pause kinds render as a GREEN pill (matches the storyboard's
+ * `.resume` pill) -- distinct from the neutral pause-state color -- since
+ * either one is "tap this to make the duck listen again," just with
+ * different urgency/mechanism behind it. Tapping while either kind of pause
+ * is active always resumes (there is no other pause UI left to offer an
+ * escalate-to-hard-pause affordance -- asn-o63 dropped the separate
+ * auto-pause banner entirely, "no need for any other UI, keep it minimal",
+ * which is exactly this bead's own v2 direction too).
  *
  * [fillFraction] (asn-o63's [com.montauk.voicecapture.service.TranscriptUiState.autoPauseFillFraction])
  * drives [AutoPauseFillOverlay]'s moving-gradient warning, shown only while
@@ -1116,6 +1497,13 @@ private fun StopBar(modifier: Modifier = Modifier, onClick: () -> Unit, floating
 @Composable
 private fun PauseResumeChip(activityState: RecordingActivityState, fillFraction: Float, onSetPaused: (Boolean) -> Unit) {
     val isPaused = activityState == RecordingActivityState.USER_PAUSED || activityState == RecordingActivityState.AUTO_PAUSED
+    val label = when (activityState) {
+        RecordingActivityState.AUTO_PAUSED -> "▶ JUST SPEAK"
+        RecordingActivityState.USER_PAUSED -> "▶ RESUME"
+        RecordingActivityState.SPEAKING, RecordingActivityState.QUIET -> "⏸ PAUSE"
+    }
+    val containerColor = if (isPaused) RESUME_PILL_GREEN else MaterialTheme.colorScheme.secondaryContainer
+    val contentColor = if (isPaused) Color.White else MaterialTheme.colorScheme.onSecondaryContainer
     Button(
         onClick = { onSetPaused(!isPaused) },
         modifier = Modifier
@@ -1123,7 +1511,7 @@ private fun PauseResumeChip(activityState: RecordingActivityState, fillFraction:
             .shadow(FLOATING_BUTTON_ELEVATION, RoundedCornerShape(999.dp))
             .testTag(PAUSE_RESUME_BUTTON_TEST_TAG),
         shape = RoundedCornerShape(999.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        colors = ButtonDefaults.buttonColors(containerColor = containerColor),
         // Deliberately keeps Button's default contentPadding rather than
         // zeroing it out (matches BottomActionsBar's own rationale before
         // this bead superseded it): the fill overlay is inset by that same
@@ -1140,14 +1528,17 @@ private fun PauseResumeChip(activityState: RecordingActivityState, fillFraction:
                 AutoPauseFillOverlay(fillFraction = fillFraction, modifier = Modifier.matchParentSize())
             }
             Text(
-                text = if (isPaused) "▶ RESUME" else "⏸ PAUSE",
+                text = label,
                 style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                color = contentColor,
                 fontWeight = FontWeight.Bold,
             )
         }
     }
 }
+
+/** Bead v5.1 device-test directive: the resume-role pill's green, distinct from the neutral pause-state [MaterialTheme.colorScheme.secondaryContainer] -- matches the storyboard's `.resume` pill, hardcoded like this file's other locked-design colors (see [TagRailChipView]'s KDoc for the convention). */
+private val RESUME_PILL_GREEN = Color(0xFF3FAE7A)
 
 /**
  * Bead asn-o63: the Pause pill's interim "closing window" warning -- a

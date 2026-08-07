@@ -2,11 +2,16 @@ package com.montauk.voicecapture.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeRight
 import androidx.test.core.app.ApplicationProvider
 import com.montauk.voicecapture.VoiceCaptureApp
+import com.montauk.voicecapture.duck.DUCK_ANIMATOR_TEST_TAG
 import com.montauk.voicecapture.duck.LATENCY_BADGE_TEST_TAG
+import com.montauk.voicecapture.duck.NOTES_CARD_SWIPE_TEST_TAG
 import com.montauk.voicecapture.duck.NOTES_CARD_TEST_TAG
 import com.montauk.voicecapture.service.LatencyBadgeStateHolder
 import com.montauk.voicecapture.service.LatencyBadgeUiState
@@ -22,6 +27,7 @@ import com.montauk.voicecapture.service.TagTreeStateHolder
 import com.montauk.voicecapture.service.TagsStateHolder
 import com.montauk.voicecapture.service.TranscriptStateHolder
 import com.montauk.voicecapture.session.RecordingMode
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -59,10 +65,16 @@ class RecordingScreenLayoutATest {
         app.secretsStore.isSignedOut = true
     }
 
-    private fun startOnDuckView() {
+    private fun startOnDuckView(onApproveNote: (String) -> Unit = {}, onDiscardNote: (String) -> Unit = {}) {
         RecordingStateHolder.update { it.copy(isRecording = true, sessionId = "2026-08-01_0900_ab12", mode = RecordingMode.LISTEN) }
         composeTestRule.setContent {
-            AppNavHost(startDestination = Routes.RECORDING, onNewSessionTapped = {}, onStopRecording = {})
+            AppNavHost(
+                startDestination = Routes.RECORDING,
+                onNewSessionTapped = {},
+                onStopRecording = {},
+                onApproveNote = onApproveNote,
+                onDiscardNote = onDiscardNote,
+            )
         }
         composeTestRule.waitForIdle()
     }
@@ -103,5 +115,46 @@ class RecordingScreenLayoutATest {
 
         composeTestRule.onNodeWithTag(NOTES_CARD_TEST_TAG).assertIsDisplayed()
         composeTestRule.onNodeWithText("Budget cap set at \$80k", substring = true).assertIsDisplayed()
+    }
+
+    // Bead asn-dp2: the duck's WRITE-pose coordination with the notes card --
+    // see DuckAnimator's own contentDescription test hook.
+
+    @Test
+    fun `the duck is NOT in the WRITE pose before any summary has landed`() {
+        startOnDuckView()
+
+        composeTestRule.onNodeWithContentDescription("duck_state_WRITE").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a fresh summary switches the duck to the held WRITE pose while the card is up`() {
+        startOnDuckView()
+
+        SummaryStateHolder.update(
+            SummaryUiState(bullets = listOf("Comparing 3 contractor bids"), newestIndex = 0, updatedAtMs = System.currentTimeMillis()),
+        )
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithContentDescription("duck_state_WRITE").assertIsDisplayed()
+        composeTestRule.onNodeWithTag(DUCK_ANIMATOR_TEST_TAG).assertIsDisplayed()
+    }
+
+    // Bead asn-rrw: swipe-right approve end to end through RecordingScreen/AppNavHost.
+
+    @Test
+    fun `swipe right on the notes card reaches onApproveNote with the newest bullet`() {
+        var approvedText: String? = null
+        startOnDuckView(onApproveNote = { approvedText = it })
+
+        SummaryStateHolder.update(
+            SummaryUiState(bullets = listOf("Comparing 3 contractor bids"), newestIndex = 0, updatedAtMs = System.currentTimeMillis()),
+        )
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag(NOTES_CARD_SWIPE_TEST_TAG).performTouchInput { swipeRight() }
+        composeTestRule.waitForIdle()
+
+        assertEquals("Comparing 3 contractor bids", approvedText)
     }
 }
