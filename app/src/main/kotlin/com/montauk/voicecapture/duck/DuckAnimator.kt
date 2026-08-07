@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +38,16 @@ import kotlinx.coroutines.delay
  * the resolved frame is [DuckFrame.CELEBRATE], a separate bounded loop (see
  * below) additionally layers the vertical happy-bounce from
  * [DuckCelebrateBounce] on top of the crossfade.
+ *
+ * Bead asn-3gr: any transition touching [DuckFrame.BLINK] -- fading into it
+ * or fading back out of it -- uses the faster
+ * [DuckAnimationEngine.BLINK_CROSSFADE_MS] instead of the default, tracked
+ * via [previousFrame] since a plain `visual.frame == BLINK` check alone only
+ * catches the fade-in, not the fade-out (by the time the pulse expires and
+ * the target flips back to the base state, `visual.frame` is no longer
+ * `BLINK`). Combined with [DuckAnimationEngine.BLINK_PULSE_DURATION_MS], the
+ * whole blink reads as one quick deliberate motion instead of a long static
+ * dip -- the original bug this bead fixes.
  *
  * Deliberately **not** a continuous polling loop for state playback: the
  * old engine's frame cycling needed a per-frame `delay()` tick for the whole
@@ -66,6 +77,14 @@ fun DuckAnimator(
     val engine = remember { DuckAnimationEngine(initialState = state) }
     var visual by remember { mutableStateOf(engine.tick(nowMillis())) }
     var celebrateBounceFraction by remember { mutableStateOf(0f) }
+    // Bead asn-3gr: remembers the previously-rendered frame so the
+    // fade-*out* of BLINK (where `visual.frame` has already flipped back to
+    // the base state) can still be detected as "touches BLINK" -- see class
+    // KDoc. Updated via SideEffect, which runs after this composition, so
+    // the check below always sees last frame's value, not this one's.
+    val previousFrame = remember { mutableStateOf(visual.frame) }
+    val crossfadeTouchesBlink = visual.frame == DuckFrame.BLINK || previousFrame.value == DuckFrame.BLINK
+    SideEffect { previousFrame.value = visual.frame }
 
     LaunchedEffect(state) {
         engine.setState(state)
@@ -121,7 +140,13 @@ fun DuckAnimator(
     ) {
         Crossfade(
             targetState = visual.frame,
-            animationSpec = tween(if (reducedMotion) 0 else DuckAnimationEngine.DEFAULT_CROSSFADE_MS.toInt()),
+            animationSpec = tween(
+                when {
+                    reducedMotion -> 0
+                    crossfadeTouchesBlink -> DuckAnimationEngine.BLINK_CROSSFADE_MS.toInt()
+                    else -> DuckAnimationEngine.DEFAULT_CROSSFADE_MS.toInt()
+                },
+            ),
             label = "duck-frame-crossfade",
         ) { frame ->
             DuckPoseFrame(

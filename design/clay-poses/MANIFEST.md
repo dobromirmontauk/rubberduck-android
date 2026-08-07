@@ -1,6 +1,6 @@
 # Clay Duck Animation Pose Library — Manifest
 
-49 poses of the rubberduck mascot in the chosen "Style B" soft 3D / clay-render
+50 poses of the rubberduck mascot in the chosen "Style B" soft 3D / clay-render
 look (`design/duck-sheet-b-clay-3d.png`), organized as animation SEQUENCES
 rather than unrelated poses. Each sequence is a short loop or transition
 meant to be played back frame-by-frame in the app; deltas between consecutive
@@ -14,7 +14,9 @@ one-wing-raised "hand raise" pose, and a fully-asleep pause-state pose. An
 initial standalone BRB sign prop (41-46 numbering at the time) was generated
 and briefly landed on main, then dropped after a design-board revision
 removed it from scope — see the notes-scribble/ear-cup/hand-raise-eager/
-sleeping sequences below for what actually shipped.
+sleeping sequences below for what actually shipped. Pose 50 was added for
+asn-3gr, replacing `05-blink-01.png` as the `BLINK` pulse's source pose — see
+"Blink re-pick (bead asn-3gr)" below.
 
 ## Shared character lock (repeat in every generation prompt)
 
@@ -243,6 +245,53 @@ which shares the sitting silhouette/bandana of the other 6 and reads as a
 true blink (eyes dipped to brown dots, otherwise identical to the idle/
 attentive pose). `06-blink-02.png` was also considered and rejected --
 heavy-lidded/sleepy read, too close to the `SLEEP` frame.
+
+### Blink re-pick (bead asn-3gr)
+
+`05-blink-01.png` (the pick above) turned out to be the actual root cause of
+a real first-hand UX complaint (asn-04j), confirmed by asn-04j's log
+analysis: the rendered `duck_blink.png` it produced is a flat solid dark dot
+with **no eyelid closing at all** -- not a closed-eye pose, just a different
+static stare -- so 700ms holds of it, firing every ~2.5s throttle interval
+during ATTENTIVE, read as the duck's "eyes glazing over" rather than
+blinking (~28% of a 33s ATTENTIVE window spent in that frame in one captured
+session).
+
+Rather than pick yet another frame out of the existing 49 (the closest
+candidates, `06-blink-02.png`/`07-blink-03.png`, were already rejected above
+for heavy-lidded/off-model reasons), a fresh pose was generated:
+`50-blink-closed-01.png`, via `scripts/generate_poses.py`'s underlying
+nanobanana pipeline with **two** `--ref` images -- `duck-sheet-b-clay-3d.png`
+(character lock) and `08-listening-intro-01.png` (the exact `ATTENTIVE`
+source pose, passed as a second reference for body/posture continuity) --
+prompted for the same upright, alert ATTENTIVE posture with both eyes fully
+closed as simple soft curved eyelid crescents (no pupils, no eye-white),
+explicitly distinguished from drowsy/heavy-lidded and from the `SLEEP`
+frame's lopsided-lean posture.
+
+Three candidates were generated (kept in `candidates/` for review, raw +
+rembg-stripped):
+
+- `blink-closed-eye-candidate-01-raw.png` -- **chosen** (promoted to
+  `50-blink-closed-01.png`). Eyes drawn as simple downward-curving closed
+  crescents matching the `SLEEP` frame's eye style; body posture, head tilt,
+  and framing match `08-listening-intro-01.png` almost exactly (alpha-bbox
+  after normalization: `(82, 56, 429, 488)` vs. ATTENTIVE's
+  `(83, 56, 429, 488)` -- effectively identical).
+- `blink-closed-eye-candidate-02-raw.png` -- rejected: off-model
+  composition, rendered as a three-duck contact sheet (one main pose plus
+  two smaller variants) with visible legs/feet, unlike every other pose's
+  single waist-up crop.
+- `blink-closed-eye-candidate-03-raw.png` -- rejected: eyelids curved
+  *upward* (a happy/content squint, similar to the happy-bounce sequence's
+  closed-happy-eyes) rather than the downward-curving closed-eyelid shape a
+  neutral blink needs; also rendered on a light-gray gradient instead of the
+  flat white backdrop.
+
+`normalize_poses.py`'s `FRAMES` table now sources `BLINK` from
+`50-blink-closed-01.png` instead of `05-blink-01.png`; every other frame's
+source pose is unchanged, and re-running the script reproduced
+byte-identical output for all 8 other frames.
 
 ### Normalization
 

@@ -10,10 +10,17 @@ class DuckAnimationEngineTest {
         initialState: DuckState = DuckState.ATTENTIVE,
         pulseDurationMs: Long = 100L,
         celebratePulseDurationMs: Long = 60L,
+        // Defaults to pulseDurationMs (not its own distinct value) so every
+        // existing test below that uses DuckPulse.BLINK as a generic
+        // stand-in pulse -- unrelated to blink-specific timing -- keeps
+        // asserting against the plain pulseDurationMs it already expects.
+        // The dedicated BLINK-duration tests further down override this.
+        blinkPulseDurationMs: Long = pulseDurationMs,
     ) = DuckAnimationEngine(
         initialState = initialState,
         pulseDurationMs = pulseDurationMs,
         celebratePulseDurationMs = celebratePulseDurationMs,
+        blinkPulseDurationMs = blinkPulseDurationMs,
     )
 
     // --- base-state transitions ---
@@ -146,6 +153,31 @@ class DuckAnimationEngineTest {
         assertEquals(DuckVisual.Pose(DuckFrame.CELEBRATE), e.tick(100L)) // CELEBRATE starts
         assertEquals(DuckVisual.Pose(DuckFrame.CELEBRATE), e.tick(159L))
         assertEquals(DuckVisual.Pose(DuckFrame.ATTENTIVE), e.tick(160L)) // 100 + 60
+    }
+
+    // --- blink: its own shorter pulse duration (bead asn-3gr) ---
+
+    @Test
+    fun `BLINK plays for blinkPulseDurationMs, not the generic pulseDurationMs`() {
+        val e = engine(pulseDurationMs = 700L, blinkPulseDurationMs = 300L)
+        e.triggerPulse(DuckPulse.BLINK, nowMs = 0L)
+
+        assertEquals(DuckVisual.Pose(DuckFrame.BLINK), e.tick(0L))
+        assertEquals(DuckVisual.Pose(DuckFrame.BLINK), e.tick(299L))
+        // Reverts at 300ms -- well before the generic 700ms pulse duration would have.
+        assertEquals(DuckVisual.Pose(DuckFrame.ATTENTIVE), e.tick(300L))
+    }
+
+    @Test
+    fun `BLINK queued behind another pulse still uses its own duration once it starts`() {
+        val e = engine(pulseDurationMs = 100L, blinkPulseDurationMs = 30L)
+        e.triggerPulse(DuckPulse.NOD, nowMs = 0L)
+        e.triggerPulse(DuckPulse.BLINK, nowMs = 10L) // queued
+
+        e.tick(99L) // still NOD
+        assertEquals(DuckVisual.Pose(DuckFrame.BLINK), e.tick(100L)) // BLINK starts
+        assertEquals(DuckVisual.Pose(DuckFrame.BLINK), e.tick(129L))
+        assertEquals(DuckVisual.Pose(DuckFrame.ATTENTIVE), e.tick(130L)) // 100 + 30
     }
 
     // --- msUntilNextTransition / activePulseElapsedMs (scheduling hooks) ---

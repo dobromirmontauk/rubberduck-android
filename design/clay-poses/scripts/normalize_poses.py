@@ -37,7 +37,14 @@ FRAMES = [
     ("08-listening-intro-01.png", "duck_attentive.png", "ATTENTIVE"),
     ("48-sleeping-01.png", "duck_sleep.png", "SLEEP"),
     ("23-thinking-01.png", "duck_think.png", "THINK"),
-    ("05-blink-01.png", "duck_blink.png", "BLINK"),
+    # Bead asn-3gr: swapped from 05-blink-01.png (a flat solid-dot stare with
+    # no closed-eyelid rendering at all -- confirmed via asn-04j log analysis
+    # to read as a "blank stare" glitch, not a blink) to a purpose-generated
+    # closed-eye pose that keeps the ATTENTIVE body posture but draws the
+    # eyes as simple closed-eyelid crescents, matching the SLEEP frame's eye
+    # style. See MANIFEST.md's "Blink re-pick" section for the generation
+    # notes and rejected candidates.
+    ("50-blink-closed-01.png", "duck_blink.png", "BLINK"),
     ("16-head-turn-02.png", "duck_nod.png", "NOD"),
     ("46-hand-raise-eager-01.png", "duck_raise_hand.png", "RAISE_HAND"),
     ("41-notes-scribble-01.png", "duck_write.png", "WRITE"),

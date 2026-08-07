@@ -17,7 +17,15 @@ package com.montauk.voicecapture.duck
  * plays for [pulseDurationMs] except [DuckPulse.CELEBRATE], which plays for
  * the shorter [celebratePulseDurationMs] -- matching its own ~600ms/
  * 2-bounce choreography (see [DuckAnimator]'s celebrate-bounce animation,
- * which reads [activePulseElapsedMs] to time itself off this same clock).
+ * which reads [activePulseElapsedMs] to time itself off this same clock) --
+ * and [DuckPulse.BLINK], which plays for the shorter [blinkPulseDurationMs]
+ * (bead asn-3gr: the original 700ms hold, paired with a plain closed-eye
+ * asset, read as a "blank stare" glitch rather than a blink -- see
+ * `design/clay-poses/MANIFEST.md`'s blink re-pick notes). [DuckAnimator]
+ * additionally shortens BLINK's own crossfade
+ * ([DuckAnimationEngine.BLINK_CROSSFADE_MS]) so the whole blink -- fade in,
+ * brief hold, fade out -- reads as one quick deliberate motion rather than a
+ * long static dip.
  *
  * **Queuing** (the bead's own spec: "event pulses queue politely -- don't
  * interrupt mid-pulse, drop stale ones"): [triggerPulse] while one is
@@ -44,6 +52,7 @@ class DuckAnimationEngine(
     initialState: DuckState = DuckState.ATTENTIVE,
     private val pulseDurationMs: Long = DEFAULT_PULSE_DURATION_MS,
     private val celebratePulseDurationMs: Long = CELEBRATE_PULSE_DURATION_MS,
+    private val blinkPulseDurationMs: Long = BLINK_PULSE_DURATION_MS,
 ) {
     var state: DuckState = initialState
         private set
@@ -121,13 +130,31 @@ class DuckAnimationEngine(
 
     private fun durationFor(pulse: DuckPulse): Long = when (pulse) {
         DuckPulse.CELEBRATE -> celebratePulseDurationMs
+        DuckPulse.BLINK -> blinkPulseDurationMs
         else -> pulseDurationMs
     }
 
     companion object {
         const val DEFAULT_PULSE_DURATION_MS = 700L
         const val CELEBRATE_PULSE_DURATION_MS = 600L
+
+        /**
+         * Bead asn-3gr: BLINK's own shorter pulse duration -- the generic
+         * 700ms hold (still used by NOD/RAISE_HAND/WRITE) made a single
+         * static closed-eye frame sit on screen long enough to read as a
+         * glitchy "blank stare" rather than a blink, confirmed by asn-04j's
+         * log analysis (13 dispatches x 700ms covering ~28% of a 33s
+         * ATTENTIVE window). Paired with [BLINK_CROSSFADE_MS] below, the
+         * total perceived blink (fade in + hold + fade out) lands around
+         * 300 + 110 =~ 410ms -- inside the ~350-450ms target for a
+         * deliberate blink.
+         */
+        const val BLINK_PULSE_DURATION_MS = 300L
+
         const val DEFAULT_CROSSFADE_MS = 220L
+
+        /** Bead asn-3gr: faster crossfade [DuckAnimator] uses specifically for transitions into/out of [DuckFrame.BLINK] -- see [BLINK_PULSE_DURATION_MS]. */
+        const val BLINK_CROSSFADE_MS = 110L
     }
 }
 
