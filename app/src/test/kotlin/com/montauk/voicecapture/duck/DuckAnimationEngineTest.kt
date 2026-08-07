@@ -28,10 +28,18 @@ class DuckAnimationEngineTest {
     fun `setState switches the rendered frame immediately when no pulse is playing`() {
         val e = engine(initialState = DuckState.ATTENTIVE)
         e.tick(0L)
+        e.setState(DuckState.DROWSY)
+        assertEquals(DuckVisual.Pose(DuckFrame.DROWSY), e.tick(0L))
         e.setState(DuckState.SLEEP)
         assertEquals(DuckVisual.Pose(DuckFrame.SLEEP), e.tick(0L))
         e.setState(DuckState.THINK)
         assertEquals(DuckVisual.Pose(DuckFrame.THINK), e.tick(0L))
+    }
+
+    @Test
+    fun `DROWSY renders its own frame, distinct from ATTENTIVE and SLEEP -- bead asn-3h6`() {
+        val e = engine(initialState = DuckState.DROWSY)
+        assertEquals(DuckVisual.Pose(DuckFrame.DROWSY), e.tick(0L))
     }
 
     @Test

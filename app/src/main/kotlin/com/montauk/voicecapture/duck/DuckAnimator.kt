@@ -164,6 +164,16 @@ private fun DuckAnimatorAttentivePreview() {
 
 @androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 320, heightDp = 320)
 @Composable
+private fun DuckAnimatorDrowsyPreview() {
+    VoiceCaptureTheme {
+        Box(modifier = Modifier.padding(24.dp).aspectRatio(1f)) {
+            DuckAnimator(state = DuckState.DROWSY)
+        }
+    }
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 320, heightDp = 320)
+@Composable
 private fun DuckAnimatorSleepPreview() {
     VoiceCaptureTheme {
         Box(modifier = Modifier.padding(24.dp).aspectRatio(1f)) {

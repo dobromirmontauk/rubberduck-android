@@ -11,17 +11,20 @@ package com.montauk.voicecapture.duck
  * loop architecture per explicit user direction: "ONE static image per
  * state, animation comes later"): exactly one frame per [DuckState] plus
  * one per [DuckPulse] -- see [DuckAnimationEngine] for how the two combine.
- * Each of these 8 frames is normalized (alpha-bbox cropped, scaled to equal
+ * Each of these 9 frames is normalized (alpha-bbox cropped, scaled to equal
  * duck height, bottom-center anchored -- see
  * `design/clay-poses/scripts/normalize_poses.py`) so crossfading between any
  * two of them never jumps in scale/position the way directly crossfading
  * two un-normalized independent nanobanana renders did.
  */
 enum class DuckFrame {
-    /** Base: recording active, default. Source: `08-listening-intro-01.png`. */
+    /** Base: recording active, or quiet but still before the auto-pause fill window starts. Source: `08-listening-intro-01.png`. */
     ATTENTIVE,
 
-    /** Base: quiet, or either pause kind. Source: `48-sleeping-01.png`. */
+    /** Base: quiet, inside the trailing auto-pause fill window but not yet paused (bead asn-3h6). Source: `38-sleepy-01.png`. */
+    DROWSY,
+
+    /** Base: auto-paused or manually paused. Source: `48-sleeping-01.png`. */
     SLEEP,
 
     /** Base: a summary round is in flight. Source: `23-thinking-01.png`. */

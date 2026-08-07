@@ -206,7 +206,11 @@ fun RecordingScreen(
     LaunchedEffect(summary.updatedAtMs) {
         if (summary.bullets.isNotEmpty()) thinkingUntilMs = System.currentTimeMillis() + THINKING_DISPLAY_MS
     }
-    val baseDuckState = remember(activityState) { activityState.toDuckState() }
+    // Bead asn-3h6: NOT `remember(activityState)` anymore -- DROWSY depends
+    // on transcript.autoPauseFillFraction too, which changes continuously
+    // while activityState stays QUIET, so the mapping has to re-run on every
+    // transcript update, not just on activityState transitions.
+    val baseDuckState = activityState.toDuckState(transcript.autoPauseFillFraction)
     val duckState = if (nowMs < thinkingUntilMs) DuckState.THINK else baseDuckState
 
     // Bead vn-edu.46's keyless guard, preserved: no key means NO word-cloud

@@ -12,6 +12,7 @@ import com.montauk.voicecapture.R
  */
 internal fun DuckFrame.drawableRes(): Int = when (this) {
     DuckFrame.ATTENTIVE -> R.drawable.duck_attentive
+    DuckFrame.DROWSY -> R.drawable.duck_drowsy
     DuckFrame.SLEEP -> R.drawable.duck_sleep
     DuckFrame.THINK -> R.drawable.duck_think
     DuckFrame.BLINK -> R.drawable.duck_blink

@@ -26,7 +26,9 @@ import com.montauk.voicecapture.ui.theme.VoiceCaptureTheme
  * [DUCK_HEIGHT_FRACTION] (~2/3) of the stage's height, head landing around
  * that same fraction from the top; [ThoughtCloud] scatters its words in the
  * space above/around his head; [ThoughtBubbleDots] ties the two together
- * visually. [ZzTrail] rises from his head during [DuckState.SLEEP].
+ * visually. [ZzTrail] rises from his head during [DuckState.DROWSY] (bead
+ * asn-3h6: "gets heavy-lidded with a rising trail of Z's -- still
+ * recording", per the v5.3 storyboard) and [DuckState.SLEEP].
  * [NotesCard] and [controls] both render as pure overlays on top of the
  * duck -- neither ever resizes or reflows him; see each composable's own
  * KDoc for why. [LatencyBadge] sits bottom-right (hidden at
@@ -57,7 +59,7 @@ fun DuckStage(
     happyBounceTrigger: Int = 0,
     controls: @Composable () -> Unit = {},
 ) {
-    val dozingOrAsleep = duckState == DuckState.SLEEP
+    val dozingOrAsleep = duckState == DuckState.DROWSY || duckState == DuckState.SLEEP
     // Design board v2, frame 4: "duck switches to thinking/notes-scribble
     // pose; cloud words dim to 35%" while a summary round is in flight.
     val wordsDimFactor = if (duckState == DuckState.THINK) WORDS_DIM_FACTOR_WHILE_THINKING else 1f
@@ -192,6 +194,17 @@ private fun DuckStageThinkPreview() {
             latencyState = com.montauk.voicecapture.service.LatencyBadgeUiState(),
             onLatencyBadgeTap = {},
         )
+    }
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0E0E10, widthDp = 360, heightDp = 640)
+@Composable
+private fun DuckStageDrowsyPreview() {
+    VoiceCaptureTheme {
+        DuckStage(duckState = DuckState.DROWSY, words = ThoughtCloudWords.EMPTY, reducedMotion = false, onApproveWord = {},
+            summary = com.montauk.voicecapture.service.SummaryUiState(),
+            latencyState = com.montauk.voicecapture.service.LatencyBadgeUiState(),
+            onLatencyBadgeTap = {})
     }
 }
 

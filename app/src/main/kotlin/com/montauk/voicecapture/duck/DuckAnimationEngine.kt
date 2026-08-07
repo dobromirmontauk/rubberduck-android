@@ -133,6 +133,7 @@ class DuckAnimationEngine(
 
 private fun DuckState.toFrame(): DuckFrame = when (this) {
     DuckState.ATTENTIVE -> DuckFrame.ATTENTIVE
+    DuckState.DROWSY -> DuckFrame.DROWSY
     DuckState.SLEEP -> DuckFrame.SLEEP
     DuckState.THINK -> DuckFrame.THINK
 }

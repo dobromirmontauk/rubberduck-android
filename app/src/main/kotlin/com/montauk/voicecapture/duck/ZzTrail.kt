@@ -16,10 +16,11 @@ import androidx.compose.ui.unit.sp
 /**
  * The rising "z Z Z" trail (design board v2, quiet-and-pause storyboard
  * frames 8-10): three Z's of increasing size climbing diagonally from the
- * duck's head, each on its own float-up loop, shown during [DuckState.SLEEP]
- * (bead asn-5w3: quiet and either pause kind collapsed onto one pose/tier --
- * a UI overlay, not baked into the pose pixels). Static (no float, full
- * opacity) when [reducedMotion].
+ * duck's head, each on its own float-up loop, shown during [DuckState.DROWSY]
+ * (bead asn-3h6: sustained quiet, still recording -- "gets heavy-lidded with
+ * a rising trail of Z's") and [DuckState.SLEEP] (either pause kind -- a UI
+ * overlay, not baked into the pose pixels). Static (no float, full opacity)
+ * when [reducedMotion].
  */
 @Composable
 fun ZzTrail(reducedMotion: Boolean, modifier: Modifier = Modifier) {

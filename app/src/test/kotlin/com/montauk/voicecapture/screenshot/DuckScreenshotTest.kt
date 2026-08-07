@@ -80,6 +80,23 @@ class DuckScreenshotTest {
     }
 
     @Test
+    fun duckDrowsy() {
+        composeTestRule.setContent {
+            VoiceCaptureTheme {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    DuckPoseFrame(
+                        visual = DuckVisual.Pose(DuckFrame.DROWSY),
+                        modifier = Modifier.fillMaxWidth(0.55f).aspectRatio(1f),
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onRoot().captureRoboImage(GOLDEN_DIR + "duck_drowsy.png")
+    }
+
+    @Test
     fun duckSleep() {
         composeTestRule.setContent {
             VoiceCaptureTheme {

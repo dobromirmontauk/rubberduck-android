@@ -203,7 +203,7 @@ different states at a glance.
     design-board scope revision dropped it — see git history for that asset
     if it's ever needed again.
 
-## v3 single-pose engine: the 8 chosen frames (beads asn-q3r, asn-5w3)
+## v3 single-pose engine: the 9 chosen frames (beads asn-q3r, asn-5w3, asn-3h6)
 
 asn-3sm's v3 duck engine (per explicit user direction: "ONE static image per
 state, animation comes later") replaced the ~26-frame animation-loop
@@ -215,11 +215,18 @@ re-picking poses. Bead asn-5w3 (v5.2 design addition) added an 8th frame,
 `CELEBRATE`, for the new tag-approval celebration pulse -- a fresh pick (both
 wings fully raised, `13-wing-flap-03.png`), not inherited from the WIP
 checkpoint, since that pulse didn't exist yet when asn-3sm's WIP was cut.
+Bead asn-3h6 (device-test bugfix, 2026-08-06) added a 9th frame, `DROWSY`, a
+new *base* state (not a pulse) inserted between `ATTENTIVE` and `SLEEP` for
+the sustained-quiet window before auto-pause actually fires -- the original
+`RecordingActivityState.toDuckState()` mapping collapsed QUIET straight to
+SLEEP, so a fresh session (which starts in QUIET) rendered fully asleep
+before any speech ever happened.
 
 | Token | Source pose | Role |
 | --- | --- | --- |
-| `ATTENTIVE` | `08-listening-intro-01.png` | Base: recording active, default |
-| `SLEEP` | `48-sleeping-01.png` | Base: quiet, or either pause kind |
+| `ATTENTIVE` | `08-listening-intro-01.png` | Base: recording active, or quiet but still within the leading (invisible) span before the auto-pause fill window starts |
+| `DROWSY` | `38-sleepy-01.png` | Base: quiet and inside the trailing auto-pause fill window (heavy-lidded, eyes open) -- not auto-paused yet |
+| `SLEEP` | `48-sleeping-01.png` | Base: auto-paused or manually paused (eyes fully closed) |
 | `THINK` | `23-thinking-01.png` | Base: a summary round is in flight |
 | `BLINK` | `05-blink-01.png` | Pulse: a few seconds of audio captured and sent to transcription |
 | `NOD` | `16-head-turn-02.png` | Pulse: a final transcription segment landed |
@@ -244,7 +251,7 @@ they are not pixel-continuous with each other -- the duck sits at a
 different scale and vertical offset in different frames. Crossfading
 directly between two unnormalized frames makes the duck visibly jump in
 size/position when the app swaps states. `scripts/normalize_poses.py`
-removes that jump for exactly these 8 frames:
+removes that jump for exactly these 9 frames:
 
 1. Alpha-bbox-crop each source pose (drop the surrounding transparent
    margin).
@@ -256,12 +263,13 @@ removes that jump for exactly these 8 frames:
 
 Output lands directly as the app-ready assets at
 `app/src/main/res/drawable-nodpi/duck_{attentive,sleep,think,blink,nod,
-raise_hand,write,celebrate}.png`, matching this repo's existing drawable-nodpi
-bundling convention (density-independent fixed-pixel bitmaps). Verified with
-`scripts/verify_alpha.py` (true RGBA, transparent corners, non-trivial
-opaque interior) before landing; re-running the script after the asn-5w3
-`FRAMES` addition reproduced byte-identical output for the original 7
-(confirmed via `shasum`), so the celebrate addition didn't perturb the
+raise_hand,write,celebrate,drowsy}.png`, matching this repo's existing
+drawable-nodpi bundling convention (density-independent fixed-pixel
+bitmaps). Verified with `scripts/verify_alpha.py` (true RGBA, transparent
+corners, non-trivial opaque interior) before landing; re-running the script
+after both the asn-5w3 `CELEBRATE` addition and the asn-3h6 `DROWSY`
+addition reproduced byte-identical output for every previously-landed frame
+(confirmed via `shasum` each time), so neither addition perturbed the
 already-landed picks.
 
 Regenerate with:

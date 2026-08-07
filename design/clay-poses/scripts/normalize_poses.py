@@ -45,6 +45,11 @@ FRAMES = [
     # wings fully raised, paired with a vertical happy-bounce animation
     # layered on top by DuckAnimator (not baked into the pixels).
     ("13-wing-flap-03.png", "duck_celebrate.png", "CELEBRATE"),
+    # Bead asn-3h6: DROWSY base state -- heavy-lidded, still recording,
+    # inserted between ATTENTIVE and SLEEP for the ~5s-10s sustained-quiet
+    # window (before auto-pause actually fires). Distinct from SLEEP's fully
+    # closed eyes (48-sleeping-01.png) -- eyes stay open/heavy-lidded here.
+    ("38-sleepy-01.png", "duck_drowsy.png", "DROWSY"),
 ]
 
 
