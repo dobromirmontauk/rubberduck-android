@@ -9,7 +9,8 @@ package com.montauk.voicecapture.duck
  * [com.montauk.voicecapture.service.SilenceDetector] pairing untested Service
  * call sites with a tested pure class) can stay a thin integration wire while
  * the actual decision is independently testable. Grows one piece per child
- * bead: [BlinkHeartbeat] (asn-02h.1), [nodPulseForFinalSegment] (asn-02h.2).
+ * bead: [BlinkHeartbeat] (asn-02h.1), [nodPulseForFinalSegment] (asn-02h.2),
+ * [shouldPlayPulse] (asn-02h.3).
  */
 
 /**
@@ -60,3 +61,21 @@ class BlinkHeartbeat(private val throttleMs: Long = DEFAULT_THROTTLE_MS) {
  * [BlinkHeartbeat], and so this mapping has its own test.
  */
 fun nodPulseForFinalSegment(): DuckPulse = DuckPulse.NOD
+
+/**
+ * Decides whether an incoming [DuckPulseEvent] should actually play, or be
+ * silently dropped (bead asn-02h.3): specifically, a [DuckPulse.WRITE] pulse
+ * (fired once, "a summary round completed") arriving while [DuckState.WRITE]
+ * is already the held BASE state (bead asn-dp2.5 -- the notes card is
+ * entering/visible/leaving) would layer the identical [DuckFrame.WRITE] pose
+ * over itself: a visual no-op that would only reset the pulse's own
+ * animation-timer machinery for nothing. Every other pulse always plays,
+ * regardless of the current base state -- this never suppresses
+ * BLINK/NOD/RAISE_HAND/CELEBRATE. Pure Kotlin so
+ * [com.montauk.voicecapture.ui.RecordingScreen]'s `rememberUpdatedState`-based
+ * live check (Compose only evaluates a pulse once per distinct
+ * [DuckPulseEvent], not reactively as [currentBaseState] later changes) has
+ * something unit-testable to delegate the actual decision to.
+ */
+fun shouldPlayPulse(event: DuckPulseEvent, currentBaseState: DuckState): Boolean =
+    !(event.pulse == DuckPulse.WRITE && currentBaseState == DuckState.WRITE)

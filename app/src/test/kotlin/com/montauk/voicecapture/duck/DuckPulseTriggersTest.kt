@@ -54,4 +54,24 @@ class DuckPulseTriggersTest {
     fun `final-segment fires NOD`() {
         assertEquals(DuckPulse.NOD, nodPulseForFinalSegment())
     }
+
+    // --- shouldPlayPulse (bead asn-02h.3) ---
+
+    @Test
+    fun `WRITE pulse is a no-op while the base state is already WRITE (card visible)`() {
+        val event = DuckPulseEvent(DuckPulse.WRITE, nonce = 1)
+        assertFalse(shouldPlayPulse(event, currentBaseState = DuckState.WRITE))
+    }
+
+    @Test
+    fun `WRITE pulse fires when the base state is not WRITE (card hidden)`() {
+        val event = DuckPulseEvent(DuckPulse.WRITE, nonce = 1)
+        assertTrue(shouldPlayPulse(event, currentBaseState = DuckState.ATTENTIVE))
+    }
+
+    @Test
+    fun `other pulses always play regardless of the current base state`() {
+        val event = DuckPulseEvent(DuckPulse.NOD, nonce = 1)
+        assertTrue(shouldPlayPulse(event, currentBaseState = DuckState.WRITE))
+    }
 }

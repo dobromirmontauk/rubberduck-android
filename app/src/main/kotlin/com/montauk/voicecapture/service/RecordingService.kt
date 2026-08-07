@@ -1018,6 +1018,16 @@ class RecordingService : LifecycleService() {
                 SummaryStateHolder.update(
                     SummaryUiState(bullets = result.bullets, newestIndex = result.newestIndex, updatedAtMs = atMs, stale = result.stale),
                 )
+                // Bead asn-02h.3: a summary round completing is the real
+                // "summary round" beat (SummaryCoordinator.onTick returning
+                // non-null -- its internal due/growth/word-count gating
+                // means the caller can't know in advance whether a given
+                // tick will actually attempt one, only that it just did).
+                // Whether this WRITE pulse actually plays (vs. being a
+                // no-op against the held WRITE base state while the notes
+                // card is up) is RecordingScreen's call -- see
+                // shouldPlayPulse's own KDoc.
+                DuckPulseStateHolder.emit(DuckPulse.WRITE)
                 app.sessionStore.transcriptFile(session.dir).appendText(SummaryEventWriter.encodeLine(atMs, result.added) + "\n")
                 app.sessionStore.summaryFile(session.dir).writeText(SummaryMarkdownWriter.render(result.bullets))
             }

@@ -42,6 +42,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -75,11 +76,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.montauk.voicecapture.VoiceCaptureApp
 import com.montauk.voicecapture.audio.AudioRouteType
 import com.montauk.voicecapture.audio.LoudnessVisualizer
+import com.montauk.voicecapture.duck.DuckPulseEvent
 import com.montauk.voicecapture.duck.DuckPulseStateHolder
 import com.montauk.voicecapture.duck.DuckStage
 import com.montauk.voicecapture.duck.DuckState
 import com.montauk.voicecapture.duck.ThoughtCloudWords
 import com.montauk.voicecapture.duck.rememberReducedMotionEnabled
+import com.montauk.voicecapture.duck.shouldPlayPulse
 import com.montauk.voicecapture.duck.toDuckState
 import com.montauk.voicecapture.session.RecordingMode
 import com.montauk.voicecapture.session.SwipeHintStateHolder
@@ -201,10 +204,12 @@ fun RecordingScreen(
     val tagTree by TagTreeStateHolder.state.collectAsStateWithLifecycle()
     val summary by SummaryStateHolder.state.collectAsStateWithLifecycle()
     val latencyState by LatencyBadgeStateHolder.state.collectAsStateWithLifecycle()
-    // Bead asn-02h.1: the real pipeline-driven event-pulse stream --
-    // DuckStage still folds this alongside the legacy happyBounceTrigger/
-    // handRaiseTrigger nonces until each of their own child beads lands and
-    // retires the matching ad-hoc mechanism (see DuckStage's own KDoc).
+    // Bead asn-02h: the real pipeline-driven event-pulse stream. Gated
+    // through shouldPlayPulse below (asn-02h.3's WRITE-vs-notes-card
+    // suppression) before reaching DuckStage, which still folds the result
+    // alongside the legacy happyBounceTrigger/handRaiseTrigger nonces until
+    // each of their own child beads lands and retires the matching ad-hoc
+    // mechanism (see DuckStage's own KDoc).
     val duckPulseEvent by DuckPulseStateHolder.events.collectAsStateWithLifecycle()
     val anthropicKeyConfigured = app.isAnthropicKeyConfigured()
     val assemblyKeyConfigured = app.isAssemblyKeyConfigured()
@@ -239,6 +244,21 @@ fun RecordingScreen(
         thinkActive = nowMs < thinkingUntilMs,
         notesCardActive = notesCardActive,
     )
+
+    // Bead asn-02h.3: shouldPlayPulse must be evaluated against duckState's
+    // value AT THE MOMENT [duckPulseEvent] actually changes, not reactively
+    // re-evaluated later -- a WRITE pulse silently dropped while the notes
+    // card was up must stay dropped, never retroactively fire once the card
+    // closes. LaunchedEffect below is keyed on duckPulseEvent alone, so
+    // rememberUpdatedState is what lets it read duckState's CURRENT value
+    // without restarting (and re-deciding) every time duckState itself
+    // changes for an unrelated reason.
+    val currentDuckState = rememberUpdatedState(duckState)
+    var pulseTrigger by remember { mutableStateOf<DuckPulseEvent?>(null) }
+    LaunchedEffect(duckPulseEvent) {
+        val event = duckPulseEvent ?: return@LaunchedEffect
+        if (shouldPlayPulse(event, currentDuckState.value)) pulseTrigger = event
+    }
 
     // Bead vn-edu.46's keyless guard, preserved: no key means NO word-cloud
     // data at all, even if TagRailStateHolder is stale/non-empty (shouldn't
@@ -352,7 +372,7 @@ fun RecordingScreen(
                         latencyState = latencyState,
                         onLatencyBadgeTap = {}, // asn-55q's L2 HUD opens here once that bead lands
                         happyBounceTrigger = happyBounceTrigger,
-                        pulseTrigger = duckPulseEvent,
+                        pulseTrigger = pulseTrigger,
                         onApproveNote = onApproveNote,
                         onDiscardNote = { noteText ->
                             // Bead asn-rrw: the toast is local/instant UI
