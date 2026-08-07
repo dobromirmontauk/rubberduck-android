@@ -6,6 +6,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -38,7 +39,13 @@ class AnthropicSummaryGeneratorTest {
     private fun quoted(text: String): String =
         "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
 
-    private fun generator(apiKey: String = "test-key") =
+    // Explicit SummaryGenerator return type (not the concrete
+    // AnthropicSummaryGenerator) so every 2-arg `generate(...)` call below
+    // still compiles via the interface's own discardedBullets default --
+    // Kotlin forbids an *overriding* function from redeclaring a default
+    // parameter value, so that default is only visible when dispatch is
+    // through the interface-typed reference.
+    private fun generator(apiKey: String = "test-key"): SummaryGenerator =
         AnthropicSummaryGenerator(apiKey = apiKey, endpoint = server.url("/v1/messages").toString())
 
     @Test
@@ -119,5 +126,27 @@ class AnthropicSummaryGeneratorTest {
 
         assertNull(result)
         assertNull(server.takeRequest(200, TimeUnit.MILLISECONDS))
+    }
+
+    @Test
+    fun `discarded bullets are included in the prompt, told not to be regenerated`() = runBlocking {
+        val body = messageResponseBody("""{"bullets":["existing bullet"]}""")
+        server.enqueue(MockResponse().setResponseCode(200).setBody(body))
+
+        generator().generate("transcript", listOf("existing bullet"), discardedBullets = listOf("a note the user swiped away"))
+
+        val request = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertTrue(request.body.readUtf8().contains("a note the user swiped away"))
+    }
+
+    @Test
+    fun `an empty discarded-bullets list adds no extra content block`() = runBlocking {
+        val body = messageResponseBody("""{"bullets":[]}""")
+        server.enqueue(MockResponse().setResponseCode(200).setBody(body))
+
+        generator().generate("transcript", emptyList(), discardedBullets = emptyList())
+
+        val request = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertFalse(request.body.readUtf8().contains("discarded"))
     }
 }

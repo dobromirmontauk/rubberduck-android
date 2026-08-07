@@ -87,4 +87,35 @@ class AppendOnlyBulletMergeTest {
 
         assertEquals(listOf("first thing", "second thing", "third thing"), result)
     }
+
+    // Bead asn-rrw: the discarded-set hard backstop.
+
+    @Test
+    fun `a re-proposed bullet matching the discarded set is dropped, even alongside a genuinely new one`() {
+        val previous = listOf<String>()
+        val proposed = listOf("a note the user discarded", "a brand new note")
+
+        val result = AppendOnlyBulletMerge.merge(previous, proposed, discarded = setOf("a note the user discarded"))
+
+        assertEquals(listOf("a brand new note"), result)
+    }
+
+    @Test
+    fun `discarded-set matching is case and whitespace insensitive, same as the existing-bullet dedup`() {
+        val proposed = listOf("  A Note The User Discarded  ")
+
+        val result = AppendOnlyBulletMerge.merge(emptyList(), proposed, discarded = setOf("a note the user discarded"))
+
+        assertEquals(emptyList<String>(), result)
+    }
+
+    @Test
+    fun `an empty discarded set changes nothing`() {
+        val previous = listOf("first thing")
+        val proposed = listOf("first thing", "second thing")
+
+        val result = AppendOnlyBulletMerge.merge(previous, proposed, discarded = emptySet())
+
+        assertEquals(listOf("first thing", "second thing"), result)
+    }
 }

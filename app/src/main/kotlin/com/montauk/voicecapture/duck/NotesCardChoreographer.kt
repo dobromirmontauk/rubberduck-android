@@ -18,13 +18,14 @@ enum class NotesCardMode {
  * bead asn-dp2's v2 revision -- see that bead's NOTES): "duck plays 'taking
  * notes' -> notes card enters moving left-to-right over the word cloud,
  * newest bullet highlighted -> holds ~5-6s -> continues out to the right +
- * fades. Tap while up = pin open."
+ * fades. Tap while up = pin open; swipe right = approve/dismiss, swipe left
+ * = delete the new note (bead asn-rrw)."
  *
  * No Compose/Android dependency -- same shape as [DuckAnimationEngine],
  * unit-testable without Robolectric. [NotesCard] drives [onSummaryUpdated]
  * from [com.montauk.voicecapture.service.SummaryStateHolder] changes,
- * [tick] from its own frame loop (to fire the auto-hide), and
- * [togglePin]/[peek] from user gestures.
+ * [tick] from its own frame loop (to fire the auto-hide), [togglePin]/[peek]
+ * from a tap, and [approve]/[discard] from a swipe gesture.
  */
 class NotesCardChoreographer(private val autoHideAfterMs: Long = DEFAULT_AUTO_HIDE_MS) {
     var mode: NotesCardMode = NotesCardMode.HIDDEN
@@ -67,6 +68,16 @@ class NotesCardChoreographer(private val autoHideAfterMs: Long = DEFAULT_AUTO_HI
             mode = NotesCardMode.SHOWN
             shownAtMs = nowMs
         }
+    }
+
+    /** Bead asn-rrw: swipe RIGHT -- approves whatever the card is currently showing and dismisses it, from any mode (including [NotesCardMode.PINNED]). Which bullet was approved is the caller's concern; this choreographer only owns show/hide/pin. */
+    fun approve(nowMs: Long) {
+        hide(nowMs)
+    }
+
+    /** Bead asn-rrw: swipe LEFT -- discards the card's current newest bullet and dismisses it, same shape as [approve]. Which bullet was discarded, and removing it from the running summary, are the caller's concern (see [com.montauk.voicecapture.service.SummaryStateHolder] / [com.montauk.voicecapture.summary.SummaryCoordinator.discardBullet]). */
+    fun discard(nowMs: Long) {
+        hide(nowMs)
     }
 
     /**

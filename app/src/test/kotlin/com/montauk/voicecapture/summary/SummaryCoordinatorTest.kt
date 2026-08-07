@@ -11,9 +11,11 @@ class SummaryCoordinatorTest {
 
     private class StubGenerator(private val resultsQueue: MutableList<List<String>?>) : SummaryGenerator {
         val calls = mutableListOf<Pair<String, List<String>>>()
+        val discardedArgs = mutableListOf<List<String>>()
 
-        override suspend fun generate(fullTranscript: String, previousBullets: List<String>): List<String>? {
+        override suspend fun generate(fullTranscript: String, previousBullets: List<String>, discardedBullets: List<String>): List<String>? {
             calls += fullTranscript to previousBullets
+            discardedArgs += discardedBullets
             return if (resultsQueue.isNotEmpty()) resultsQueue.removeAt(0) else null
         }
     }
@@ -179,5 +181,67 @@ class SummaryCoordinatorTest {
         coordinator.onTick(nowMs = 0L, fullTranscript = longEnough("first bullet content"))
 
         assertEquals(listOf("first bullet"), coordinator.currentBullets())
+    }
+
+    // Bead asn-rrw: swipe-left discard.
+
+    @Test
+    fun `discardBullet on the current newest bullet removes it and returns true`() = runBlocking {
+        val generator = StubGenerator(mutableListOf(listOf("first bullet")))
+        val coordinator = SummaryCoordinator(generator, intervalMs = 0L)
+        coordinator.onTick(nowMs = 0L, fullTranscript = longEnough("first bullet content"))
+
+        val discarded = coordinator.discardBullet("first bullet")
+
+        assertTrue(discarded)
+        assertEquals(emptyList<String>(), coordinator.currentBullets())
+    }
+
+    @Test
+    fun `discardBullet only ever matches the CURRENT newest bullet -- a stale text is a no-op`() = runBlocking {
+        val generator = StubGenerator(mutableListOf(listOf("first bullet"), listOf("first bullet", "second bullet")))
+        val coordinator = SummaryCoordinator(generator, intervalMs = 0L)
+        coordinator.onTick(nowMs = 0L, fullTranscript = longEnough("first bullet content"))
+        coordinator.onTick(nowMs = 1_000L, fullTranscript = longEnough("first bullet content", "and second bullet content"))
+
+        // "first bullet" was newest a round ago -- a late/stale discard tap
+        // on it must not delete the WRONG (now-older) entry.
+        val discarded = coordinator.discardBullet("first bullet")
+
+        assertFalse(discarded)
+        assertEquals(listOf("first bullet", "second bullet"), coordinator.currentBullets())
+    }
+
+    @Test
+    fun `discardBullet on an empty summary is a no-op`() = runBlocking {
+        val coordinator = SummaryCoordinator(generator = null, intervalMs = 0L)
+
+        assertFalse(coordinator.discardBullet("anything"))
+    }
+
+    @Test
+    fun `a discarded bullet is fed to the next round's generator context and never regenerated even if the model re-proposes it`() = runBlocking {
+        val generator = StubGenerator(
+            mutableListOf(
+                listOf("first bullet"),
+                // The model ignores the discard instruction and re-proposes
+                // the exact same text -- AppendOnlyBulletMerge's hard filter
+                // must still keep it out.
+                listOf("first bullet"),
+            ),
+        )
+        val coordinator = SummaryCoordinator(generator, intervalMs = 0L)
+        coordinator.onTick(nowMs = 0L, fullTranscript = longEnough("first bullet content"))
+        assertTrue(coordinator.discardBullet("first bullet"))
+
+        val result = coordinator.onTick(nowMs = 1_000L, fullTranscript = longEnough("first bullet content", "more new content"))
+
+        assertEquals(listOf("first bullet"), generator.discardedArgs.last())
+        // AppendOnlyBulletMerge's hard filter strips the re-proposed bullet
+        // entirely -- a round that ends up adding nothing (and wasn't
+        // already stale) is reported as "nothing changed," same as any other
+        // no-op round (see SummaryCoordinator.onSuccessfulRound).
+        assertNull(result)
+        assertEquals(emptyList<String>(), coordinator.currentBullets())
     }
 }

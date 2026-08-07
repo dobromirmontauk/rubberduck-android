@@ -14,8 +14,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxState
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -36,13 +41,23 @@ import kotlinx.coroutines.delay
 /**
  * The transient notes card (bead asn-3sm design-board sections 2 & 4, option
  * S1 "the duck's notes"; direction/position changed by bead asn-dp2's v2
- * revision -- storyboard v5.2 frames 5-7): enters moving LEFT-TO-RIGHT over
- * the word cloud (the stage's upper region -- [DuckStage] positions this
- * composable there; the duck himself is never covered) when a fresh
- * [SummaryUiState] lands, its newest bullet highlighted duck-yellow (the
- * glow fades over [NEWEST_GLOW_FADE_MS]), holds briefly, then continues out
- * to the right and fades -- [NotesCardChoreographer] owns exactly when.
- * Tapping the card pins it open.
+ * revision, swipe gestures added by bead asn-rrw -- storyboard v5.2 frames
+ * 5-7): enters moving LEFT-TO-RIGHT over the word cloud (the stage's upper
+ * region -- [DuckStage] positions this composable there; the duck himself is
+ * never covered) when a fresh [SummaryUiState] lands, its newest bullet
+ * highlighted duck-yellow (the glow fades over [NEWEST_GLOW_FADE_MS]), holds
+ * briefly, then continues out to the right and fades --
+ * [NotesCardChoreographer] owns exactly when. Tapping the card pins it open.
+ *
+ * Swiping the card right approves the note ([onApprove]) and dismisses it;
+ * swiping left deletes the just-added note ([onDiscard]) and dismisses it --
+ * a dim hint row spells out both directions so neither is a hidden
+ * affordance. A swipe-confirmed dismissal rides [SwipeToDismissBox]'s own
+ * native per-direction carry-through animation rather than also playing this
+ * composable's own slide-away exit on top of it ([dismissedBySwipe] tracks
+ * that so [AnimatedVisibility]'s `exit` becomes an instant no-op for that one
+ * cycle) -- the timed auto-dismiss path is the only one that plays the
+ * custom rightward slide+fade.
  *
  * [onWritePoseActiveChanged] fires whenever
  * [NotesCardChoreographer.isWritePoseActive] changes, so a caller
@@ -51,18 +66,23 @@ import kotlinx.coroutines.delay
  * visible, or leaving (design board: "the duck keeps his write pose the
  * whole time the card is up").
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NotesCard(
     summary: SummaryUiState,
     modifier: Modifier = Modifier,
     reducedMotion: Boolean = false,
+    onApprove: (String) -> Unit = {},
+    onDiscard: (String) -> Unit = {},
     onWritePoseActiveChanged: (Boolean) -> Unit = {},
 ) {
     val choreographer = remember { NotesCardChoreographer() }
     var mode by remember { mutableStateOf(choreographer.mode) }
+    var dismissedBySwipe by remember { mutableStateOf(false) }
 
     LaunchedEffect(summary.updatedAtMs) {
         if (summary.bullets.isNotEmpty()) {
+            dismissedBySwipe = false
             choreographer.onSummaryUpdated(nowMillis())
             mode = choreographer.mode
         }
@@ -87,23 +107,53 @@ fun NotesCard(
                 // moving left-to-right ... 300ms spring."
                 slideInHorizontally(animationSpec = spring(dampingRatio = 0.8f, stiffness = 380f)) { fullWidth -> -fullWidth }
             },
-            exit = if (reducedMotion) {
+            exit = if (reducedMotion || dismissedBySwipe) {
                 fadeOut(animationSpec = tween(0))
             } else {
                 // Storyboard v5.2 frame 7: "continues out to the RIGHT ...
-                // + fades (250ms ease-in)".
+                // + fades (250ms ease-in)" -- same rightward motion language
+                // as a swipe-right approve; only the timed auto-dismiss ever
+                // plays this (a swipe already carried the card off itself).
                 slideOutHorizontally(animationSpec = tween(NotesCardChoreographer.EXIT_ANIMATION_MS.toInt())) { fullWidth -> fullWidth } +
                     fadeOut(animationSpec = tween(NotesCardChoreographer.EXIT_ANIMATION_MS.toInt()))
             },
         ) {
-            NotesCardContent(
-                summary = summary,
-                reducedMotion = reducedMotion,
-                onTap = {
-                    choreographer.togglePin(nowMillis())
-                    mode = choreographer.mode
+            val dismissState = rememberSwipeToDismissBoxState(
+                confirmValueChange = { value ->
+                    val newest = summary.bullets.lastOrNull()
+                    when (value) {
+                        SwipeToDismissBoxValue.StartToEnd -> {
+                            if (newest != null) onApprove(newest)
+                            dismissedBySwipe = true
+                            choreographer.approve(nowMillis())
+                            mode = choreographer.mode
+                            true
+                        }
+                        SwipeToDismissBoxValue.EndToStart -> {
+                            if (newest != null) onDiscard(newest)
+                            dismissedBySwipe = true
+                            choreographer.discard(nowMillis())
+                            mode = choreographer.mode
+                            true
+                        }
+                        SwipeToDismissBoxValue.Settled -> false
+                    }
                 },
             )
+            SwipeToDismissBox(
+                state = dismissState,
+                modifier = Modifier.testTag(NOTES_CARD_SWIPE_TEST_TAG),
+                backgroundContent = { NotesCardSwipeBackground(dismissState) },
+            ) {
+                NotesCardContent(
+                    summary = summary,
+                    reducedMotion = reducedMotion,
+                    onTap = {
+                        choreographer.togglePin(nowMillis())
+                        mode = choreographer.mode
+                    },
+                )
+            }
         }
     }
 }
@@ -137,6 +187,14 @@ private fun NotesCardContent(summary: SummaryUiState, reducedMotion: Boolean, on
                 )
             }
         }
+        // Storyboard v5.2 frame 6: a visible dim hint spells out both swipe
+        // directions rather than leaving them as a hidden affordance.
+        Text(
+            text = "← swipe left: discard · swipe right: approve →",
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+            fontSize = 10.sp,
+            modifier = Modifier.padding(top = 10.dp).testTag(NOTES_CARD_SWIPE_HINT_TEST_TAG),
+        )
     }
 }
 
@@ -191,15 +249,39 @@ private fun NewestBullet(text: String, reducedMotion: Boolean) {
     )
 }
 
+@Composable
+private fun NotesCardSwipeBackground(dismissState: SwipeToDismissBoxState) {
+    val direction = dismissState.dismissDirection
+    val (color, label) = when (direction) {
+        SwipeToDismissBoxValue.StartToEnd -> NOTES_CARD_APPROVE_GREEN to "approve"
+        SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.error to "discard"
+        SwipeToDismissBoxValue.Settled -> Color.Transparent to ""
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(color, RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
+            .padding(16.dp),
+        contentAlignment = if (direction == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd,
+    ) {
+        if (label.isNotEmpty()) {
+            Text(text = label, color = Color.White, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
 private fun nowMillis(): Long = System.currentTimeMillis()
 
 /** Test-only anchors. */
 const val NOTES_CARD_CONTAINER_TEST_TAG = "duck_notes_card_container"
 const val NOTES_CARD_TEST_TAG = "duck_notes_card"
+const val NOTES_CARD_SWIPE_TEST_TAG = "duck_notes_card_swipe"
+const val NOTES_CARD_SWIPE_HINT_TEST_TAG = "duck_notes_card_swipe_hint"
 const val NOTES_CARD_NEWEST_BULLET_TEST_TAG = "duck_notes_card_newest_bullet"
 
 private val NOTES_CARD_BACKGROUND = Color(0xFF211D18)
 private val NOTES_CARD_NEWEST_COLOR = Color(0xFFF2C84B) // duck-yellow, matches design board --duck
+private val NOTES_CARD_APPROVE_GREEN = Color(0xFF2E7D32)
 private const val NOTES_CARD_TICK_INTERVAL_MS = 200L
 
 /** Storyboard v5.2 frame 6: "New bullet highlighted duck-yellow (glow fades over 800ms)." */

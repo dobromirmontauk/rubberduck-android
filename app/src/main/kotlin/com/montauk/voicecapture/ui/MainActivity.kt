@@ -47,6 +47,8 @@ class MainActivity : ComponentActivity() {
                 onSwapTag = ::swapRecordingTag,
                 onApproveTag = ::approveRecordingTag,
                 onSetPaused = ::setRecordingPaused,
+                onApproveNote = ::approveRecordingNote,
+                onDiscardNote = ::discardRecordingNote,
             )
         }
     }
@@ -137,5 +139,15 @@ class MainActivity : ComponentActivity() {
     private fun setRecordingPaused(paused: Boolean) {
         val intent = if (paused) RecordingService.pauseIntent(this) else RecordingService.resumeIntent(this)
         ContextCompat.startForegroundService(this, intent)
+    }
+
+    /** Bead asn-rrw: the notes card's swipe-right -- approves [noteText] and dismisses the card. */
+    private fun approveRecordingNote(noteText: String) {
+        ContextCompat.startForegroundService(this, RecordingService.approveNoteIntent(this, noteText))
+    }
+
+    /** Bead asn-rrw: the notes card's swipe-left -- deletes [noteText], never filed. */
+    private fun discardRecordingNote(noteText: String) {
+        ContextCompat.startForegroundService(this, RecordingService.discardNoteIntent(this, noteText))
     }
 }

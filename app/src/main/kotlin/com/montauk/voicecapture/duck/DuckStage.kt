@@ -79,6 +79,8 @@ fun DuckStage(
     onLatencyBadgeTap: () -> Unit,
     modifier: Modifier = Modifier,
     happyBounceTrigger: Int = 0,
+    onApproveNote: (String) -> Unit = {},
+    onDiscardNote: (String) -> Unit = {},
     onNotesCardActiveChanged: (Boolean) -> Unit = {},
     controls: @Composable () -> Unit = {},
 ) {
@@ -198,6 +200,8 @@ fun DuckStage(
         NotesCard(
             summary = summary,
             reducedMotion = reducedMotion,
+            onApprove = onApproveNote,
+            onDiscard = onDiscardNote,
             onWritePoseActiveChanged = onNotesCardActiveChanged,
             modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().fillMaxHeight(1f - DUCK_HEIGHT_FRACTION),
         )

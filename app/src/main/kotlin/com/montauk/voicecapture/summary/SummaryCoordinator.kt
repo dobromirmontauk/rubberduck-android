@@ -39,6 +39,15 @@ class SummaryCoordinator(
     private var bullets: List<String> = emptyList()
     private var stale: Boolean = false
 
+    // Bead asn-rrw: every bullet the user has swiped away this session --
+    // discardedOriginal preserves the exact text (oldest first) for the next
+    // round's generator context (see SummaryGenerator.generate's KDoc);
+    // discardedNormalized is AppendOnlyBulletMerge's own key shape, kept as a
+    // set for O(1) membership checks and reused as the hard backstop filter
+    // in onSuccessfulRound below.
+    private val discardedOriginal = mutableListOf<String>()
+    private val discardedNormalized = mutableSetOf<String>()
+
     // Gating state -- both are only ever advanced once a round has actually
     // been attempted (past the due-check, the growth-check, and the
     // too-short-check below), same reasoning as TagCoordinator.maybeScore's
@@ -68,13 +77,35 @@ class SummaryCoordinator(
         lastAttemptAtMs = nowMs
         lastAttemptTranscriptLength = fullTranscript.length
 
-        val proposed = runCatching { activeGenerator.generate(fullTranscript, bullets) }.getOrNull()
+        val proposed = runCatching { activeGenerator.generate(fullTranscript, bullets, discardedOriginal.toList()) }.getOrNull()
         return if (proposed == null) onFailedRound() else onSuccessfulRound(proposed)
     }
 
     /** The bullets/newest/stale [onTick] most recently settled on -- e.g. to re-render after a UI recreation without waiting on the next round. */
     fun currentBullets(): List<String> = bullets
     fun isStale(): Boolean = stale
+
+    /**
+     * Bead asn-rrw: the user swiped left on the notes card, discarding
+     * [bulletText] -- only meaningful (and only ever called) on the CURRENT
+     * newest bullet, matching what the card itself was showing at swipe
+     * time. Removes it from [bullets] so it's never filed (the very next
+     * [SummaryMarkdownWriter] rewrite -- the caller's job, not this class's
+     * -- reflects the removal), and remembers it both for
+     * [AppendOnlyBulletMerge]'s hard filter and the next round's generator
+     * context (see [onTick]) so it is never regenerated. Returns false
+     * (no-op) if [bulletText] doesn't match today's newest bullet -- a
+     * stale/late discard tap racing a newer round landing first should not
+     * silently delete the wrong entry.
+     */
+    fun discardBullet(bulletText: String): Boolean {
+        val last = bullets.lastOrNull() ?: return false
+        if (AppendOnlyBulletMerge.normalize(last) != AppendOnlyBulletMerge.normalize(bulletText)) return false
+        bullets = bullets.dropLast(1)
+        discardedOriginal += bulletText
+        discardedNormalized += AppendOnlyBulletMerge.normalize(bulletText)
+        return true
+    }
 
     private fun isDue(nowMs: Long): Boolean = lastAttemptAtMs?.let { nowMs - it >= intervalMs } ?: true
 
@@ -86,7 +117,7 @@ class SummaryCoordinator(
     }
 
     private fun onSuccessfulRound(proposed: List<String>): SummaryRoundResult? {
-        val merged = AppendOnlyBulletMerge.merge(bullets, proposed)
+        val merged = AppendOnlyBulletMerge.merge(bullets, proposed, discardedNormalized)
         val added = merged.drop(bullets.size)
         val changed = added.isNotEmpty() || stale
         bullets = merged

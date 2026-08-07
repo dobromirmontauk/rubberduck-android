@@ -43,6 +43,7 @@ import com.montauk.voicecapture.stt.SttTimelineTracker
 import com.montauk.voicecapture.summary.SummaryCoordinator
 import com.montauk.voicecapture.summary.SummaryEventWriter
 import com.montauk.voicecapture.summary.SummaryMarkdownWriter
+import com.montauk.voicecapture.summary.SummaryNoteEventWriter
 import com.montauk.voicecapture.tags.TagChipRail
 import com.montauk.voicecapture.tags.TagCoordinator
 import com.montauk.voicecapture.tags.TagsEventWriter
@@ -93,6 +94,14 @@ class RecordingService : LifecycleService() {
         const val EXTRA_TAG_NAME = "tag_name"
         const val EXTRA_TAG_ID = "tag_id"
         const val EXTRA_OLD_TAG_NAME = "old_tag_name"
+
+        // Bead asn-rrw: the notes card's swipe gestures -- EXTRA_NOTE_TEXT is
+        // the bullet text being acted on (must match SummaryCoordinator's
+        // current newest bullet for ACTION_NOTE_DISCARD to actually do
+        // anything -- see handleNoteDiscard).
+        const val ACTION_NOTE_APPROVE = "com.montauk.voicecapture.action.NOTE_APPROVE"
+        const val ACTION_NOTE_DISCARD = "com.montauk.voicecapture.action.NOTE_DISCARD"
+        const val EXTRA_NOTE_TEXT = "note_text"
 
         /** Bead asn-r60: the manual (hard) pause button next to Stop. */
         const val ACTION_PAUSE = "com.montauk.voicecapture.action.PAUSE"
@@ -186,6 +195,14 @@ class RecordingService : LifecycleService() {
 
         fun pauseIntent(context: Context): Intent = Intent(context, RecordingService::class.java).setAction(ACTION_PAUSE)
         fun resumeIntent(context: Context): Intent = Intent(context, RecordingService::class.java).setAction(ACTION_RESUME)
+
+        /** Bead asn-rrw: the notes card's swipe-right on [noteText]. */
+        fun approveNoteIntent(context: Context, noteText: String): Intent =
+            Intent(context, RecordingService::class.java).setAction(ACTION_NOTE_APPROVE).putExtra(EXTRA_NOTE_TEXT, noteText)
+
+        /** Bead asn-rrw: the notes card's swipe-left on [noteText]. */
+        fun discardNoteIntent(context: Context, noteText: String): Intent =
+            Intent(context, RecordingService::class.java).setAction(ACTION_NOTE_DISCARD).putExtra(EXTRA_NOTE_TEXT, noteText)
     }
 
     private lateinit var audioEngine: AudioEngine
@@ -323,6 +340,8 @@ class RecordingService : LifecycleService() {
             ACTION_TAG_REMOVE -> handleTagRemove(intent)
             ACTION_TAG_SWAP -> handleTagSwap(intent)
             ACTION_TAG_APPROVE -> handleTagApprove(intent)
+            ACTION_NOTE_APPROVE -> handleNoteApprove(intent)
+            ACTION_NOTE_DISCARD -> handleNoteDiscard(intent)
             ACTION_PAUSE -> pauseManually()
             ACTION_RESUME -> resumeTapped()
         }
@@ -562,6 +581,62 @@ class RecordingService : LifecycleService() {
         val elapsedMs = SystemClock.elapsedRealtime() - startElapsedRealtimeMs
         lifecycleScope.launch(Dispatchers.IO) {
             app.sessionStore.transcriptFile(session.dir).appendText(TagsEventWriter.encodeUserEditLine(elapsedMs, added, removed) + "\n")
+        }
+    }
+
+    /**
+     * Handles [ACTION_NOTE_APPROVE] (bead asn-rrw): the notes card's
+     * swipe-right. Approving a bullet has no effect on [summaryCoordinator]'s
+     * own state -- it was already a normal, filed bullet the moment it
+     * landed -- this only records that the user explicitly signed off on it.
+     */
+    private fun handleNoteApprove(intent: Intent) {
+        val session = currentSession ?: return
+        val text = intent.getStringExtra(EXTRA_NOTE_TEXT)?.takeIf { it.isNotBlank() } ?: return
+        writeUserNoteEvent(session, approved = text, discarded = null)
+    }
+
+    /**
+     * Handles [ACTION_NOTE_DISCARD] (bead asn-rrw): the notes card's
+     * swipe-left. [SummaryCoordinator.discardBullet] both removes [text] from
+     * the running summary (so it's never filed) and remembers it for the
+     * next round's generator context -- this then republishes
+     * [SummaryStateHolder] and rewrites `summary.md` in full so the on-disk
+     * bundle immediately reflects the removal, exactly the same "rewrite
+     * whole" contract [startSummaryPipeline] uses for a normal round. A
+     * mismatched [text] (the coordinator's newest bullet already moved on --
+     * a stale/late discard tap) is a silent no-op: nothing is removed, no
+     * event is written, same as [SummaryCoordinator.discardBullet]'s own
+     * false-return contract.
+     */
+    private fun handleNoteDiscard(intent: Intent) {
+        val session = currentSession ?: return
+        val app = application as VoiceCaptureApp
+        val coordinator = summaryCoordinator ?: return
+        val text = intent.getStringExtra(EXTRA_NOTE_TEXT)?.takeIf { it.isNotBlank() } ?: return
+        if (!coordinator.discardBullet(text)) return
+
+        val elapsedMs = SystemClock.elapsedRealtime() - startElapsedRealtimeMs
+        SummaryStateHolder.update(
+            SummaryUiState(bullets = coordinator.currentBullets(), newestIndex = null, updatedAtMs = elapsedMs, stale = coordinator.isStale()),
+        )
+        lifecycleScope.launch(Dispatchers.IO) {
+            app.sessionStore.summaryFile(session.dir).writeText(SummaryMarkdownWriter.render(coordinator.currentBullets()))
+        }
+        writeUserNoteEvent(session, approved = null, discarded = text)
+    }
+
+    /** Appends a [SummaryNoteEventWriter] user-action line -- same timestamp convention as [writeUserTagEvent]: elapsed recording time at the moment the intent was handled. */
+    private fun writeUserNoteEvent(session: SessionHandle, approved: String?, discarded: String?) {
+        val app = application as VoiceCaptureApp
+        val elapsedMs = SystemClock.elapsedRealtime() - startElapsedRealtimeMs
+        val line = when {
+            approved != null -> SummaryNoteEventWriter.encodeApproved(elapsedMs, approved)
+            discarded != null -> SummaryNoteEventWriter.encodeDiscarded(elapsedMs, discarded)
+            else -> return
+        }
+        lifecycleScope.launch(Dispatchers.IO) {
+            app.sessionStore.transcriptFile(session.dir).appendText(line + "\n")
         }
     }
 

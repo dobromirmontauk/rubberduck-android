@@ -79,6 +79,51 @@ class NotesCardChoreographerTest {
         assertEquals(NotesCardMode.HIDDEN, choreographer.mode)
     }
 
+    // Bead asn-rrw: swipe-right approve / swipe-left discard.
+
+    @Test
+    fun `approve hides the card from SHOWN`() {
+        val choreographer = NotesCardChoreographer()
+        choreographer.onSummaryUpdated(1_000L)
+
+        choreographer.approve(1_200L)
+
+        assertEquals(NotesCardMode.HIDDEN, choreographer.mode)
+    }
+
+    @Test
+    fun `discard hides the card from SHOWN`() {
+        val choreographer = NotesCardChoreographer()
+        choreographer.onSummaryUpdated(1_000L)
+
+        choreographer.discard(1_200L)
+
+        assertEquals(NotesCardMode.HIDDEN, choreographer.mode)
+    }
+
+    @Test
+    fun `approve also dismisses a PINNED card -- a swipe always wins over a pin`() {
+        val choreographer = NotesCardChoreographer()
+        choreographer.onSummaryUpdated(1_000L)
+        choreographer.togglePin(1_100L)
+        assertEquals(NotesCardMode.PINNED, choreographer.mode)
+
+        choreographer.approve(1_200L)
+
+        assertEquals(NotesCardMode.HIDDEN, choreographer.mode)
+    }
+
+    @Test
+    fun `discard also dismisses a PINNED card`() {
+        val choreographer = NotesCardChoreographer()
+        choreographer.onSummaryUpdated(1_000L)
+        choreographer.togglePin(1_100L)
+
+        choreographer.discard(1_200L)
+
+        assertEquals(NotesCardMode.HIDDEN, choreographer.mode)
+    }
+
     // Bead asn-dp2 v2: the write-pose-active window (enter/hold/leave).
 
     @Test
@@ -123,12 +168,11 @@ class NotesCardChoreographerTest {
     }
 
     @Test
-    fun `write pose stays active through the exit tail after an un-pin dismissal too`() {
+    fun `write pose stays active through the exit tail after a swipe dismissal too`() {
         val choreographer = NotesCardChoreographer()
         choreographer.onSummaryUpdated(1_000L)
-        choreographer.togglePin(1_100L)
 
-        choreographer.togglePin(1_200L) // un-pin -- also hides via NotesCardChoreographer's shared hide()
+        choreographer.approve(1_200L)
 
         assertTrue(choreographer.isWritePoseActive(1_200L))
         assertFalse(choreographer.isWritePoseActive(1_200L + NotesCardChoreographer.EXIT_ANIMATION_MS))

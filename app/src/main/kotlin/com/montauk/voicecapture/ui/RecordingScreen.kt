@@ -81,6 +81,7 @@ import com.montauk.voicecapture.duck.ThoughtCloudWords
 import com.montauk.voicecapture.duck.rememberReducedMotionEnabled
 import com.montauk.voicecapture.duck.toDuckState
 import com.montauk.voicecapture.session.RecordingMode
+import com.montauk.voicecapture.session.SwipeHintStateHolder
 import com.montauk.voicecapture.service.LatencyBadgeStateHolder
 import com.montauk.voicecapture.service.RecordingActivityState
 import com.montauk.voicecapture.service.RecordingActivityStateHolder
@@ -181,6 +182,8 @@ fun RecordingScreen(
     onApproveTag: (tag: String) -> Unit = {},
     onSetPaused: (Boolean) -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onApproveNote: (noteText: String) -> Unit = {},
+    onDiscardNote: (noteText: String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as VoiceCaptureApp
@@ -343,6 +346,20 @@ fun RecordingScreen(
                         latencyState = latencyState,
                         onLatencyBadgeTap = {}, // asn-55q's L2 HUD opens here once that bead lands
                         happyBounceTrigger = happyBounceTrigger,
+                        onApproveNote = onApproveNote,
+                        onDiscardNote = { noteText ->
+                            // Bead asn-rrw: the toast is local/instant UI
+                            // feedback -- SwipeHintStateHolder is the same
+                            // global one-shot snackbar SessionListScreen's
+                            // swipe hints use (see AppNavHost's Scaffold-
+                            // level LaunchedEffect). Persisting the
+                            // discard (removing the bullet, feeding the
+                            // next summary round's generator context, and
+                            // writing the user event) is onDiscardNote's
+                            // job, same split as onApproveTag/RecordingService.
+                            SwipeHintStateHolder.show("Note discarded")
+                            onDiscardNote(noteText)
+                        },
                         onNotesCardActiveChanged = { notesCardActive = it },
                         modifier = Modifier
                             .fillMaxWidth()
